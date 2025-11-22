@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard - WhatsApp Web Manager</title>
+   <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="header-content">
+      <div class="logo">
+        <div class="logo-icon">
+          <img src="../images/bot-logo.png" alt="Nexus Bot" style="width: 32px; height: 32px; border-radius: 8px; object-fit: cover;">
+        </div>
+        <span>𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙</span>
+      </div>
+
+      <div class="header-actions">
+        <div style="text-align: right; margin-right: 15px;">
+          <div style="font-weight: 600; color: var(--text-primary);" id="user-name">User</div>
+          <div style="font-size: 0.875rem; color: var(--text-secondary);" id="user-phone">Loading...</div>
+        </div>
+        <button id="theme-toggle" class="theme-toggle" title="Toggle theme">🌙</button>
+        <button id="logout-btn" class="btn btn-danger" style="padding: 8px 16px;">Logout</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <div class="container">
+    <div id="alert-container" style="margin-top: 20px;"></div>
+
+    <!-- Session Status Card -->
+    <div class="card session-status-card" style="margin-top: 20px;">
+      <div class="card-header">
+        <h2 class="card-title">WhatsApp Session</h2>
+        <div id="status-badge" class="status-badge status-badge-disconnected">
+          <span class="status-dot"></span>
+          Disconnected
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="flex-between" style="margin-bottom: 15px;">
+          <span style="color: var(--text-secondary);">Phone Number:</span>
+          <span style="font-weight: 600;" id="session-phone">Not connected</span>
+        </div>
+        <div class="flex gap-10">
+          <button id="disconnect-btn" class="btn btn-danger hidden">Disconnect</button>
+          <button id="reconnect-btn" class="btn btn-success hidden">Reconnect</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Connect Card -->
+    <div id="connect-card" class="card">
+      <div class="card-header">
+        <h2 class="card-title">Connect WhatsApp</h2>
+      </div>
+      <div class="card-body">
+        <p style="margin-bottom: 20px; color: var(--text-secondary);">
+          Enter your phone number to connect your WhatsApp account. You'll receive a pairing code to enter in WhatsApp.
+        </p>
+        <div class="form-group">
+          <label for="connect-phone" class="form-label">Phone Number</label>
+          <input 
+            type="tel" 
+            id="connect-phone" 
+            class="form-input" 
+            placeholder="+1234567890"
+          >
+          <small style="color: var(--text-secondary); font-size: 0.875rem; margin-top: 4px; display: block;">
+            Include country code (e.g., +234 for Nigeria)
+          </small>
+        </div>
+        <button id="connect-btn" class="btn btn-primary btn-block">Connect WhatsApp</button>
+      </div>
+    </div>
+
+    <!-- Pairing Code Container -->
+    <div id="pairing-container" class="card hidden">
+      <div class="card-header">
+        <h2 class="card-title">Pairing Code</h2>
+      </div>
+      <div class="card-body">
+        <div class="pairing-code-container">
+          <div class="pairing-code-label">Enter this code in WhatsApp</div>
+          <div id="pairing-code" class="pairing-code" title="Click to copy">
+            ••••••••
+          </div>
+          <button id="copy-code-btn" class="copy-btn">
+            📋 Copy Code
+          </button>
+          <div class="pairing-code-hint">
+            Open WhatsApp → Settings → Linked Devices → Link a Device → Link with phone number instead
+          </div>
+        </div>
+        <div class="alert alert-info" style="margin-top: 20px;">
+          <span>ℹ️</span>
+          <span>The pairing code expires in 90 seconds. If it expires, disconnect and try again.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Statistics Grid -->
+    <div class="dashboard-grid">
+      <!-- Uptime Card -->
+      <div class="stat-card" style="background: linear-gradient(135deg, #10b981, #059669);">
+        <div class="stat-label">Uptime</div>
+        <div class="stat-value" id="stat-uptime">--</div>
+        <div class="stat-change">Time connected</div>
+      </div>
+
+      <!-- Reconnect Attempts Card -->
+      <div class="stat-card" style="background: linear-gradient(135deg, #f59e0b, #d97706);">
+        <div class="stat-label">Reconnect Attempts</div>
+        <div class="stat-value" id="stat-attempts">0</div>
+        <div class="stat-change">Failed reconnections</div>
+      </div>
+
+      <!-- Status Card -->
+      <div class="stat-card" style="background: linear-gradient(135deg, #3b82f6, #2563eb);">
+        <div class="stat-label">Connection Status</div>
+        <div class="stat-value" id="stat-status" style="font-size: 1.2rem; text-transform: capitalize;">
+          disconnected
+        </div>
+        <div class="stat-change">Current state</div>
+      </div>
+    </div>
+
+    <!-- Info Card -->
+    <div class="card">
+      <div class="card-header">
+        <h2 class="card-title">How to Connect</h2>
+      </div>
+      <div class="card-body">
+        <ol style="padding-left: 20px; color: var(--text-secondary); line-height: 1.8;">
+          <li>Enter your phone number with country code</li>
+          <li>Click "Connect WhatsApp" button</li>
+          <li>Wait for the pairing code to appear</li>
+          <li>Open WhatsApp on your phone</li>
+          <li>Go to Settings → Linked Devices → Link a Device</li>
+          <li>Select "Link with phone number instead"</li>
+          <li>Enter the pairing code shown above</li>
+          <li>Your device will be connected!</li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div style="text-align: center; padding: 40px 0; color: var(--text-secondary);">
+      <p>© 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 2025</p>
+      <p style="font-size: 0.875rem; margin-top: 8px;">
+        Secure WhatsApp session management
+      </p>
+    </div>
+  </div>
+
+  <script src="../js/theme.js"></script>
+  <script src="../js/dashboard.js"></script>
+</body>
+</html>
