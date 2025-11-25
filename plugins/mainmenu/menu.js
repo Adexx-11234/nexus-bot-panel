@@ -101,15 +101,11 @@ export default {
         console.log("[Menu] No local image found, continuing without image");
       }
 
-      // Build menu sections
-      const menuSections = [{
-        title: "Menu Categories",
-        highlight_label: "Popular",
-        rows: []
-      }];
+      // Build menu rows for single_select - FIXED FORMAT
+      const menuRows = [];
 
       // Add allmenu first
-      menuSections[0].rows.push({
+      menuRows.push({
         header: "📶 All Commands",
         title: "All Menu",
         description: "View all available commands",
@@ -119,7 +115,7 @@ export default {
       // Add each menu category
       for (const folder of sortedFolders) {
         const emoji = menuSystem.getMenuEmoji(folder.name);
-        menuSections[0].rows.push({
+        menuRows.push({
           header: emoji,
           title: folder.displayName,
           description: `View ${folder.displayName.toLowerCase()} commands`,
@@ -136,7 +132,6 @@ export default {
 
       if (imageBuffer) {
         try {
-          // Use prepareWAMessageMedia to properly prepare the image
           const mediaMessage = await prepareWAMessageMedia(
             { image: imageBuffer },
             { upload: sock.waUploadToServer }
@@ -151,11 +146,10 @@ export default {
           console.log("[Menu] Image header prepared successfully");
         } catch (imgErr) {
           console.error("[Menu] Failed to prepare image header:", imgErr.message);
-          // Continue without image
         }
       }
 
-      // Create interactive message
+      // Create interactive message with PROPER STRING FORMAT
       const msg = generateWAMessageFromContent(m.chat, {
         viewOnceMessage: {
           message: {
@@ -164,12 +158,6 @@ export default {
               deviceListMetadataVersion: 2
             },
             interactiveMessage: proto.Message.InteractiveMessage.create({
-              contextInfo: {
-                quotedMessage: m.message,
-                participant: m.sender,
-                remoteJid: m.chat,
-                stanzaId: m.key.id
-              },
               body: proto.Message.InteractiveMessage.Body.create({
                 text: captionText
               }),
@@ -183,7 +171,11 @@ export default {
                     name: "single_select",
                     buttonParamsJson: JSON.stringify({
                       title: "📋 Select Menu",
-                      sections: menuSections
+                      sections: [{
+                        title: "Menu Categories",
+                        highlight_label: "Popular",
+                        rows: menuRows
+                      }]
                     })
                   },
                   {
@@ -203,9 +195,9 @@ export default {
                   {
                     name: "cta_url",
                     buttonParamsJson: JSON.stringify({
-                      display_text: "💬 Support Group",
-                      url: "https://chat.whatsapp.com/YOUR_GROUP_LINK",
-                      merchant_url: "https://chat.whatsapp.com/YOUR_GROUP_LINK"
+                      display_text: "💬 Support Channel",
+                      url: "https://whatsapp.com/channel/0029VbBQzrPAjPXE7El58e1L",
+                      merchant_url: "https://whatsapp.com/channel/0029VbBQzrPAjPXE7El58e1L"
                     })
                   }
                 ]

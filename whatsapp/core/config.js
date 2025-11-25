@@ -57,7 +57,7 @@ export function setupSocketDefaults(sock) {
   try {
     // Set max listeners to prevent memory leak warnings
     if (sock.ev && typeof sock.ev.setMaxListeners === 'function') {
-      sock.ev.setMaxListeners(100)
+      sock.ev.setMaxListeners(500)
     }
 
     // Add session tracking properties

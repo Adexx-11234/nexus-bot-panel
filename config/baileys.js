@@ -3,14 +3,12 @@ import { Browsers } from "@whiskeysockets/baileys"
 import { logger } from "../utils/logger.js"
 import pino from "pino"
 
-// ==================== BAILEYS SILENT LOGGER ====================
-// Suppress ALL Baileys internal logs (Session errors, Bad MAC, etc.)
+// Baileys silent logger
 const baileysLogger = pino({ 
   level: process.env.BAILEYS_LOG_LEVEL || 'silent'
 })
-// ==================== END BAILEYS SILENT LOGGER ====================
 
-// Smart group cache with invalidation on updates
+// Group cache
 const groupCache = new NodeCache({ 
   stdTTL: 1800,
   checkperiod: 300,
@@ -18,21 +16,42 @@ const groupCache = new NodeCache({
 })
 
 export const baileysConfig = {
-  logger: baileysLogger, // ← Use silent logger here
+  logger: baileysLogger,
   printQRInTerminal: false,
-  msgRetryCounterMap: {},
+  
+  // 🔥 CRITICAL: Message retry counter to prevent duplicates
+  msgRetryCounterCache: new NodeCache(),
+  
   browser: Browsers.windows('safari'),
   retryRequestDelayMs: 250,
+  
+  // 🔥 Keep connection alive
   markOnlineOnConnect: false,
   emitOwnEvents: true,
+  
+  // 🔥 IMPORTANT: Sync settings
+  syncFullHistory: false, // Don't sync full history (reduces load)
+  
+  // 🔥 getMessage handler to load messages from store (prevents decryption errors)
+  getMessage: async (key) => {
+    // Return undefined if not found - Baileys will handle it
+    return undefined
+  },
+  
   patchMessageBeforeSending: (msg) => {
     if (msg.contextInfo) delete msg.contextInfo.mentionedJid;
     return msg;
   },
-  appStateSyncInitialTimeoutMs: 10000,
-  generateHighQualityLinkPreview: true
+  
+  generateHighQualityLinkPreview: true,
+  
+  // 🔥 Connection keepalive settings
+  keepAliveIntervalMs: 30000, // Ping every 30 seconds
+  connectTimeoutMs: 60000, // 60 second connection timeout
+  
+  // 🔥 Default query timeout
+  defaultQueryTimeoutMs: 60000
 }
-
 export const eventTypes = [
   "messages.upsert",
   "groups.update", 

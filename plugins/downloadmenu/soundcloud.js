@@ -1,6 +1,7 @@
 // plugins/download/soundcloud.js
 
 import downloader, { downloadMedia } from '../../lib/downloaders/index.js';
+import fs from 'fs';
 
 export default {
   name: "soundcloud",
@@ -41,7 +42,7 @@ export default {
         }, { quoted: m });
       }
 
-      // Send as audio with thumbnail (uiType: 'audio')
+      // Send as audio with thumbnail
       return await sendSoundCloudAudio(sock, m, result);
 
     } catch (error) {
@@ -54,7 +55,7 @@ export default {
 };
 
 /**
- * Direct download from button click - FIXED WITH BUFFER
+ * Direct download from button click - UPDATED WITH FILE SYSTEM
  */
 async function downloadSoundCloudDirect(sock, m, url) {
   try {
@@ -62,15 +63,29 @@ async function downloadSoundCloudDirect(sock, m, url) {
       text: `⏳ Downloading audio...\nPlease wait...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
     }, { quoted: m });
 
-    // Download the media and get buffer
-    const mediaData = await downloadMedia(url);
+    // Download to file
+    const mediaFile = await downloadMedia(url);
 
-    // Send the audio directly
-    await sock.sendMessage(m.chat, {
-      audio: mediaData.buffer,
-      mimetype: 'audio/mpeg',
-      fileName: `soundcloud_${Date.now()}.mp3`,
-    }, { quoted: m });
+    try {
+      // Read and send
+      const fileBuffer = fs.readFileSync(mediaFile.filePath);
+      
+      await sock.sendMessage(m.chat, {
+        audio: fileBuffer,
+        mimetype: 'audio/mpeg',
+        fileName: `soundcloud_${Date.now()}.mp3`,
+      }, { quoted: m });
+
+      console.log('[SoundCloud] Audio sent successfully');
+      
+      // Cleanup temp file
+      mediaFile.cleanup();
+      
+    } catch (sendError) {
+      console.error('[SoundCloud Direct] Send error:', sendError);
+      mediaFile.cleanup(); // Still cleanup on error
+      throw sendError;
+    }
 
     return { success: true };
   } catch (error) {
@@ -82,7 +97,7 @@ async function downloadSoundCloudDirect(sock, m, url) {
 }
 
 /**
- * Send SoundCloud audio with thumbnail (uiType: 'audio')
+ * Send SoundCloud audio with thumbnail - UPDATED WITH FILE SYSTEM
  */
 async function sendSoundCloudAudio(sock, m, result) {
   try {
@@ -107,54 +122,68 @@ async function sendSoundCloudAudio(sock, m, result) {
       throw new Error("No audio download URL found");
     }
 
-    // Download audio to buffer
-    const mediaData = await downloadMedia(audioUrl);
+    // Download to file
+    const mediaFile = await downloadMedia(audioUrl);
 
-    // Build caption
-    let caption = `🔊 *SoundCloud Track*\n\n`;
-    caption += `📝 *Title:* ${data.title}\n`;
-    caption += `👤 *Artist:* ${data.author.name}\n`;
-    caption += `\n✅ Downloaded successfully!\n`;
-    caption += `\n© 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - SoundCloud Downloader`;
+    try {
+      // Read file
+      const fileBuffer = fs.readFileSync(mediaFile.filePath);
 
-    // Prepare context info with thumbnail
-    let contextInfo = {};
-    if (thumbnailBuffer) {
-      contextInfo = {
-        externalAdReply: {
-          title: data.title,
-          body: data.author.name,
-          thumbnailUrl: data.thumbnail,
-          sourceUrl: audioUrl,
-          mediaType: 2,
-          mediaUrl: data.thumbnail,
-          renderLargerThumbnail: true,
-        }
-      };
+      // Build caption
+      let caption = `🔊 *SoundCloud Track*\n\n`;
+      caption += `🎵 *Title:* ${data.title}\n`;
+      caption += `👤 *Artist:* ${data.author.name}\n`;
+      caption += `\n✅ Downloaded successfully!\n`;
+      caption += `\n© 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - SoundCloud Downloader`;
+
+      // Prepare context info with thumbnail
+      let contextInfo = {};
+      if (thumbnailBuffer) {
+        contextInfo = {
+          externalAdReply: {
+            title: data.title,
+            body: data.author.name,
+            thumbnailUrl: data.thumbnail,
+            sourceUrl: audioUrl,
+            mediaType: 2,
+            mediaUrl: data.thumbnail,
+            renderLargerThumbnail: true,
+          }
+        };
+      }
+
+      // Send audio with thumbnail
+      await sock.sendMessage(m.chat, {
+        audio: fileBuffer,
+        mimetype: 'audio/mpeg',
+        fileName: `${data.title}.mp3`,
+        contextInfo,
+        ptt: false,
+      }, { quoted: m });
+
+      // Send caption separately with thumbnail image
+      if (thumbnailBuffer) {
+        await sock.sendMessage(m.chat, {
+          image: thumbnailBuffer,
+          caption: caption
+        }, { quoted: m });
+      } else {
+        await sock.sendMessage(m.chat, {
+          text: caption
+        }, { quoted: m });
+      }
+
+      console.log("[SoundCloud] Audio sent successfully!");
+      
+      // Cleanup temp file
+      mediaFile.cleanup();
+      
+    } catch (sendError) {
+      console.error("[SoundCloud Audio] Send error:", sendError);
+      mediaFile.cleanup(); // Still cleanup on error
+      throw sendError;
     }
 
-    // Send audio with thumbnail
-    await sock.sendMessage(m.chat, {
-      audio: mediaData.buffer,
-      mimetype: 'audio/mpeg',
-      fileName: `${data.title}.mp3`,
-      contextInfo,
-      ptt: false,
-    }, { quoted: m });
-
-    // Send caption separately with thumbnail image
-    if (thumbnailBuffer) {
-      await sock.sendMessage(m.chat, {
-        image: thumbnailBuffer,
-        caption: caption
-      }, { quoted: m });
-    } else {
-      await sock.sendMessage(m.chat, {
-        text: caption
-      }, { quoted: m });
-    }
-
-    console.log("[SoundCloud] Audio sent successfully!");
     return { success: true };
 
   } catch (error) {

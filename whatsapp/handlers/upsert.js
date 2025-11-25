@@ -8,7 +8,7 @@ let messageProcessorInstance = null
 /**
  * Get message processor instance
  */
-async function getMessageProcessor() {
+export async function getMessageProcessor() {
   if (!messageProcessorInstance) {
     const { MessageProcessor } = await import('../messages/index.js')
     messageProcessorInstance = new MessageProcessor()
@@ -80,9 +80,7 @@ export async function handleMessagesUpsert(sessionId, messageUpdate, sock) {
           }
         }
 
-        // CUSTOM PREFIX FIX: Don't pass prefix here
-        // The processor will fetch the user's custom prefix internally
-        // This ensures each user gets their own custom prefix
+        // ✅ NO PREFIX PASSED - Processor fetches from memory cache
         await processor.processMessage(sock, sessionId, m)
 
       } catch (messageError) {
@@ -125,12 +123,12 @@ export async function handleGroupParticipantsUpdate(sessionId, update, sock, m =
  * Export message processor for backward compatibility
  */
 export const messageProcessor = {
-  processMessage: async (sock, sessionId, m, prefix) => {
-    const processor = getMessageProcessor()
-    return await processor.processMessage(sock, sessionId, m, prefix)
+  processMessage: async (sock, sessionId, m) => {
+    const processor = await getMessageProcessor()
+    return await processor.processMessage(sock, sessionId, m)
   },
-  getStats: () => {
-    const processor = getMessageProcessor()
+  getStats: async () => {
+    const processor = await getMessageProcessor()
     return processor.getStats()
   }
 }

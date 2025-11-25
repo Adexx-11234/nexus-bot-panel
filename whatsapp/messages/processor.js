@@ -16,6 +16,11 @@ export class MessageProcessor {
     this.messagePersistence = new MessagePersistence()
     this.messageExtractor = new MessageExtractor()
     
+    // PREFIX CACHE - Load all user prefixes into memory
+    this.prefixCache = new Map() // telegramId -> prefix
+    this.cacheLoadTime = null
+    this.CACHE_RELOAD_INTERVAL = 10 * 60 * 1000 // Reload every 10 minutes
+    
     // Plugin loader (lazy loaded)
     this.pluginLoader = null
     
@@ -40,9 +45,90 @@ export class MessageProcessor {
         await this.pluginLoader.loadPlugins()
       }
 
+      // LOAD ALL USER PREFIXES INTO MEMORY
+      await this.loadAllPrefixes()
+
       this.isInitialized = true
       logger.info('Message processor initialized')
     }
+  }
+
+  /**
+   * Load all user prefixes from database into memory
+   */
+  async loadAllPrefixes() {
+    try {
+      const { pool } = await import('../../config/database.js')
+      
+      // Get ALL user prefixes in one query
+      const result = await pool.query(
+        `SELECT telegram_id, custom_prefix FROM whatsapp_users 
+         WHERE custom_prefix IS NOT NULL`
+      )
+      
+      // Store in Map for O(1) lookup
+      this.prefixCache.clear()
+      for (const row of result.rows) {
+        const prefix = row.custom_prefix === 'none' ? '' : row.custom_prefix
+        this.prefixCache.set(row.telegram_id, prefix)
+      }
+      
+      this.cacheLoadTime = Date.now()
+      
+      logger.info(`Loaded ${result.rows.length} user prefixes into memory`)
+      
+      // Schedule periodic reload every 10 minutes (only once)
+      if (!this.reloadInterval) {
+        this._schedulePrefixReload()
+      }
+      
+    } catch (error) {
+      logger.error('Failed to load user prefixes:', error)
+      // Don't throw - use default prefix if cache load fails
+    }
+  }
+
+  /**
+   * Schedule periodic prefix cache reload
+   * @private
+   */
+  _schedulePrefixReload() {
+    this.reloadInterval = setInterval(async () => {
+      try {
+        await this.loadAllPrefixes()
+        logger.debug('User prefix cache reloaded')
+      } catch (error) {
+        logger.error('Failed to reload prefix cache:', error)
+      }
+    }, this.CACHE_RELOAD_INTERVAL)
+  }
+
+  /**
+   * Get user prefix from memory cache (O(1) lookup, NO DATABASE QUERY!)
+   * @private
+   */
+  _getUserPrefixFromCache(telegramId) {
+    // Check if cache needs reload (fallback safety)
+    if (this.cacheLoadTime && (Date.now() - this.cacheLoadTime) > 15 * 60 * 1000) {
+      logger.warn('Prefix cache is stale, triggering reload')
+      this.loadAllPrefixes().catch(() => {}) // Don't block, reload async
+    }
+    
+    // O(1) memory lookup - NO DATABASE QUERY!
+    const prefix = this.prefixCache.get(telegramId)
+    
+    // Return custom prefix or default '.'
+    return prefix !== undefined ? prefix : '.'
+  }
+
+  /**
+   * Update prefix cache when user changes their prefix
+   * Call this from setprefix command
+   */
+  updatePrefixCache(telegramId, newPrefix) {
+    const normalizedPrefix = newPrefix === 'none' ? '' : newPrefix
+    this.prefixCache.set(telegramId, normalizedPrefix)
+    logger.info(`✅ Updated prefix cache for user ${telegramId}: "${normalizedPrefix || '(none)'}"`)
   }
 
 /**
@@ -57,6 +143,28 @@ async processMessage(sock, sessionId, m, prefix = null) {
       return { processed: false, error: 'Invalid message object' }
     }
 
+      
+    const chat = m.key?.remoteJid || m.from
+    const isGroup = chat && chat.endsWith('@g.us')
+    
+    // **FIX: Skip protocol/system messages**
+    if (m.message?.protocolMessage) {
+      const protocolType = m.message.protocolMessage.type
+      
+      // Skip these protocol message types
+      const skipTypes = [
+        'PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE',
+        'MESSAGE_EDIT',
+        'REVOKE',
+        'EPHEMERAL_SETTING'
+      ]
+      
+      if (skipTypes.includes(protocolType)) {
+        logger.debug(`Skipping protocol message type: ${protocolType}`)
+        return { processed: false, silent: true, protocolMessage: true }
+      }
+    }
+      
     // **FIX: Set chat, isGroup, and sender FIRST before anything else**
     if (!m.chat) {
       m.chat = m.key?.remoteJid || m.from
@@ -64,16 +172,28 @@ async processMessage(sock, sessionId, m, prefix = null) {
     if (typeof m.isGroup === 'undefined') {
       m.isGroup = m.chat && m.chat.endsWith('@g.us')
     }
+
     if (!m.sender) {
-      // For group messages, sender is the participant
-      // For private messages, sender is the chat itself
       if (m.isGroup) {
         m.sender = m.key?.participant || m.participant || m.key?.remoteJid
       } else {
-        m.sender = m.chat || m.key?.remoteJid
+        // In private chats:
+        if (m.key?.fromMe) {
+          // YOU sent it: ALWAYS use originalSelfAuthorUserJidString first
+          m.sender = m.originalSelfAuthorUserJidString || sock.user?.id
+        } else {
+          // OTHER person sent it: use remoteJid
+          m.sender = m.key?.remoteJid || m.chat
+        }
       }
     }
 
+    // **CRITICAL: If sender is still @lid and we have originalSelfAuthorUserJidString, use it**
+    if (m.sender?.includes('@lid') && m.originalSelfAuthorUserJidString) {
+      m.sender = m.originalSelfAuthorUserJidString
+      logger.debug(`Corrected @lid sender to: ${m.sender}`)
+    }
+    
     // Validate critical fields before continuing
     if (!m.chat || !m.sender) {
       logger.error('Missing critical message fields:', { chat: m.chat, sender: m.sender })
@@ -84,11 +204,10 @@ async processMessage(sock, sessionId, m, prefix = null) {
     m.sessionContext = this._getSessionContext(sessionId)
     m.sessionId = sessionId
     
-    // CUSTOM PREFIX: Get user's custom prefix from database
-    const userPrefix = await this.getUserPrefix(m.sessionContext.telegram_id)
-    m.prefix = userPrefix || prefix || '.' // Use user's custom prefix instead of default
+    // ✅ GET USER'S CUSTOM PREFIX FROM MEMORY CACHE (NO DATABASE QUERY!)
+    const userPrefix = this._getUserPrefixFromCache(m.sessionContext.telegram_id)
+    m.prefix = userPrefix
     logger.debug(`Using prefix '${m.prefix}' for user ${m.sessionContext.telegram_id}`)
-
 
     // Extract contact info
     await this._extractContactInfo(sock, m)
@@ -103,7 +222,7 @@ async processMessage(sock, sessionId, m, prefix = null) {
     // Set admin status
     await this._setAdminStatus(sock, m)
 
-// Determine if it's a command using user's custom prefix
+    // Determine if it's a command using user's custom prefix
     // If prefix is empty string (none), ALL messages are treated as commands
     const isCommand = m.body && (m.prefix === '' || m.body.startsWith(m.prefix))
     m.isCommand = isCommand
@@ -118,17 +237,22 @@ async processMessage(sock, sessionId, m, prefix = null) {
       await this._processAntiPlugins(sock, sessionId, m)
       
       if (m._wasDeletedByAntiPlugin) {
-        await this.messagePersistence.persistMessage(sessionId, sock, m)
-        await this.messageLogger.logEnhancedMessageEntry(sock, sessionId, m)
+        // ⚡ Fire-and-forget for persistence and logging (don't await)
+        this.messagePersistence.persistMessage(sessionId, sock, m).catch(() => {})
+        this.messageLogger.logEnhancedMessageEntry(sock, sessionId, m).catch(() => {})
         return { processed: true, deletedByAntiPlugin: true }
       }
     }
 
-    // Persist message to database
-    await this.messagePersistence.persistMessage(sessionId, sock, m)
-
-    // Log message
-    await this.messageLogger.logEnhancedMessageEntry(sock, sessionId, m)
+    // ⚡ PERFORMANCE FIX: Fire-and-forget for persistence and logging
+    // Don't wait for database writes - they happen in background
+    this.messagePersistence.persistMessage(sessionId, sock, m).catch(err => {
+      logger.debug(`Persistence failed for ${m.key?.id}:`, err.message)
+    })
+    
+    this.messageLogger.logEnhancedMessageEntry(sock, sessionId, m).catch(err => {
+      logger.debug(`Logging failed for ${m.key?.id}:`, err.message)
+    })
 
     // Handle interactive responses
     if (m.message?.listResponseMessage) {
@@ -257,28 +381,6 @@ async processMessage(sock, sessionId, m, prefix = null) {
       return false
     }
   }
-
-
-  /**
-   * Get user's custom prefix from database
-   * @private
-   */
-  async getUserPrefix(telegramId) {
-    try {
-      const { UserQueries } = await import('../../database/query.js')
-      const settings = await UserQueries.getUserSettings(telegramId)
-      
-      // Return custom prefix or default to '.'
-      const prefix = settings?.custom_prefix || '.'
-      
-      // Handle 'none' prefix case (empty string means no prefix required)
-      return prefix === 'none' ? '' : prefix
-    } catch (error) {
-      logger.error('Error getting user prefix:', error)
-      return '.' // Fallback to default on error
-    }
-  }
-
 
 /**
    * Parse command from message
@@ -535,7 +637,9 @@ async processMessage(sock, sessionId, m, prefix = null) {
     return {
       isInitialized: this.isInitialized,
       messageStats: { ...this.messageStats },
-      pluginStats: this.pluginLoader?.getPluginStats() || {}
+      pluginStats: this.pluginLoader?.getPluginStats() || {},
+      prefixCacheSize: this.prefixCache.size,
+      prefixCacheAge: this.cacheLoadTime ? Math.floor((Date.now() - this.cacheLoadTime) / 1000) : 0
     }
   }
 

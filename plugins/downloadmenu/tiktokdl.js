@@ -55,7 +55,7 @@ export default {
 };
 
 /**
- * Direct download from button click - UPDATED WITH BUFFER
+ * Direct download from button click - FIXED WITH ERROR HANDLING
  */
 async function downloadTikTokDirect(sock, m, url, quality) {
   try {
@@ -63,29 +63,44 @@ async function downloadTikTokDirect(sock, m, url, quality) {
       text: `⏳ Downloading ${quality}...\nPlease wait...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
     }, { quoted: m });
 
-    // Download the media and get buffer
-    const mediaData = await downloadMedia(url);
+    // Download to file
+    const mediaFile = await downloadMedia(url);
 
-    // Determine if it's audio or video
-    if (quality.toLowerCase().includes('audio') || quality.toLowerCase().includes('mp3')) {
-      await sock.sendMessage(m.chat, {
-        audio: mediaData.buffer,
-        mimetype: 'audio/mpeg',
-        fileName: `tiktok_audio_${Date.now()}.mp3`,
-      }, { quoted: m });
-    } else {
-      await sock.sendMessage(m.chat, {
-        video: mediaData.buffer,
-        caption: `✅ *TikTok Download Complete*\n\n*Quality:* ${quality}\n\n© 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
-        mimetype: 'video/mp4'
-      }, { quoted: m });
+    try {
+      // Read file
+      const fileBuffer = fs.readFileSync(mediaFile.filePath);
+
+      // Determine if it's audio or video
+      if (quality.toLowerCase().includes('audio') || quality.toLowerCase().includes('mp3')) {
+        await sock.sendMessage(m.chat, {
+          audio: fileBuffer,
+          mimetype: 'audio/mpeg',
+          fileName: `tiktok_audio_${Date.now()}.mp3`,
+        }, { quoted: m });
+      } else {
+        await sock.sendMessage(m.chat, {
+          video: fileBuffer,
+          caption: `✅ *TikTok Download Complete*\n\n*Quality:* ${quality}\n\n© 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+          mimetype: 'video/mp4'
+        }, { quoted: m });
+      }
+
+      console.log('[TikTok] Media sent successfully');
+      
+      // Cleanup temp file
+      mediaFile.cleanup();
+      
+    } catch (sendError) {
+      console.error('[TikTok Direct] Send error:', sendError);
+      mediaFile.cleanup(); // Still cleanup on error
+      throw sendError;
     }
 
     return { success: true };
   } catch (error) {
     console.error("[TikTok Direct] Error:", error);
     await sock.sendMessage(m.chat, {
-      text: `❌ Download failed: ${error.message}\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
+      text: `❌ Download failed: ${error.message}\n\n*Tip:* The video link might have expired. Try downloading again from the original TikTok URL.\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
     }, { quoted: m });
   }
 }

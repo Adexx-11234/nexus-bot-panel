@@ -469,13 +469,14 @@ async clearWatchers() {
         m.pushName = await this.extractPushName(sock, m)
       }
       
-      const isCreator = this.checkIsBotOwner(sock, m.sender)
+      const isCreator = this.checkIsBotOwner(sock, m.sender, m.key?.fromMe)
       
       const enhancedM = {
         ...m,
         chat: m.chat || m.key?.remoteJid || m.from,
         sender: m.sender || m.key?.participant || m.from,
         isCreator,
+        isOwner: isCreator, // Add alias for compatibility
         isGroup: m.isGroup || (m.chat && m.chat.endsWith('@g.us')),
         sessionContext: m.sessionContext || { telegram_id: "Unknown", session_id: sessionId },
         sessionId,
@@ -745,14 +746,22 @@ async clearWatchers() {
   }
 }
 
-  checkIsBotOwner(sock, userJid) {
-    try {
-      if (!sock?.user?.id || !userJid) return false
-      return this.compareJids(sock.user.id, userJid)
-    } catch (error) {
-      return false
-    }
+checkIsBotOwner(sock, userJid, fromMe = false) {
+  // If fromMe is true, it's the bot owner
+  if (fromMe === true) return true
+  
+  // Fallback: compare phone numbers
+  try {
+    if (!sock?.user?.id || !userJid) return false
+    
+    const botPhone = sock.user.id.split('@')[0].split(':')[0]
+    const userPhone = userJid.split('@')[0].split(':')[0]
+    
+    return botPhone === userPhone
+  } catch (error) {
+    return false
   }
+}
 
   determineRequiredPermission(plugin) {
     if (!plugin) return "user"

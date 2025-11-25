@@ -34,8 +34,8 @@ export class SessionManager {
 
     // Configuration
     this.eventHandlersEnabled = false
-    this.maxSessions = 100
-    this.concurrencyLimit = 5
+    this.maxSessions = 200
+    this.concurrencyLimit = 8
     this.isInitialized = false
 
     // Event handlers helper

@@ -1,7 +1,8 @@
-// plugins/download/youtube.js
+// plugins/download/ytdl.js - UPDATED TO USE FILE PATHS
 
 import youtubeDownloader from '../../lib/downloaders/index.js';
 import { generateWAMessageFromContent, proto, prepareWAMessageMedia } from '@whiskeysockets/baileys';
+import fs from 'fs';
 
 export default {
   name: "youtube",
@@ -17,7 +18,6 @@ export default {
       console.log('[YouTube Plugin] Command:', command);
 
       // Check if this is a button callback with format selection
-      // Format: .ytdl <videoUrl> <format>
       if (args.length === 2 && (args[1].toLowerCase() === 'mp3' || args[1].toLowerCase() === 'mp4')) {
         const videoUrl = args[0];
         const format = args[1].toLowerCase();
@@ -28,7 +28,6 @@ export default {
           text: `⏳ Downloading ${format.toUpperCase()}...\nPlease wait, this may take a minute...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
         }, { quoted: m });
 
-        // Download with format specified
         console.log('[YouTube Plugin] Calling youtubeDownloader with format');
         const result = await youtubeDownloader.youtube(videoUrl, format);
 
@@ -41,34 +40,46 @@ export default {
           }, { quoted: m });
         }
 
-        // Verify we have the buffer
-        if (!result.data || !result.data.buffer) {
-          console.error('[YouTube Plugin] No buffer in result');
+        // Verify we have the file path
+        if (!result.data || !result.data.filePath) {
+          console.error('[YouTube Plugin] No file path in result');
           return await sock.sendMessage(m.chat, {
-            text: `❌ Download Failed!\n\n*Error:* No buffer received from downloader\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
+            text: `❌ Download Failed!\n\n*Error:* No file received from downloader\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
           }, { quoted: m });
         }
 
-        // Send the buffer
-        const { buffer, title, format: fmt, size } = result.data;
+        // Read file and send
+        const { filePath, title, format: fmt, size, cleanup } = result.data;
         const isAudio = fmt === 'mp3';
 
-        console.log(`[YouTube Plugin] Sending ${isAudio ? 'audio' : 'video'} buffer, size: ${(size / 1024 / 1024).toFixed(2)} MB`);
+        console.log(`[YouTube Plugin] Sending ${isAudio ? 'audio' : 'video'} from file, size: ${(size / 1024 / 1024).toFixed(2)} MB`);
 
-        if (isAudio) {
-          await sock.sendMessage(m.chat, {
-            audio: buffer,
-            mimetype: 'audio/mpeg',
-            fileName: `${title}.mp3`
-          }, { quoted: m });
-          console.log('[YouTube Plugin] Audio sent successfully');
-        } else {
-          await sock.sendMessage(m.chat, {
-            video: buffer,
-            caption: `✅ *Downloaded:* ${title}\n\n*Format:* MP4\n*Size:* ${(size / 1024 / 1024).toFixed(2)} MB\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
-            mimetype: 'video/mp4'
-          }, { quoted: m });
-          console.log('[YouTube Plugin] Video sent successfully');
+        try {
+          const fileBuffer = fs.readFileSync(filePath);
+          
+          if (isAudio) {
+            await sock.sendMessage(m.chat, {
+              audio: fileBuffer,
+              mimetype: 'audio/mpeg',
+              fileName: `${title}.mp3`
+            }, { quoted: m });
+            console.log('[YouTube Plugin] Audio sent successfully');
+          } else {
+            await sock.sendMessage(m.chat, {
+              video: fileBuffer,
+              caption: `✅ *Downloaded:* ${title}\n\n*Format:* MP4\n*Size:* ${(size / 1024 / 1024).toFixed(2)} MB\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+              mimetype: 'video/mp4'
+            }, { quoted: m });
+            console.log('[YouTube Plugin] Video sent successfully');
+          }
+          
+          // Cleanup temp file
+          cleanup();
+          
+        } catch (sendError) {
+          console.error('[YouTube Plugin] Send error:', sendError);
+          cleanup(); // Still cleanup on error
+          throw sendError;
         }
 
         return { success: true };
@@ -89,7 +100,6 @@ export default {
         text: "⏳ Processing YouTube video...\nPlease wait...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
       }, { quoted: m });
 
-      // Get metadata only (no format specified)
       console.log('[YouTube Plugin] Calling youtubeDownloader without format');
       const result = await youtubeDownloader.youtube(url);
 
@@ -102,7 +112,6 @@ export default {
         }, { quoted: m });
       }
 
-      // Send buttons
       console.log('[YouTube Plugin] Sending buttons for video:', result.data.title);
       return await sendYouTubeButtons(sock, m, result);
 

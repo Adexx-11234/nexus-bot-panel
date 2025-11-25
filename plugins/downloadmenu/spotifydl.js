@@ -2,6 +2,7 @@
 
 import downloader, { downloadMedia } from '../../lib/downloaders/index.js';
 import { prepareWAMessageMedia } from '@whiskeysockets/baileys';
+import fs from 'fs';
 
 export default {
   name: "spotify",
@@ -42,7 +43,7 @@ export default {
         }, { quoted: m });
       }
 
-      // Send as audio with thumbnail (uiType: 'audio')
+      // Send as audio with thumbnail
       return await sendSpotifyAudio(sock, m, result);
 
     } catch (error) {
@@ -55,7 +56,7 @@ export default {
 };
 
 /**
- * Direct download from button click - FIXED WITH BUFFER
+ * Direct download from button click - UPDATED WITH FILE SYSTEM
  */
 async function downloadSpotifyDirect(sock, m, url) {
   try {
@@ -63,15 +64,29 @@ async function downloadSpotifyDirect(sock, m, url) {
       text: `⏳ Downloading audio...\nPlease wait...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
     }, { quoted: m });
 
-    // Download the media and get buffer
-    const mediaData = await downloadMedia(url);
+    // Download to file
+    const mediaFile = await downloadMedia(url);
 
-    // Send the audio directly
-    await sock.sendMessage(m.chat, {
-      audio: mediaData.buffer,
-      mimetype: 'audio/mpeg',
-      fileName: `spotify_${Date.now()}.mp3`,
-    }, { quoted: m });
+    try {
+      // Read and send
+      const fileBuffer = fs.readFileSync(mediaFile.filePath);
+      
+      await sock.sendMessage(m.chat, {
+        audio: fileBuffer,
+        mimetype: 'audio/mpeg',
+        fileName: `spotify_${Date.now()}.mp3`,
+      }, { quoted: m });
+
+      console.log('[Spotify] Audio sent successfully');
+      
+      // Cleanup temp file
+      mediaFile.cleanup();
+      
+    } catch (sendError) {
+      console.error('[Spotify Direct] Send error:', sendError);
+      mediaFile.cleanup(); // Still cleanup on error
+      throw sendError;
+    }
 
     return { success: true };
   } catch (error) {
@@ -83,7 +98,7 @@ async function downloadSpotifyDirect(sock, m, url) {
 }
 
 /**
- * Send Spotify audio with thumbnail (uiType: 'audio')
+ * Send Spotify audio with thumbnail - UPDATED WITH FILE SYSTEM
  */
 async function sendSpotifyAudio(sock, m, result) {
   try {
@@ -108,57 +123,71 @@ async function sendSpotifyAudio(sock, m, result) {
       throw new Error("No audio download URL found");
     }
 
-    // Download audio to buffer
-    const mediaData = await downloadMedia(audioUrl);
+    // Download to file
+    const mediaFile = await downloadMedia(audioUrl);
 
-    // Build caption
-    let caption = `🎵 *Spotify Track*\n\n`;
-    caption += `📝 *Title:* ${data.title}\n`;
-    caption += `👤 *Artist:* ${data.author.name}\n`;
-    if (data.duration) {
-      caption += `⏱️ *Duration:* ${Math.floor(data.duration / 60)}:${(data.duration % 60).toString().padStart(2, '0')}\n`;
-    }
-    caption += `\n✅ Downloaded successfully!\n`;
-    caption += `\n© 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Spotify Downloader`;
+    try {
+      // Read file
+      const fileBuffer = fs.readFileSync(mediaFile.filePath);
 
-    // Prepare context info with thumbnail
-    let contextInfo = {};
-    if (thumbnailBuffer) {
-      contextInfo = {
-        externalAdReply: {
-          title: data.title,
-          body: data.author.name,
-          thumbnailUrl: data.thumbnail,
-          sourceUrl: audioUrl,
-          mediaType: 2,
-          mediaUrl: data.thumbnail,
-          renderLargerThumbnail: false,
-        }
-      };
-    }
+      // Build caption
+      let caption = `🎵 *Spotify Track*\n\n`;
+      caption += `🎵 *Title:* ${data.title}\n`;
+      caption += `👤 *Artist:* ${data.author.name}\n`;
+      if (data.duration) {
+        caption += `⏱️ *Duration:* ${Math.floor(data.duration / 60)}:${(data.duration % 60).toString().padStart(2, '0')}\n`;
+      }
+      caption += `\n✅ Downloaded successfully!\n`;
+      caption += `\n© 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Spotify Downloader`;
 
-    // Send audio with thumbnail
-    await sock.sendMessage(m.chat, {
-      audio: mediaData.buffer,
-      mimetype: 'audio/mpeg',
-      fileName: `${data.title}.mp3`,
-      contextInfo,
-      ptt: false, // Not a voice note
-    }, { quoted: m });
+      // Prepare context info with thumbnail
+      let contextInfo = {};
+      if (thumbnailBuffer) {
+        contextInfo = {
+          externalAdReply: {
+            title: data.title,
+            body: data.author.name,
+            thumbnailUrl: data.thumbnail,
+            sourceUrl: audioUrl,
+            mediaType: 2,
+            mediaUrl: data.thumbnail,
+            renderLargerThumbnail: false,
+          }
+        };
+      }
 
-    // Send caption separately with thumbnail image
-    if (thumbnailBuffer) {
+      // Send audio with thumbnail
       await sock.sendMessage(m.chat, {
-        image: thumbnailBuffer,
-        caption: caption
+        audio: fileBuffer,
+        mimetype: 'audio/mpeg',
+        fileName: `${data.title}.mp3`,
+        contextInfo,
+        ptt: false,
       }, { quoted: m });
-    } else {
-      await sock.sendMessage(m.chat, {
-        text: caption
-      }, { quoted: m });
+
+      // Send caption separately with thumbnail image
+      if (thumbnailBuffer) {
+        await sock.sendMessage(m.chat, {
+          image: thumbnailBuffer,
+          caption: caption
+        }, { quoted: m });
+      } else {
+        await sock.sendMessage(m.chat, {
+          text: caption
+        }, { quoted: m });
+      }
+
+      console.log("[Spotify] Audio sent successfully!");
+      
+      // Cleanup temp file
+      mediaFile.cleanup();
+      
+    } catch (sendError) {
+      console.error("[Spotify Audio] Send error:", sendError);
+      mediaFile.cleanup(); // Still cleanup on error
+      throw sendError;
     }
 
-    console.log("[Spotify] Audio sent successfully!");
     return { success: true };
 
   } catch (error) {

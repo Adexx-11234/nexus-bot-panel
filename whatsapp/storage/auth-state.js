@@ -88,7 +88,7 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
     }
 
     // Retry logic for critical auth files
-    const isCriticalFile = fileName === 'creds.json' || fileName.includes('creds') || fileName.includes('app-state-sync-key')
+    const isCriticalFile = fileName === 'creds.json' || fileName.includes('creds')
     const maxRetries = isCriticalFile ? 3 : 1
     let lastError = null
 
@@ -100,7 +100,7 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
         )
 
         if (!result) {
-          if (isCriticalFile && attempt === maxRetries && fileName.includes('creds')) {
+          if (isCriticalFile && attempt === maxRetries) {
             logger.error(`Auth read failed for ${sessionId}:${fileName} after ${maxRetries} attempts`)
           }
           return null
@@ -118,7 +118,7 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
         lastError = error
         if (attempt < maxRetries) {
           await new Promise(resolve => setTimeout(resolve, 1000 * attempt))
-        } else if (isCriticalFile && fileName.includes('creds')) {
+        } else if (isCriticalFile) {
           logger.error(`Auth read error for ${sessionId}:${fileName} after ${maxRetries} attempts:`, error.message)
         }
       }
@@ -128,35 +128,12 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
   }
 
   /**
-   * Write data to MongoDB with immediate write for app-state-sync-key
+   * Write data to MongoDB with debouncing
    */
   const writeData = async (datajson, fileName) => {
     const cacheKey = `${sessionId}:${fileName}`
     authCache.set(cacheKey, { data: datajson, timestamp: Date.now() })
 
-    // Immediate write for app state sync keys (critical for chat operations)
-    const isAppStateKey = fileName.includes('app-state-sync-key')
-    
-    if (isAppStateKey) {
-      try {
-        const query = { filename: fixFileName(fileName), sessionId: sessionId }
-        const update = {
-          $set: {
-            filename: fixFileName(fileName),
-            sessionId: sessionId,
-            datajson: JSON.stringify(datajson, BufferJSON.replacer),
-            updatedAt: new Date()
-          }
-        }
-        await collection.updateOne(query, update, { upsert: true })
-        logger.debug(`Immediately saved app-state-sync-key for ${sessionId}`)
-        return
-      } catch (error) {
-        logger.error(`Failed to immediately save app-state-sync-key for ${sessionId}:`, error.message)
-      }
-    }
-
-    // Debounced write for other files
     const queueKey = `${sessionId}:${fileName}`
     if (writeQueue.has(queueKey)) {
       clearTimeout(writeQueue.get(queueKey))
@@ -210,7 +187,7 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
       keys: {
         get: async (type, ids) => {
           const data = {}
-          const batchSize = 20 // Increased batch size for better performance
+          const batchSize = 100
 
           for (let i = 0; i < ids.length; i += batchSize) {
             const batch = ids.slice(i, i + batchSize)
@@ -222,51 +199,28 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
                 }
                 if (value) data[id] = value
               } catch (error) {
-                // Only log critical app-state-sync-key errors
-                if (type === 'app-state-sync-key') {
-                  logger.debug(`Could not load ${type}-${id} for ${sessionId}`)
-                }
+                // Silent error
               }
             })
             await Promise.allSettled(promises)
           }
-          
-          // Log if app-state-sync-keys are missing
-          if (type === 'app-state-sync-key' && Object.keys(data).length === 0 && ids.length > 0) {
-            logger.warn(`No app-state-sync-keys loaded for ${sessionId} (requested ${ids.length})`)
-          }
-          
           return data
         },
         set: async (data) => {
           const tasks = []
-          const appStateKeyTasks = [] // Separate queue for app state keys
-          
           for (const category in data) {
             for (const id in data[category]) {
               const value = data[category][id]
               const file = `${category}-${id}.json`
 
-              // Prioritize app-state-sync-key writes
-              if (category === 'app-state-sync-key') {
-                appStateKeyTasks.push(value ? writeData(value, file) : removeData(file))
-              } else {
-                if (tasks.length >= 20) {
-                  await Promise.allSettled(tasks)
-                  tasks.length = 0
-                }
-                tasks.push(value ? writeData(value, file) : removeData(file))
+              if (tasks.length >= 20) {
+                await Promise.allSettled(tasks)
+                tasks.length = 0
               }
+
+              tasks.push(value ? writeData(value, file) : removeData(file))
             }
           }
-          
-          // Write app state keys first (critical)
-          if (appStateKeyTasks.length > 0) {
-            await Promise.allSettled(appStateKeyTasks)
-            logger.debug(`Saved ${appStateKeyTasks.length} app-state-sync-keys for ${sessionId}`)
-          }
-          
-          // Then write other data
           if (tasks.length > 0) {
             await Promise.allSettled(tasks)
           }

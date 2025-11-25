@@ -30,7 +30,7 @@ export class MongoDBStorage {
         ''
 
       const options = {
-        maxPoolSize: 10,
+        maxPoolSize: 80,
         minPoolSize: 2,
         maxIdleTimeMS: 60000,
         serverSelectionTimeoutMS: 30000,

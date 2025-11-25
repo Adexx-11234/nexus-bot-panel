@@ -41,7 +41,7 @@ export class AntiDeletedHandler {
   // Processing cache to prevent duplicates
   static processedDeletions = new Set()
   static CACHE_CLEANUP_INTERVAL = 300000 // 5 minutes
-  static MAX_CACHE_SIZE = 1000
+  static MAX_CACHE_SIZE = 100
 
   /**
    * ===========================================

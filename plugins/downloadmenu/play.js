@@ -122,14 +122,14 @@ async function sendPlayButtons(sock, m, result) {
         name: "quick_reply",
         buttonParamsJson: JSON.stringify({
           display_text: "🎥 MP4 Video",
-          id: `${m.prefix}ytdl ${data.videoId} mp4`
+          id: `${m.prefix}ytdl ${data.youtubeUrl} mp4`
         })
       },
       {
         name: "quick_reply",
         buttonParamsJson: JSON.stringify({
           display_text: "🎵 MP3 Audio",
-          id: `${m.prefix}ytdl ${data.videoId} mp3`
+          id: `${m.prefix}ytdl ${data.youtubeUrl} mp3`
         })
       }
     ];

@@ -58,21 +58,34 @@ export default {
 /**
  * Direct download from button click - FIXED WITH BUFFER
  */
+// UPDATED: Works with file system
 async function downloadFacebookDirect(sock, m, url, quality) {
   try {
     await sock.sendMessage(m.chat, {
       text: `⏳ Downloading ${quality}...\nPlease wait...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
     }, { quoted: m });
 
-    // Download the media and get buffer
-    const mediaData = await downloadMedia(url);
+    // Download to file
+    const mediaFile = await downloadMedia(url);
 
-    // Send the video directly
-    await sock.sendMessage(m.chat, {
-      video: mediaData.buffer,
-      caption: `✅ *Facebook Download Complete*\n\n*Quality:* ${quality}\n\n© 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
-      mimetype: 'video/mp4'
-    }, { quoted: m });
+    try {
+      // Read file and send
+      const fileBuffer = fs.readFileSync(mediaFile.filePath);
+      
+      await sock.sendMessage(m.chat, {
+        video: fileBuffer,
+        caption: `✅ *Facebook Download Complete*\n\n*Quality:* ${quality}\n\n© 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+        mimetype: 'video/mp4'
+      }, { quoted: m });
+
+      // Cleanup temp file
+      mediaFile.cleanup();
+      
+    } catch (sendError) {
+      console.error("[Facebook Direct] Send error:", sendError);
+      mediaFile.cleanup(); // Still cleanup on error
+      throw sendError;
+    }
 
     return { success: true };
   } catch (error) {
@@ -82,7 +95,6 @@ async function downloadFacebookDirect(sock, m, url, quality) {
     }, { quoted: m });
   }
 }
-
 /**
  * Send Facebook with quality buttons
  */

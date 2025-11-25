@@ -1,6 +1,7 @@
 // plugins/download/pinterest.js
 
 import downloader, { downloadMedia } from '../../lib/downloaders/index.js';
+import fs from 'fs';
 
 export default {
   name: "pinterest",
@@ -48,42 +49,54 @@ export default {
 };
 
 /**
- * Send Pinterest content directly (uiType: 'direct') - FIXED WITH BUFFER
+ * Send Pinterest content directly - UPDATED WITH FILE SYSTEM
  */
 async function sendPinterestDirect(sock, m, result) {
   try {
     const { data } = result;
     const download = data.downloads[0];
 
-    // Download the media and get buffer
-    const mediaData = await downloadMedia(download.url);
+    // Download to file
+    const mediaFile = await downloadMedia(download.url);
 
-    // Build caption
-    let caption = `📌 *Pinterest Download*\n\n`;
-    if (data.title) {
-      caption += `📝 *Title:* ${data.title}\n`;
+    try {
+      // Read file
+      const fileBuffer = fs.readFileSync(mediaFile.filePath);
+
+      // Build caption
+      let caption = `📌 *Pinterest Download*\n\n`;
+      if (data.title) {
+        caption += `📝 *Title:* ${data.title}\n`;
+      }
+      caption += `👤 *By:* ${data.author.name}\n`;
+      caption += `\n✅ Downloaded successfully!\n`;
+      caption += `\n© 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Pinterest Downloader`;
+
+      // Send based on type
+      if (download.type === 'video') {
+        await sock.sendMessage(m.chat, {
+          video: fileBuffer,
+          caption: caption,
+          mimetype: 'video/mp4'
+        }, { quoted: m });
+      } else {
+        await sock.sendMessage(m.chat, {
+          image: fileBuffer,
+          caption: caption
+        }, { quoted: m });
+      }
+
+      console.log("[Pinterest] Content sent successfully!");
+      
+      // Cleanup temp file
+      mediaFile.cleanup();
+      
+    } catch (sendError) {
+      console.error("[Pinterest Direct] Send error:", sendError);
+      mediaFile.cleanup(); // Still cleanup on error
+      throw sendError;
     }
-    caption += `👤 *By:* ${data.author.name}\n`;
-    caption += `\n✅ Downloaded successfully!\n`;
-    caption += `\n© 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Pinterest Downloader`;
 
-    // Check if it's video or image
-    if (download.type === 'video') {
-      // Send video
-      await sock.sendMessage(m.chat, {
-        video: mediaData.buffer,
-        caption: caption,
-        mimetype: 'video/mp4'
-      }, { quoted: m });
-    } else {
-      // Send image
-      await sock.sendMessage(m.chat, {
-        image: mediaData.buffer,
-        caption: caption
-      }, { quoted: m });
-    }
-
-    console.log("[Pinterest] Content sent successfully!");
     return { success: true };
 
   } catch (error) {
