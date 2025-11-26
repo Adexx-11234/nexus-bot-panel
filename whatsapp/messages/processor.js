@@ -15,7 +15,7 @@ export class MessageProcessor {
     this.messageLogger = new MessageLogger()
     this.messagePersistence = new MessagePersistence()
     this.messageExtractor = new MessageExtractor()
-    
+    this.userStates = new Map() // key: "chatId_userId" -> { type, data, expires, handler }
     // PREFIX CACHE - Load all user prefixes into memory
     this.prefixCache = new Map() // telegramId -> prefix
     this.cacheLoadTime = null
@@ -31,6 +31,90 @@ export class MessageProcessor {
       errors: 0
     }
   }
+
+
+    /**
+   * Set state with custom handler function
+   * @param {string} chatId - Chat ID
+   * @param {string} userId - User ID  
+   * @param {string} type - State type (for debugging/logging)
+   * @param {object} data - Any data to store
+   * @param {function} handler - Function to call when user replies: (sock, sessionId, m, data, userReply) => Promise
+   */
+  _setState(chatId, userId, type, data, handler) {
+    const key = `${chatId}_${userId}`
+    this.userStates.set(key, {
+      type,
+      data,
+      handler, // The plugin's custom handler function
+      expires: Date.now() + (5 * 60 * 1000) // 5 minutes
+    })
+    logger.debug(`State set: ${type} for ${userId}`)
+  }
+  
+  _getState(chatId, userId) {
+    const key = `${chatId}_${userId}`
+    const state = this.userStates.get(key)
+    
+    if (state && Date.now() > state.expires) {
+      this.userStates.delete(key)
+      logger.debug(`State expired: ${state.type}`)
+      return null
+    }
+    
+    return state
+  }
+  
+  _clearState(chatId, userId) {
+    const key = `${chatId}_${userId}`
+    this.userStates.delete(key)
+  }
+
+  /**
+   * UNIVERSAL handler for ANY reply (not just numbers!)
+   * Works for: numbers, text, yes/no, anything!
+   */
+  async _handleStateReply(sock, sessionId, m) {
+    // Only check if NOT a command
+    if (m.isCommand) return null
+    
+    // Must be replying to bot
+    if (!m.quoted) return null
+    
+    const quotedSender = m.quoted.sender || m.quoted.participant
+    const botJid = sock.user?.id
+    
+    if (quotedSender !== botJid && !this.pluginLoader.compareJids(quotedSender, botJid)) {
+      return null
+    }
+    
+    // Get user's state
+    const state = this._getState(m.chat, m.sender)
+    if (!state) return null
+    
+    // State exists and user is replying to bot
+    // Call the handler function that the plugin provided
+    try {
+      logger.debug(`Executing state handler: ${state.type}`)
+      
+      const result = await state.handler(sock, sessionId, m, state.data, m.body.trim())
+      
+      return result || { processed: true }
+      
+    } catch (error) {
+      logger.error(`Error in state handler (${state.type}):`, error)
+      
+      // Clear broken state
+      this._clearState(m.chat, m.sender)
+      
+      await sock.sendMessage(m.chat, {
+        text: `❌ An error occurred. Please try again.`
+      }, { quoted: m })
+      
+      return { processed: true, error: true }
+    }
+  }
+  
 
   /**
    * Initialize processor
@@ -143,15 +227,13 @@ async processMessage(sock, sessionId, m, prefix = null) {
       return { processed: false, error: 'Invalid message object' }
     }
 
-      
     const chat = m.key?.remoteJid || m.from
     const isGroup = chat && chat.endsWith('@g.us')
     
-    // **FIX: Skip protocol/system messages**
+    // Skip protocol/system messages
     if (m.message?.protocolMessage) {
       const protocolType = m.message.protocolMessage.type
       
-      // Skip these protocol message types
       const skipTypes = [
         'PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE',
         'MESSAGE_EDIT',
@@ -165,7 +247,7 @@ async processMessage(sock, sessionId, m, prefix = null) {
       }
     }
       
-    // **FIX: Set chat, isGroup, and sender FIRST before anything else**
+    // Set chat, isGroup, and sender
     if (!m.chat) {
       m.chat = m.key?.remoteJid || m.from
     }
@@ -177,24 +259,20 @@ async processMessage(sock, sessionId, m, prefix = null) {
       if (m.isGroup) {
         m.sender = m.key?.participant || m.participant || m.key?.remoteJid
       } else {
-        // In private chats:
         if (m.key?.fromMe) {
-          // YOU sent it: ALWAYS use originalSelfAuthorUserJidString first
           m.sender = m.originalSelfAuthorUserJidString || sock.user?.id
         } else {
-          // OTHER person sent it: use remoteJid
           m.sender = m.key?.remoteJid || m.chat
         }
       }
     }
 
-    // **CRITICAL: If sender is still @lid and we have originalSelfAuthorUserJidString, use it**
     if (m.sender?.includes('@lid') && m.originalSelfAuthorUserJidString) {
       m.sender = m.originalSelfAuthorUserJidString
       logger.debug(`Corrected @lid sender to: ${m.sender}`)
     }
     
-    // Validate critical fields before continuing
+    // Validate critical fields
     if (!m.chat || !m.sender) {
       logger.error('Missing critical message fields:', { chat: m.chat, sender: m.sender })
       return { processed: false, error: 'Missing chat or sender information' }
@@ -204,7 +282,7 @@ async processMessage(sock, sessionId, m, prefix = null) {
     m.sessionContext = this._getSessionContext(sessionId)
     m.sessionId = sessionId
     
-    // ✅ GET USER'S CUSTOM PREFIX FROM MEMORY CACHE (NO DATABASE QUERY!)
+    // Get user's custom prefix
     const userPrefix = this._getUserPrefixFromCache(m.sessionContext.telegram_id)
     m.prefix = userPrefix
     logger.debug(`Using prefix '${m.prefix}' for user ${m.sessionContext.telegram_id}`)
@@ -215,37 +293,33 @@ async processMessage(sock, sessionId, m, prefix = null) {
     // Extract quoted message
     m.quoted = this.messageExtractor.extractQuotedMessage(m)
 
-    // **Extract message body BEFORE processing anti-plugins**
+    // Extract message body
     m.body = this.messageExtractor.extractMessageBody(m)
-    m.text = m.body // Add text alias for compatibility
+    m.text = m.body
 
     // Set admin status
     await this._setAdminStatus(sock, m)
 
-    // Determine if it's a command using user's custom prefix
-    // If prefix is empty string (none), ALL messages are treated as commands
+    // Determine if it's a command
     const isCommand = m.body && (m.prefix === '' || m.body.startsWith(m.prefix))
     m.isCommand = isCommand
 
     if (isCommand) {
-      this._parseCommand(m, m.prefix) // Use user's prefix
+      this._parseCommand(m, m.prefix)
     }
 
-    // **Process anti-plugins AFTER body extraction and BEFORE command check**
-    // Skip anti-plugin processing for commands
+    // Process anti-plugins (skip for commands)
     if (!m.isCommand) {
       await this._processAntiPlugins(sock, sessionId, m)
       
       if (m._wasDeletedByAntiPlugin) {
-        // ⚡ Fire-and-forget for persistence and logging (don't await)
         this.messagePersistence.persistMessage(sessionId, sock, m).catch(() => {})
         this.messageLogger.logEnhancedMessageEntry(sock, sessionId, m).catch(() => {})
         return { processed: true, deletedByAntiPlugin: true }
       }
     }
 
-    // ⚡ PERFORMANCE FIX: Fire-and-forget for persistence and logging
-    // Don't wait for database writes - they happen in background
+    // Fire-and-forget for persistence and logging
     this.messagePersistence.persistMessage(sessionId, sock, m).catch(err => {
       logger.debug(`Persistence failed for ${m.key?.id}:`, err.message)
     })
@@ -254,7 +328,14 @@ async processMessage(sock, sessionId, m, prefix = null) {
       logger.debug(`Logging failed for ${m.key?.id}:`, err.message)
     })
 
-    // Handle interactive responses
+    // ✅ CHECK STATE REPLY FIRST (before interactive responses and commands)
+    // This handles number replies, text replies, etc. for multi-step flows
+    const stateReplyResult = await this._handleStateReply(sock, sessionId, m)
+    if (stateReplyResult) {
+      return stateReplyResult
+    }
+
+    // Handle interactive responses (buttons, lists)
     if (m.message?.listResponseMessage) {
       return await this._handleListResponse(sock, sessionId, m)
     }

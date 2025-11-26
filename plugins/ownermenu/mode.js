@@ -25,7 +25,7 @@ export default {
       const action = args[0]?.toLowerCase()
 
       // Handle text commands
-      if (action === 'self') {
+      if (action === 'self' || 'private') {
         return await this.setSelfMode(telegramId, m)
       }
 

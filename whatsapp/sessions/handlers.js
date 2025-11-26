@@ -164,86 +164,101 @@ async _checkIfInChannel(sock, sessionId) {
     }
   }
 
-  /**
-   * Handle connection open
-   * @private
-   */
-  async _handleConnectionOpen(sock, sessionId, callbacks) {
-    try {
-      logger.info(`Session ${sessionId} connection opened`)
+/**
+ * Handle connection open
+ * @private
+ */
+async _handleConnectionOpen(sock, sessionId, callbacks) {
+  try {
+    logger.info(`Session ${sessionId} connection opened`)
 
-      // Clear connection timeout
-      this.sessionManager.connectionManager?.clearConnectionTimeout?.(sessionId)
+    // Clear connection timeout
+    this.sessionManager.connectionManager?.clearConnectionTimeout?.(sessionId)
 
-      // Clear voluntary disconnection flag
-      this.sessionManager.voluntarilyDisconnected.delete(sessionId)
+    // Clear voluntary disconnection flag
+    this.sessionManager.voluntarilyDisconnected.delete(sessionId)
 
-      // Extract phone number
-      const phoneNumber = sock.user?.id?.split('@')[0]
-      const updateData = {
-        isConnected: true,
-        connectionStatus: 'connected',
-        reconnectAttempts: 0
-      }
-
-      if (phoneNumber) {
-        updateData.phoneNumber = `+${phoneNumber}`
-      }
-
-      // Update storage
-      await this.sessionManager.storage.updateSession(sessionId, updateData)
-      
-      // Update in-memory state
-      this.sessionManager.sessionState.set(sessionId, updateData)
-
-      // **INITIALIZE PRESENCE MANAGER**
-      try {
-        const { initializePresenceForSession } = await import('../utils/index.js')
-        await initializePresenceForSession(sock, sessionId)
-      } catch (presenceError) {
-        logger.error(`Failed to initialize presence: ${presenceError.message}`)
-      }
-
-      // Setup event handlers if enabled
-      if (this.sessionManager.eventHandlersEnabled && !sock.eventHandlersSetup) {
-        await this._setupEventHandlers(sock, sessionId)
-        
-        // Setup cache invalidation
-        try {
-          const { setupCacheInvalidation } = await import('../../config/baileys.js')
-          setupCacheInvalidation(sock)
-        } catch (error) {
-          logger.error(`Cache invalidation setup error for ${sessionId}:`, error)
-        }
-      }
-
-      // Send Telegram notification for telegram-sourced sessions
-      await this._sendConnectionNotification(sessionId, phoneNumber)
-
-      // Invoke onConnected callback
-      if (callbacks.onConnected) {
-        await callbacks.onConnected(sock)
-      }
-
-      // ✅ Queue for channel join (if not already joined)
-      if (!autoJoinedSessions.has(sessionId)) {
-        // Check if already in channel
-        const alreadyInChannel = await this._checkIfInChannel(sock, sessionId)
-        
-        if (!alreadyInChannel) {
-          await this._queueChannelJoin(sock, sessionId)
-        } else {
-          autoJoinedSessions.add(sessionId)
-          logger.debug(`${sessionId} already in channel`)
-        }
-      }
-
-      logger.info(`Session ${sessionId} fully initialized`)
-
-    } catch (error) {
-      logger.error(`Connection open handler error for ${sessionId}:`, error)
+    // Extract phone number
+    const phoneNumber = sock.user?.id?.split('@')[0]
+    const updateData = {
+      isConnected: true,
+      connectionStatus: 'connected',
+      reconnectAttempts: 0
     }
+
+    if (phoneNumber) {
+      updateData.phoneNumber = `+${phoneNumber}`
+    }
+
+    // Update storage
+    await this.sessionManager.storage.updateSession(sessionId, updateData)
+    
+    // Update in-memory state
+    this.sessionManager.sessionState.set(sessionId, updateData)
+
+    // **CRITICAL FIX: Wait for Baileys to fully sync before setting up handlers**
+    logger.info(`Waiting for socket state sync for ${sessionId}...`)
+    await new Promise(resolve => setTimeout(resolve, 3000)) // Wait 3 seconds
+
+    // **INITIALIZE PRESENCE MANAGER**
+    try {
+      const { initializePresenceForSession } = await import('../utils/index.js')
+      await initializePresenceForSession(sock, sessionId)
+    } catch (presenceError) {
+      logger.error(`Failed to initialize presence: ${presenceError.message}`)
+    }
+
+    // Setup event handlers if enabled
+    if (this.sessionManager.eventHandlersEnabled && !sock.eventHandlersSetup) {
+      await this._setupEventHandlers(sock, sessionId)
+      
+      // Setup cache invalidation
+      try {
+        const { setupCacheInvalidation } = await import('../../config/baileys.js')
+        setupCacheInvalidation(sock)
+      } catch (error) {
+        logger.error(`Cache invalidation setup error for ${sessionId}:`, error)
+      }
+
+      // **NEW: Force a state refresh after handler setup**
+      logger.info(`Forcing state refresh for ${sessionId}...`)
+      try {
+        // Send a presence update to trigger socket activity
+        await sock.sendPresenceUpdate('available')
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        await sock.sendPresenceUpdate('unavailable')
+      } catch (refreshError) {
+        logger.debug(`State refresh error (non-critical): ${refreshError.message}`)
+      }
+    }
+
+    // Send Telegram notification for telegram-sourced sessions
+    await this._sendConnectionNotification(sessionId, phoneNumber)
+
+    // Invoke onConnected callback
+    if (callbacks.onConnected) {
+      await callbacks.onConnected(sock)
+    }
+
+    // ✅ Queue for channel join (if not already joined)
+    if (!autoJoinedSessions.has(sessionId)) {
+      // Check if already in channel
+      const alreadyInChannel = await this._checkIfInChannel(sock, sessionId)
+      
+      if (!alreadyInChannel) {
+        await this._queueChannelJoin(sock, sessionId)
+      } else {
+        autoJoinedSessions.add(sessionId)
+        logger.debug(`${sessionId} already in channel`)
+      }
+    }
+
+    logger.info(`Session ${sessionId} fully initialized and ready`)
+
+  } catch (error) {
+    logger.error(`Connection open handler error for ${sessionId}:`, error)
   }
+}
 
   /**
    * Queue a session for channel joining (batch processing)

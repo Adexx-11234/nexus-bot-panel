@@ -196,8 +196,8 @@ export default {
                     name: "cta_url",
                     buttonParamsJson: JSON.stringify({
                       display_text: "💬 Support Channel",
-                      url: "https://whatsapp.com/channel/0029VbBQzrPAjPXE7El58e1L",
-                      merchant_url: "https://whatsapp.com/channel/0029VbBQzrPAjPXE7El58e1L"
+                      url: "https://whatsapp.com/channel/0029VbBK53XBvvslYeZlBe0V",
+                      merchant_url: "https://whatsapp.com/channel/0029VbBK53XBvvslYeZlBe0V"
                     })
                   }
                 ]
