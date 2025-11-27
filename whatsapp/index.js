@@ -165,7 +165,7 @@ export {
   AntiDeletedHandler,
   VIPHelper,
   VIPTakeover,
-    PresenceManager,
+  PresenceManager,
   getPresenceManager,
   initializePresenceForSession,
   handlePresenceBeforeSend,
@@ -180,7 +180,8 @@ export {
   handleMessagesUpsert,
   handleGroupParticipantsUpdate,
   WhatsAppEventHandler,
-  messageProcessor
+  messageProcessor,
+  getMessageProcessor  // ✅ ADDED: Export message processor getter
 } from './handlers/index.js'
 
 // ============================================================================

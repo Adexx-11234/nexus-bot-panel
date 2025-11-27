@@ -502,9 +502,9 @@ export class SessionManager {
     try {
       logger.info(`Disconnecting session ${sessionId} (force: ${forceCleanup})`)
 
-      // Check if it's a web user (ID > 9000000000)
-      const userId = sessionId.replace('session_', '')
-      const isWebUser = parseInt(userId) > 9000000000
+    // Get session data to check source
+    const sessionData = await this.storage.getSession(sessionId)
+    const isWebUser = sessionData?.source === 'web'
 
       // Full cleanup if forced
       if (forceCleanup) {
