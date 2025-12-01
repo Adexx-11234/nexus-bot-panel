@@ -1,5 +1,5 @@
 /**
- * UPDATED WEB SESSION DETECTOR - FIXED
+ * UPDATED WEB SESSION DETECTOR - FIXED WITH FORCE PROCESS
  * For Main Server - Detects connections created by Web Session Server
  * 
  * How it works:
@@ -84,17 +84,17 @@ export class WebSessionDetector {
         return
       }
 
-      logger.info(`Found ${undetectedSessions.length} undetected web sessions`)
+      logger.info(`Found ${undetectedSessions.length} undetected web sessions - FORCING IMMEDIATE TAKEOVER`)
 
-      // Process each session
+      // Process each session - FORCE PROCESS, NO SKIPPING
       for (const sessionData of undetectedSessions) {
-        // Skip if currently processing
-        if (this.processingNow.has(sessionData.sessionId)) {
-          logger.debug(`Session ${sessionData.sessionId} is already being processed, skipping`)
-          continue
-        }
+        // CRITICAL: Clear any previous processing flags
+        this.processingNow.delete(sessionData.sessionId)
+        this.processedSessions.delete(sessionData.sessionId)
+        
+        logger.warn(`🚨 FORCING takeover for ${sessionData.sessionId}`)
 
-        await this._processWebSession(sessionData).catch(error => {
+        await this._processWebSession(sessionData, true).catch(error => {
           logger.error(`Failed to process ${sessionData.sessionId}:`, error)
         })
       }
@@ -104,156 +104,180 @@ export class WebSessionDetector {
     }
   }
 
-/**
- * Process individual web session - Take over from web server
- * @private
- */
-async _processWebSession(sessionData) {
-  const { sessionId, phoneNumber, userId } = sessionData
+  /**
+   * Process individual web session - Take over from web server
+   * @private
+   */
+  async _processWebSession(sessionData, forceProcess = false) {
+    const { sessionId, phoneNumber, userId } = sessionData
 
-  try {
-    // Skip if already processed in this session
-    if (this.processedSessions.has(sessionId)) {
-      logger.debug(`Session ${sessionId} already processed, skipping`)
-      return
-    }
+    try {
+      // FORCE MODE: Skip all checks, go straight to takeover
+      if (forceProcess) {
+        logger.warn(`🚨 FORCE MODE - Taking over ${sessionId} immediately`)
+        
+        // Mark as currently processing
+        this.processingNow.add(sessionId)
+        
+        // Take over the session from web server
+        const success = await this._takeOverSession(sessionData)
 
-    // Mark as currently processing
-    this.processingNow.add(sessionId)
-
-    // Check database for current session state
-    const sessionInDB = await this.storage.getSession(sessionId);
-    
-    // Skip if session doesn't exist
-    if (!sessionInDB) {
-      logger.debug(`Session ${sessionId} not found in database, skipping`)
-      this.processingNow.delete(sessionId)
-      return;
-    }
-    
-    // Skip if already detected
-    if (sessionInDB.detected) {
-      logger.debug(`Session ${sessionId} already detected, skipping`)
-      this.processedSessions.add(sessionId)
-      this.processingNow.delete(sessionId)
-      return;
-    }
-
-    // CRITICAL FIX: Don't skip disconnected sessions - they need takeover!
-    logger.info(`Taking over web session: ${sessionId} (status: ${sessionInDB.connectionStatus})`)
-
-    // Check if session already has active socket in main server
-    const existingSocket = this.sessionManager.activeSockets.get(sessionId)
-    if (existingSocket && existingSocket.user && existingSocket.readyState === existingSocket.ws?.OPEN) {
-      logger.info(`Session ${sessionId} already active in main server, marking as detected`)
-      await this.storage.markSessionAsDetected(sessionId, true)
-      this.processedSessions.add(sessionId)
-      this.processingNow.delete(sessionId)
-      return
-    }
-
-    // Take over the session from web server
-    const success = await this._takeOverSession(sessionData)
-
-    if (!success) {
-      logger.warn(`Failed to take over web session: ${sessionId}`)
-      // Remove from processing but NOT from processed - allow retry on next poll
-      this.processingNow.delete(sessionId)
-    } else {
-      logger.info(`Successfully took over web session: ${sessionId}`)
-      // Mark as processed
-      this.processedSessions.add(sessionId)
-      this.processingNow.delete(sessionId)
-    }
-
-  } catch (error) {
-    logger.error(`Error processing web session ${sessionId}:`, error)
-    // Remove from processing to allow retry
-    this.processingNow.delete(sessionId)
-  }
-}
-
-/**
- * Take over a web session from web server
- * @private
- */
-async _takeOverSession(sessionData) {
-  const { sessionId, phoneNumber, userId, telegramId } = sessionData
-
-  try {
-    const actualUserId = userId || telegramId || sessionId.replace('session_', '')
-
-    // Get current session state from database
-    const currentSession = await this.storage.getSession(sessionId);
-    if (!currentSession) {
-      logger.warn(`Session ${sessionId} no longer exists`)
-      return false;
-    }
-
-    // Wait briefly for any pending web server operations
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    // Check again if session is already active
-    const existingSocket = this.sessionManager.activeSockets.get(sessionId)
-    if (existingSocket && existingSocket.user && existingSocket.readyState === existingSocket.ws?.OPEN) {
-      logger.info(`Session ${sessionId} already connected, marking as detected`)
-      await this.storage.markSessionAsDetected(sessionId, true)
-      return true
-    }
-
-    logger.info(`Creating takeover connection for ${sessionId} (previous status: ${currentSession.connectionStatus})`)
-
-    // Create session with takeover callbacks
-    const sock = await this.sessionManager.createSession(
-      actualUserId,
-      phoneNumber,
-      {
-        onConnected: async () => {
-          logger.info(`✅ Successfully took over ${sessionId}`)
-          
-          // Mark as detected in database
-          await this.storage.markSessionAsDetected(sessionId, true)
-          
-          // Setup full event handlers if enabled
-          if (this.sessionManager.eventHandlersEnabled && !sock.eventHandlersSetup) {
-            await this.sessionManager._setupEventHandlers(sock, sessionId).catch(error => {
-              logger.error(`Failed to setup handlers for ${sessionId}:`, error)
-            })
-          }
-        },
-        onError: (error) => {
-          logger.error(`Takeover error for ${sessionId}:`, error)
-          // Remove from processed to allow retry
-          this.processedSessions.delete(sessionId)
+        if (!success) {
+          logger.warn(`❌ Failed to take over web session: ${sessionId}`)
+          this.processingNow.delete(sessionId)
+        } else {
+          logger.info(`✅ Successfully took over web session: ${sessionId}`)
+          this.processedSessions.add(sessionId)
           this.processingNow.delete(sessionId)
         }
-      },
-      true, // isReconnect - use existing auth from web server
-      'web', // source
-      false // Don't allow pairing - already paired by web server
-    )
+        
+        return
+      }
 
-    if (!sock) {
-      logger.warn(`Failed to create socket for takeover: ${sessionId}`)
+      // NORMAL MODE: Regular checks
+      // Skip if already processed in this session
+      if (this.processedSessions.has(sessionId)) {
+        logger.debug(`Session ${sessionId} already processed, skipping`)
+        return
+      }
+
+      // Mark as currently processing
+      this.processingNow.add(sessionId)
+
+      // Check database for current session state
+      const sessionInDB = await this.storage.getSession(sessionId);
+      
+      // Skip if session doesn't exist
+      if (!sessionInDB) {
+        logger.debug(`Session ${sessionId} not found in database, skipping`)
+        this.processingNow.delete(sessionId)
+        return;
+      }
+      
+      // Skip if already detected
+      if (sessionInDB.detected) {
+        logger.debug(`Session ${sessionId} already detected, skipping`)
+        this.processedSessions.add(sessionId)
+        this.processingNow.delete(sessionId)
+        return;
+      }
+
+      // CRITICAL FIX: Don't skip disconnected sessions - they need takeover!
+      logger.info(`Taking over web session: ${sessionId} (status: ${sessionInDB.connectionStatus})`)
+
+      // Check if session already has active socket in main server
+      const existingSocket = this.sessionManager.activeSockets.get(sessionId)
+      if (existingSocket && existingSocket.user && existingSocket.readyState === existingSocket.ws?.OPEN) {
+        logger.info(`Session ${sessionId} already active in main server, marking as detected`)
+        await this.storage.markSessionAsDetected(sessionId, true)
+        this.processedSessions.add(sessionId)
+        this.processingNow.delete(sessionId)
+        return
+      }
+
+      // Take over the session from web server
+      const success = await this._takeOverSession(sessionData)
+
+      if (!success) {
+        logger.warn(`Failed to take over web session: ${sessionId}`)
+        // Remove from processing but NOT from processed - allow retry on next poll
+        this.processingNow.delete(sessionId)
+      } else {
+        logger.info(`Successfully took over web session: ${sessionId}`)
+        // Mark as processed
+        this.processedSessions.add(sessionId)
+        this.processingNow.delete(sessionId)
+      }
+
+    } catch (error) {
+      logger.error(`Error processing web session ${sessionId}:`, error)
+      // Remove from processing to allow retry
+      this.processingNow.delete(sessionId)
+    }
+  }
+
+  /**
+   * Take over a web session from web server
+   * @private
+   */
+  async _takeOverSession(sessionData) {
+    const { sessionId, phoneNumber, userId, telegramId } = sessionData
+
+    try {
+      const actualUserId = userId || telegramId || sessionId.replace('session_', '')
+
+      // Get current session state from database
+      const currentSession = await this.storage.getSession(sessionId);
+      if (!currentSession) {
+        logger.warn(`Session ${sessionId} no longer exists`)
+        return false;
+      }
+
+      // Wait briefly for any pending web server operations
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Check again if session is already active
+      const existingSocket = this.sessionManager.activeSockets.get(sessionId)
+      if (existingSocket && existingSocket.user && existingSocket.readyState === existingSocket.ws?.OPEN) {
+        logger.info(`Session ${sessionId} already connected, marking as detected`)
+        await this.storage.markSessionAsDetected(sessionId, true)
+        return true
+      }
+
+      logger.info(`Creating takeover connection for ${sessionId} (previous status: ${currentSession.connectionStatus})`)
+
+      // Create session with takeover callbacks
+      const sock = await this.sessionManager.createSession(
+        actualUserId,
+        phoneNumber,
+        {
+          onConnected: async () => {
+            logger.info(`✅ Successfully took over ${sessionId}`)
+            
+            // Mark as detected in database
+            await this.storage.markSessionAsDetected(sessionId, true)
+            
+            // Setup full event handlers if enabled
+            if (this.sessionManager.eventHandlersEnabled && !sock.eventHandlersSetup) {
+              await this.sessionManager._setupEventHandlers(sock, sessionId).catch(error => {
+                logger.error(`Failed to setup handlers for ${sessionId}:`, error)
+              })
+            }
+          },
+          onError: (error) => {
+            logger.error(`Takeover error for ${sessionId}:`, error)
+            // Remove from processed to allow retry
+            this.processedSessions.delete(sessionId)
+            this.processingNow.delete(sessionId)
+          }
+        },
+        true, // isReconnect - use existing auth from web server
+        'web', // source
+        false // Don't allow pairing - already paired by web server
+      )
+
+      if (!sock) {
+        logger.warn(`Failed to create socket for takeover: ${sessionId}`)
+        return false
+      }
+
+      logger.info(`Successfully initiated takeover for ${sessionId}`)
+      return true
+
+    } catch (error) {
+      logger.error(`Takeover failed for ${sessionId}:`, error.message)
+      
+      // Update session with error info
+      await this.storage.updateSession(sessionId, {
+        detected: false,
+        detectionError: error.message,
+        lastDetectionAttempt: new Date()
+      }).catch(() => {})
+      
       return false
     }
-
-    logger.info(`Successfully initiated takeover for ${sessionId}`)
-    return true
-
-  } catch (error) {
-    logger.error(`Takeover failed for ${sessionId}:`, error.message)
-    
-    // Update session with error info
-    await this.storage.updateSession(sessionId, {
-      detected: false,
-      detectionError: error.message,
-      lastDetectionAttempt: new Date()
-    }).catch(() => {})
-    
-    return false
   }
-}
+
   /**
    * Check if detector is running
    */
@@ -322,8 +346,8 @@ async _takeOverSession(sessionData) {
       this.processedSessions.delete(sessionId)
       this.processingNow.delete(sessionId)
       
-      // Process the session
-      const success = await this._processWebSession(session)
+      // Process the session with force mode
+      const success = await this._processWebSession(session, true)
       
       return success
 

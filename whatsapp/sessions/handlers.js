@@ -579,24 +579,52 @@ async _handleConnectionClose(sock, sessionId, lastDisconnect, callbacks) {
   try {
     logger.warn(`Session ${sessionId} connection closed`)
 
+    // Import disconnect configuration
+    const { getDisconnectConfig } = await import('../events/index.js')
+    const { Boom } = await import('@hapi/boom')
+    
+    // Extract disconnect reason
+    const error = lastDisconnect?.error
+    const statusCode = error instanceof Boom ? error.output?.statusCode : null
+    
+    // Get configuration for this disconnect reason
+    const config = getDisconnectConfig(statusCode)
+    
+    logger.info(`📋 Disconnect config for ${sessionId}: shouldReconnect=${config.shouldReconnect}, isPermanent=${config.isPermanent}`)
+
     // Use coordinator, not direct MongoDB
     const sessionData = await this.sessionManager.storage.getSession(sessionId)
     const isWebUser = sessionData?.source === 'web'
 
     if (isWebUser) {
-      // WEB USER: Update via coordinator
-      await this.sessionManager.storage.updateSession(sessionId, {
-        isConnected: false,
-        connectionStatus: 'disconnected'
-      })
+      logger.info(`🌐 Web user ${sessionId} disconnect - Status: ${statusCode}`)
       
-      // Delete from MongoDB via coordinator
-      if (this.sessionManager.storage.mongoStorage?.isConnected) {
-        await this.sessionManager.storage.mongoStorage.deleteSession(sessionId)
-        logger.info(`Web user ${sessionId} removed from MongoDB on disconnect`)
+      // Only delete if it's a PERMANENT disconnect
+      if (config.isPermanent && !config.shouldReconnect) {
+        logger.info(`🗑️  Permanent disconnect - removing web user ${sessionId} from MongoDB`)
+        
+        // Update via coordinator
+        await this.sessionManager.storage.updateSession(sessionId, {
+          isConnected: false,
+          connectionStatus: 'disconnected'
+        })
+        
+        // Delete from MongoDB via coordinator
+        if (this.sessionManager.storage.mongoStorage?.isConnected) {
+          await this.sessionManager.storage.mongoStorage.deleteSession(sessionId)
+          logger.info(`Web user ${sessionId} removed from MongoDB on permanent disconnect`)
+        }
+      } else {
+        logger.info(`🔄 Reconnectable disconnect - keeping web user ${sessionId} in MongoDB`)
+        
+        // Just update status, don't delete
+        await this.sessionManager.storage.updateSession(sessionId, {
+          isConnected: false,
+          connectionStatus: 'disconnected'
+        })
       }
     } else {
-      // TELEGRAM USER: Update via coordinator
+      // TELEGRAM USER: Just update status
       await this.sessionManager.storage.updateSession(sessionId, {
         isConnected: false,
         connectionStatus: 'disconnected'
