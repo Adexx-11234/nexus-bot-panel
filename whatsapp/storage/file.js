@@ -9,8 +9,8 @@ const __dirname = path.dirname(__filename)
 const logger = createComponentLogger('FILE_MANAGER')
 
 /**
- * FileManager - Manages file-based authentication state
- * Handles session directories and credentials files
+ * FileManager - File-based storage (FALLBACK when DB unavailable)
+ * Handles both auth state AND session data in files
  */
 export class FileManager {
   constructor(sessionDir = './sessions') {
@@ -18,10 +18,6 @@ export class FileManager {
     this._ensureSessionsDirectory()
   }
 
-  /**
-   * Ensure sessions directory exists
-   * @private
-   */
   _ensureSessionsDirectory() {
     try {
       if (!fs.existsSync(this.sessionsDir)) {
@@ -34,9 +30,6 @@ export class FileManager {
     }
   }
 
-  /**
-   * Get session directory path
-   */
   getSessionPath(sessionId) {
     let normalizedSessionId = sessionId.startsWith('session_')
       ? sessionId
@@ -47,9 +40,6 @@ export class FileManager {
     return path.join(this.sessionsDir, normalizedSessionId)
   }
 
-  /**
-   * Ensure session directory exists
-   */
   ensureSessionDirectory(sessionId) {
     try {
       const sessionPath = this.getSessionPath(sessionId)
@@ -58,14 +48,11 @@ export class FileManager {
       }
       return true
     } catch (error) {
-      logger.error(`Failed to create session directory for ${sessionId}:`, error)
+      logger.error(`Failed to create session directory ${sessionId}:`, error)
       return false
     }
   }
 
-  /**
-   * Check if session has valid credentials
-   */
   hasValidCredentials(sessionId) {
     try {
       const sessionPath = this.getSessionPath(sessionId)
@@ -86,9 +73,6 @@ export class FileManager {
     }
   }
 
-  /**
-   * Read credentials file
-   */
   readCredentials(sessionId) {
     try {
       const sessionPath = this.getSessionPath(sessionId)
@@ -102,14 +86,11 @@ export class FileManager {
       return JSON.parse(data)
 
     } catch (error) {
-      logger.error(`Failed to read credentials for ${sessionId}:`, error)
+      logger.error(`Failed to read credentials ${sessionId}:`, error)
       return null
     }
   }
 
-  /**
-   * Write credentials file
-   */
   writeCredentials(sessionId, credentials) {
     try {
       if (!credentials || typeof credentials !== 'object') return false
@@ -126,14 +107,125 @@ export class FileManager {
       return true
 
     } catch (error) {
-      logger.error(`Failed to write credentials for ${sessionId}:`, error)
+      logger.error(`Failed to write credentials ${sessionId}:`, error)
       return false
     }
   }
 
-  /**
-   * Cleanup session files
-   */
+  // NEW: File-based session data storage (fallback)
+  async saveSession(sessionId, sessionData) {
+    try {
+      const sessionPath = this.getSessionPath(sessionId)
+      this.ensureSessionDirectory(sessionId)
+
+      const metadataFile = path.join(sessionPath, 'session.json')
+      const tempFile = metadataFile + '.tmp'
+
+      const metadata = {
+        sessionId,
+        telegramId: sessionData.telegramId || sessionData.userId,
+        phoneNumber: sessionData.phoneNumber,
+        isConnected: sessionData.isConnected !== undefined ? sessionData.isConnected : false,
+        connectionStatus: sessionData.connectionStatus || 'disconnected',
+        reconnectAttempts: sessionData.reconnectAttempts || 0,
+        source: sessionData.source || 'telegram',
+        detected: sessionData.detected !== false,
+        createdAt: sessionData.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }
+
+      fs.writeFileSync(tempFile, JSON.stringify(metadata, null, 2))
+      fs.renameSync(tempFile, metadataFile)
+
+      return true
+
+    } catch (error) {
+      logger.error(`Failed to save session ${sessionId}:`, error)
+      return false
+    }
+  }
+
+  // NEW: Read session data from file
+  async getSession(sessionId) {
+    try {
+      const sessionPath = this.getSessionPath(sessionId)
+      const metadataFile = path.join(sessionPath, 'session.json')
+
+      if (!fs.existsSync(metadataFile)) return null
+
+      const data = fs.readFileSync(metadataFile, 'utf8')
+      if (!data.trim()) return null
+
+      const metadata = JSON.parse(data)
+
+      return {
+        sessionId: metadata.sessionId,
+        userId: metadata.telegramId,
+        telegramId: metadata.telegramId,
+        phoneNumber: metadata.phoneNumber,
+        isConnected: metadata.isConnected,
+        connectionStatus: metadata.connectionStatus,
+        reconnectAttempts: metadata.reconnectAttempts,
+        source: metadata.source || 'telegram',
+        detected: metadata.detected !== false,
+        createdAt: metadata.createdAt,
+        updatedAt: metadata.updatedAt
+      }
+
+    } catch (error) {
+      logger.error(`Failed to get session ${sessionId}:`, error)
+      return null
+    }
+  }
+
+  // NEW: Update session data in file
+  async updateSession(sessionId, updates) {
+    try {
+      const existingSession = await this.getSession(sessionId)
+      if (!existingSession) return false
+
+      const updatedSession = {
+        ...existingSession,
+        ...updates,
+        updatedAt: new Date().toISOString()
+      }
+
+      return await this.saveSession(sessionId, updatedSession)
+
+    } catch (error) {
+      logger.error(`Failed to update session ${sessionId}:`, error)
+      return false
+    }
+  }
+
+  // NEW: Get all sessions from files
+  async getAllSessions() {
+    try {
+      if (!fs.existsSync(this.sessionsDir)) return []
+
+      const sessionDirs = fs.readdirSync(this.sessionsDir, { withFileTypes: true })
+        .filter(dirent => dirent.isDirectory() && dirent.name.startsWith('session_'))
+        .map(dirent => dirent.name)
+
+      const sessions = []
+
+      for (const dirName of sessionDirs) {
+        const sessionData = await this.getSession(dirName)
+        if (sessionData) {
+          sessions.push(sessionData)
+        }
+      }
+
+      return sessions.sort((a, b) => 
+        new Date(b.updatedAt) - new Date(a.updatedAt)
+      )
+
+    } catch (error) {
+      logger.error('Failed to get all sessions:', error)
+      return []
+    }
+  }
+
   async cleanupSessionFiles(sessionId) {
     try {
       const sessionPath = this.getSessionPath(sessionId)
@@ -142,15 +234,11 @@ export class FileManager {
       return await this._removeDirectory(sessionPath)
 
     } catch (error) {
-      logger.error(`Failed to cleanup session files for ${sessionId}:`, error)
+      logger.error(`Failed to cleanup session files ${sessionId}:`, error)
       return false
     }
   }
 
-  /**
-   * Remove directory recursively
-   * @private
-   */
   async _removeDirectory(dirPath, maxRetries = 3) {
     let attempt = 0
 
@@ -189,9 +277,6 @@ export class FileManager {
     return false
   }
 
-  /**
-   * Cleanup orphaned session directories
-   */
   async cleanupOrphanedSessions(database) {
     try {
       if (!fs.existsSync(this.sessionsDir)) return 0
@@ -248,7 +333,7 @@ export class FileManager {
       }
 
       if (cleanedCount > 0) {
-        logger.info(`Cleaned up ${cleanedCount} orphaned session directories`)
+        logger.info(`Cleaned ${cleanedCount} orphaned session directories`)
       }
 
       return cleanedCount
@@ -259,9 +344,6 @@ export class FileManager {
     }
   }
 
-  /**
-   * Get session directory size
-   */
   getSessionSize(sessionId) {
     try {
       const sessionPath = this.getSessionPath(sessionId)
@@ -283,9 +365,6 @@ export class FileManager {
     }
   }
 
-  /**
-   * List session files
-   */
   listSessionFiles(sessionId) {
     try {
       const sessionPath = this.getSessionPath(sessionId)
@@ -302,9 +381,6 @@ export class FileManager {
     }
   }
 
-  /**
-   * Validate session directory
-   */
   validateSessionDirectory(sessionId) {
     try {
       const sessionPath = this.getSessionPath(sessionId)
@@ -328,9 +404,6 @@ export class FileManager {
     }
   }
 
-  /**
-   * Get file manager statistics
-   */
   getStats() {
     try {
       if (!fs.existsSync(this.sessionsDir)) return { total: 0, size: 0 }

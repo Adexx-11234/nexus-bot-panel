@@ -121,22 +121,26 @@ async _processWebSession(sessionData) {
     // Mark as currently processing
     this.processingNow.add(sessionId)
 
-    // NEW FIX: Check database for current session state
+    // Check database for current session state
     const sessionInDB = await this.storage.getSession(sessionId);
     
-    // Skip if session doesn't exist or is already detected
+    // Skip if session doesn't exist
     if (!sessionInDB) {
       logger.debug(`Session ${sessionId} not found in database, skipping`)
       this.processingNow.delete(sessionId)
       return;
     }
     
+    // Skip if already detected
     if (sessionInDB.detected) {
       logger.debug(`Session ${sessionId} already detected, skipping`)
       this.processedSessions.add(sessionId)
       this.processingNow.delete(sessionId)
       return;
     }
+
+    // CRITICAL FIX: Don't skip disconnected sessions - they need takeover!
+    logger.info(`Taking over web session: ${sessionId} (status: ${sessionInDB.connectionStatus})`)
 
     // Check if session already has active socket in main server
     const existingSocket = this.sessionManager.activeSockets.get(sessionId)
@@ -147,8 +151,6 @@ async _processWebSession(sessionData) {
       this.processingNow.delete(sessionId)
       return
     }
-
-    logger.info(`Taking over web session: ${sessionId} (current status: ${sessionInDB.connectionStatus})`)
 
     // Take over the session from web server
     const success = await this._takeOverSession(sessionData)
@@ -181,18 +183,17 @@ async _takeOverSession(sessionData) {
   try {
     const actualUserId = userId || telegramId || sessionId.replace('session_', '')
 
-    // NEW FIX: Get current session state from database
+    // Get current session state from database
     const currentSession = await this.storage.getSession(sessionId);
     if (!currentSession) {
       logger.warn(`Session ${sessionId} no longer exists`)
       return false;
     }
 
-    // Wait a bit for web server to complete handoff (shorter wait for disconnected sessions)
-    const waitTime = currentSession.connectionStatus === 'disconnected' ? 1000 : 2000;
-    await new Promise(resolve => setTimeout(resolve, waitTime));
+    // Wait briefly for any pending web server operations
+    await new Promise(resolve => setTimeout(resolve, 1000));
 
-    // Check again if session is already active (web server might have handed it off)
+    // Check again if session is already active
     const existingSocket = this.sessionManager.activeSockets.get(sessionId)
     if (existingSocket && existingSocket.user && existingSocket.readyState === existingSocket.ws?.OPEN) {
       logger.info(`Session ${sessionId} already connected, marking as detected`)

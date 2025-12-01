@@ -37,8 +37,17 @@ export class TelegramBot {
       
       logger.info('Initializing Telegram bot...')
 
-      // Create bot instance
-      this.bot = new TelegramBotAPI(this.token, { polling: false })
+      // Create bot instance with timeout options
+      this.bot = new TelegramBotAPI(this.token, { 
+        polling: false,
+        request: {
+          agentOptions: {
+            keepAlive: true,
+            keepAliveMsecs: 30000
+          },
+          timeout: 30000
+        }
+      })
       
       // Initialize handlers
       await this._initializeHandlers()
@@ -109,7 +118,16 @@ export class TelegramBot {
       logger.warn('Standard webhook clearing failed, trying alternative method:', error.message)
       
       try {
-        this.bot = new TelegramBotAPI(this.token, { polling: true })
+        this.bot = new TelegramBotAPI(this.token, { 
+          polling: true,
+          request: {
+            agentOptions: {
+              keepAlive: true,
+              keepAliveMsecs: 30000
+            },
+            timeout: 30000
+          }
+        })
         logger.info('Bot recreated with direct polling')
         
       } catch (pollingError) {
@@ -232,9 +250,6 @@ export class TelegramBot {
     logger.info('Event listeners setup complete')
   }
 
-
-  
-
   /**
    * Handle polling errors
    * @private
@@ -260,23 +275,62 @@ export class TelegramBot {
    * @private
    */
   async _sendErrorMessage(chatId) {
-    const { TelegramMessages, TelegramKeyboards } = await import('../utils/index.js')
-    
-    await this.bot.sendMessage(chatId, TelegramMessages.error(), {
-      reply_markup: TelegramKeyboards.mainMenu()
-    })
+    try {
+      const { TelegramMessages, TelegramKeyboards } = await import('../utils/index.js')
+      
+      await this.sendMessage(chatId, TelegramMessages.error(), {
+        reply_markup: TelegramKeyboards.mainMenu()
+      })
+    } catch (error) {
+      logger.error('Failed to send error message:', error.message)
+    }
   }
 
   /**
-   * Send message (public API)
+   * Send message with retry logic (public API)
    */
-  async sendMessage(chatId, text, options = {}) {
-    try {
-      return await this.bot.sendMessage(chatId, text, options)
-    } catch (error) {
-      logger.error('Failed to send message:', error)
-      throw error
+  async sendMessage(chatId, text, options = {}, retries = 3) {
+    let lastError
+    
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        // Add timeout wrapper
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Request timeout')), 15000)
+        )
+        
+        const sendPromise = this.bot.sendMessage(chatId, text, options)
+        
+        const result = await Promise.race([sendPromise, timeoutPromise])
+        
+        if (attempt > 1) {
+          logger.info(`Message sent successfully on attempt ${attempt}`)
+        }
+        
+        return result
+        
+      } catch (error) {
+        lastError = error
+        
+        const isNetworkError = error.code === 'EFATAL' || 
+                              error.code === 'ETIMEDOUT' ||
+                              error.code === 'ECONNRESET' ||
+                              error.code === 'ENOTFOUND' ||
+                              error.message.includes('timeout') ||
+                              error.message.includes('network')
+        
+        if (isNetworkError && attempt < retries) {
+          const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000)
+          logger.warn(`Send message attempt ${attempt} failed, retrying in ${delay}ms: ${error.message}`)
+          await new Promise(resolve => setTimeout(resolve, delay))
+        } else {
+          break
+        }
+      }
     }
+    
+    logger.error(`Failed to send message after ${retries} attempts: ${lastError.message}`)
+    throw lastError
   }
 
   /**
@@ -298,6 +352,22 @@ export class TelegramBot {
       return await this.bot.editMessageText(text, options)
     } catch (error) {
       logger.error('Failed to edit message:', error)
+      throw error
+    }
+  }
+
+  /**
+   * Send connection success notification with retry
+   */
+  async sendConnectionSuccess(userId, phoneNumber) {
+    try {
+      const message = `✅ *WhatsApp Connected!*\n\n📱 Number: ${phoneNumber}\n\nYou can now use the bot to send and receive messages.`
+      
+      return await this.sendMessage(userId, message, { 
+        parse_mode: 'Markdown' 
+      })
+    } catch (error) {
+      logger.error(`Failed to send connection success to ${userId}:`, error.message)
       throw error
     }
   }

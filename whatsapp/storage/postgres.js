@@ -3,8 +3,8 @@ import { createComponentLogger } from '../../utils/logger.js'
 const logger = createComponentLogger('POSTGRES_STORAGE')
 
 /**
- * PostgreSQLStorage - PostgreSQL storage implementation
- * Handles user sessions table operations
+ * PostgreSQLStorage - Pure PostgreSQL operations
+ * NO business logic, only database operations
  */
 export class PostgreSQLStorage {
   constructor() {
@@ -37,7 +37,7 @@ export class PostgreSQLStorage {
   }
 
   /**
-   * Save session
+   * Save session (PURE operation)
    */
   async saveSession(sessionId, sessionData) {
     if (!this.isConnected) return false
@@ -79,7 +79,7 @@ export class PostgreSQLStorage {
   }
 
   /**
-   * Get session
+   * Get session (PURE operation)
    */
   async getSession(sessionId) {
     if (!this.isConnected) return null
@@ -113,68 +113,181 @@ export class PostgreSQLStorage {
     }
   }
 
-/**
- * Update session
- */
-async updateSession(sessionId, updates) {
-  if (!this.isConnected) return false
+  /**
+   * Update session (PURE operation)
+   */
+  async updateSession(sessionId, updates) {
+    if (!this.isConnected) return false
 
-  try {
-    const setParts = []
-    const values = [sessionId]
-    let paramIndex = 2
+    try {
+      const setParts = []
+      const values = [sessionId]
+      let paramIndex = 2
 
-    // Allow clearing sessionId (for logout but keep user)
-    if (updates.sessionId !== undefined) {
-      setParts.push(`session_id = $${paramIndex++}`)
-      values.push(updates.sessionId)
-    }
-    if (updates.isConnected !== undefined) {
-      setParts.push(`is_connected = $${paramIndex++}`)
-      values.push(Boolean(updates.isConnected))
-    }
-    if (updates.connectionStatus) {
-      setParts.push(`connection_status = $${paramIndex++}`)
-      values.push(updates.connectionStatus)
-    }
-    if (updates.phoneNumber) {
-      setParts.push(`phone_number = $${paramIndex++}`)
-      values.push(updates.phoneNumber)
-    }
-    if (updates.reconnectAttempts !== undefined) {
-      setParts.push(`reconnect_attempts = $${paramIndex++}`)
-      values.push(updates.reconnectAttempts)
-    }
-    if (updates.source) {
-      setParts.push(`source = $${paramIndex++}`)
-      values.push(updates.source)
-    }
-    if (updates.detected !== undefined) {
-      setParts.push(`detected = $${paramIndex++}`)
-      values.push(Boolean(updates.detected))
-    }
+      // Allow clearing sessionId (for logout but keep user)
+      if (updates.sessionId !== undefined) {
+        setParts.push(`session_id = $${paramIndex++}`)
+        values.push(updates.sessionId)
+      }
+      if (updates.isConnected !== undefined) {
+        setParts.push(`is_connected = $${paramIndex++}`)
+        values.push(Boolean(updates.isConnected))
+      }
+      if (updates.connectionStatus) {
+        setParts.push(`connection_status = $${paramIndex++}`)
+        values.push(updates.connectionStatus)
+      }
+      if (updates.phoneNumber !== undefined) {
+        setParts.push(`phone_number = $${paramIndex++}`)
+        values.push(updates.phoneNumber)
+      }
+      if (updates.reconnectAttempts !== undefined) {
+        setParts.push(`reconnect_attempts = $${paramIndex++}`)
+        values.push(updates.reconnectAttempts)
+      }
+      if (updates.source) {
+        setParts.push(`source = $${paramIndex++}`)
+        values.push(updates.source)
+      }
+      if (updates.detected !== undefined) {
+        setParts.push(`detected = $${paramIndex++}`)
+        values.push(Boolean(updates.detected))
+      }
 
-    if (setParts.length > 0) {
-      const query = `
-        UPDATE users
-        SET ${setParts.join(', ')}, updated_at = NOW()
-        WHERE session_id = $1
-      `
+      if (setParts.length > 0) {
+        const query = `
+          UPDATE users
+          SET ${setParts.join(', ')}, updated_at = NOW()
+          WHERE session_id = $1
+        `
 
-      const result = await this.pool.query(query, values)
-      return result.rowCount > 0
+        const result = await this.pool.query(query, values)
+        return result.rowCount > 0
+      }
+
+      return false
+
+    } catch (error) {
+      logger.error(`PostgreSQL update error for ${sessionId}:`, error.message)
+      return false
     }
-
-    return false
-
-  } catch (error) {
-    logger.error(`PostgreSQL update error for ${sessionId}:`, error.message)
-    return false
   }
-}
 
   /**
-   * Delete session (soft delete - keeps user record)
+   * Delete session but keep user record if web user has auth
+   * (PURE operation)
+   */
+  async deleteSessionKeepUser(sessionId) {
+    if (!this.isConnected) {
+      return { updated: false, deleted: false, hadWebAuth: false }
+    }
+
+    try {
+      const telegramId = parseInt(sessionId.replace('session_', ''))
+      
+      const userResult = await this.pool.query(
+        'SELECT id, source, session_id FROM users WHERE telegram_id = $1',
+        [telegramId]
+      )
+
+      if (userResult.rows.length === 0) {
+        return { updated: false, deleted: false, hadWebAuth: false }
+      }
+
+      const user = userResult.rows[0]
+      
+      if (user.source === 'web') {
+        // Check if web user has authentication
+        const authCheck = await this.pool.query(
+          'SELECT user_id FROM web_users_auth WHERE user_id = $1',
+          [user.id]
+        )
+
+        const hadWebAuth = authCheck.rows.length > 0
+
+        if (hadWebAuth) {
+          // Has web auth - disconnect but KEEP phone_number
+          const updateResult = await this.pool.query(
+            `UPDATE users 
+             SET session_id = NULL,
+                 is_connected = false,
+                 connection_status = 'disconnected',
+                 updated_at = NOW()
+             WHERE telegram_id = $1`,
+            [telegramId]
+          )
+          logger.info(`Web user ${sessionId} has auth, kept record with phone`)
+          return { updated: updateResult.rowCount > 0, deleted: false, hadWebAuth: true }
+        } else {
+          // No web auth - delete completely
+          const deleteResult = await this.pool.query(
+            'DELETE FROM users WHERE id = $1',
+            [user.id]
+          )
+          logger.info(`Web user ${sessionId} has no auth, deleted completely`)
+          return { updated: false, deleted: deleteResult.rowCount > 0, hadWebAuth: false }
+        }
+      } else {
+        // Telegram user - disconnect and clear phone_number
+        const updateResult = await this.pool.query(
+          `UPDATE users 
+           SET session_id = NULL,
+               is_connected = false,
+               connection_status = 'disconnected',
+               phone_number = NULL,
+               updated_at = NOW()
+           WHERE telegram_id = $1`,
+          [telegramId]
+        )
+        return { updated: updateResult.rowCount > 0, deleted: false, hadWebAuth: false }
+      }
+
+    } catch (error) {
+      logger.error(`PostgreSQL deleteSessionKeepUser error for ${sessionId}:`, error.message)
+      return { updated: false, deleted: false, hadWebAuth: false }
+    }
+  }
+
+  /**
+   * Cleanup orphaned session based on source (PURE operation)
+   */
+  async cleanupOrphanedSession(sessionId, source) {
+    if (!this.isConnected) return false
+
+    try {
+      const telegramId = parseInt(sessionId.replace('session_', ''))
+      
+      if (source === 'web') {
+        // Web user - just disconnect, keep record
+        await this.pool.query(
+          `UPDATE users 
+           SET session_id = NULL,
+               is_connected = false,
+               connection_status = 'disconnected',
+               updated_at = NOW()
+           WHERE telegram_id = $1`,
+          [telegramId]
+        )
+        logger.info(`Web user ${sessionId} orphan cleanup - disconnected`)
+      } else {
+        // Telegram user - delete completely
+        await this.pool.query(
+          'DELETE FROM users WHERE telegram_id = $1',
+          [telegramId]
+        )
+        logger.info(`Telegram user ${sessionId} orphan cleanup - deleted`)
+      }
+
+      return true
+
+    } catch (error) {
+      logger.error(`PostgreSQL orphan cleanup error for ${sessionId}:`, error.message)
+      return false
+    }
+  }
+
+  /**
+   * Delete session (soft delete - PURE operation)
    */
   async deleteSession(sessionId) {
     if (!this.isConnected) return false
@@ -198,7 +311,7 @@ async updateSession(sessionId, updates) {
   }
 
   /**
-   * Completely delete session (hard delete)
+   * Completely delete session (hard delete - PURE operation)
    */
   async completelyDeleteSession(sessionId) {
     if (!this.isConnected) return false
@@ -218,7 +331,7 @@ async updateSession(sessionId, updates) {
   }
 
   /**
-   * Get all sessions
+   * Get all sessions (PURE operation)
    */
   async getAllSessions() {
     if (!this.isConnected) return []
@@ -254,7 +367,7 @@ async updateSession(sessionId, updates) {
   }
 
   /**
-   * Get undetected web sessions
+   * Get undetected web sessions (PURE operation)
    */
   async getUndetectedWebSessions() {
     if (!this.isConnected) return []
@@ -291,52 +404,7 @@ async updateSession(sessionId, updates) {
   }
 
   /**
-   * Get active sessions from database
-   */
-  async getActiveSessionsFromDatabase() {
-    if (!this.isConnected) return []
-
-    try {
-      const result = await this.pool.query(`
-        SELECT
-          COALESCE(session_id, 'session_' || telegram_id) as session_id,
-          telegram_id,
-          phone_number,
-          is_connected,
-          connection_status,
-          source,
-          detected
-        FROM users
-        WHERE telegram_id IS NOT NULL
-          AND is_active = true
-          AND (
-            session_id IS NOT NULL
-            OR phone_number IS NOT NULL
-            OR is_connected = true
-            OR connection_status IN ('connected', 'connecting')
-          )
-        ORDER BY updated_at DESC
-      `)
-
-      return result.rows.map(row => ({
-        sessionId: row.session_id,
-        userId: row.telegram_id,
-        telegramId: row.telegram_id,
-        phoneNumber: row.phone_number,
-        isConnected: row.is_connected,
-        connectionStatus: row.connection_status || 'disconnected',
-        source: row.source || 'telegram',
-        detected: row.detected !== false
-      }))
-
-    } catch (error) {
-      logger.error('PostgreSQL get active sessions error:', error.message)
-      return []
-    }
-  }
-
-  /**
-   * Ensure boolean value
+   * Ensure boolean value (HELPER)
    * @private
    */
   _ensureBoolean(value) {

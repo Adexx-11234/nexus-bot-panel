@@ -4,6 +4,18 @@ import { getDecryptionHandler } from '../core/index.js'
 
 const logger = createComponentLogger('MESSAGE_EVENTS')
 
+// ✅ SINGLETON: Reuse same MessageProcessor instance
+let messageProcessorInstance = null
+
+async function getMessageProcessor() {
+  if (!messageProcessorInstance) {
+    const { MessageProcessor } = await import('../messages/index.js')
+    messageProcessorInstance = new MessageProcessor()
+    await messageProcessorInstance.initialize()
+  }
+  return messageProcessorInstance
+}
+
 /**
  * MessageEventHandler - Handles all message-related events
  * Includes: upsert, update, delete, reactions, status messages
@@ -15,7 +27,7 @@ export class MessageEventHandler {
 
 /**
  * Handle new messages (messages.upsert)
- * Main entry point for message processing
+ * Main entry point for message processing - WITH DEDUPLICATION
  */
 async handleMessagesUpsert(sock, sessionId, messageUpdate) {
   try {
@@ -24,6 +36,10 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
     if (!messages || messages.length === 0) {
       return
     }
+
+    // ✅ Import deduplicator
+    const { getMessageDeduplicator } = await import('../utils/index.js')
+    const deduplicator = getMessageDeduplicator()
 
     // **HANDLE PRESENCE ON MESSAGE RECEIVED**
     try {
@@ -58,10 +74,11 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
 
     // Filter out invalid messages
     const validMessages = messages.filter(msg => {
-      // Skip newsletter messages
-     /* if (msg.key?.remoteJid?.endsWith('@newsletter')) {
+      // ✅ DEDUPLICATION CHECK - Skip if already processed by ANY session
+      if (deduplicator.isDuplicate(msg.key?.remoteJid, msg.key?.id)) {
+        logger.debug(`[${sessionId}] Skipping duplicate message ${msg.key?.id}`)
         return false
-      }*/
+      }
 
       // Skip status messages (already handled above)
       if (msg.key?.remoteJid === 'status@broadcast') {
@@ -86,23 +103,78 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
       return
     }
 
-    logger.debug(`Processing ${validMessages.length} messages for ${sessionId}`)
+    logger.debug(`[${sessionId}] Processing ${validMessages.length} messages`)
+
+    // ✅ Get SINGLETON MessageProcessor instance
+    const processor = await getMessageProcessor()
 
     // Process messages with LID resolution and decryption error handling
-    const processedMessages = []
     for (const message of validMessages) {
       try {
-        const processed = await this._processMessageWithLidResolution(sock, message)
-        if (processed) {
-          // Add timestamp correction (fix timezone issue)
-          if (processed.messageTimestamp) {
-            processed.messageTimestamp = Number(processed.messageTimestamp) + 3600 // Add 1 hour
-          } else {
-            processed.messageTimestamp = Math.floor(Date.now() / 1000) + 3600
-          }
-          
-          processedMessages.push(processed)
+        // ✅ LOCK MESSAGE - Mark as being processed IMMEDIATELY
+        // This prevents other sessions from processing the same message
+        if (!deduplicator.tryLock(message.key?.remoteJid, message.key?.id)) {
+          logger.debug(`[${sessionId}] Message ${message.key?.id} already locked by another session`)
+          continue
         }
+
+        // Process message with LID resolution
+        const processed = await this._processMessageWithLidResolution(sock, message)
+        
+        if (!processed) continue
+
+        // Add timestamp correction (fix timezone issue)
+        if (processed.messageTimestamp) {
+          processed.messageTimestamp = Number(processed.messageTimestamp) + 3600 // Add 1 hour
+        } else {
+          processed.messageTimestamp = Math.floor(Date.now() / 1000) + 3600
+        }
+
+        // Ensure basic properties
+        if (!processed.chat && processed.key?.remoteJid) {
+          processed.chat = processed.key.remoteJid
+        }
+        if (!processed.sender && processed.key?.participant) {
+          processed.sender = processed.key.participant
+        } else if (!processed.sender && processed.key?.remoteJid && !processed.key.remoteJid.includes('@g.us')) {
+          processed.sender = processed.key.remoteJid
+        }
+
+        // Validate chat
+        if (typeof processed.chat !== 'string') {
+          continue
+        }
+
+        // Add reply helper
+        if (!processed.reply) {
+          processed.reply = async (text, options = {}) => {
+            try {
+              const chatJid = processed.chat || processed.key?.remoteJid
+
+              if (!chatJid || typeof chatJid !== 'string') {
+                throw new Error(`Invalid chat JID: ${chatJid}`)
+              }
+
+              const messageOptions = {
+                quoted: processed,
+                ...options
+              }
+
+              if (typeof text === 'string') {
+                return await sock.sendMessage(chatJid, { text }, messageOptions)
+              } else if (typeof text === 'object') {
+                return await sock.sendMessage(chatJid, text, messageOptions)
+              }
+            } catch (error) {
+              logger.error(`Error in m.reply:`, error)
+              throw error
+            }
+          }
+        }
+
+        // ✅ PROCESS MESSAGE DIRECTLY - NO DOUBLE HANDLING
+        await processor.processMessage(sock, sessionId, processed)
+
       } catch (error) {
         // Handle decryption errors with the decryption handler
         const result = await this.decryptionHandler.handleDecryptionError(
@@ -131,17 +203,6 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
       }
     }
 
-    if (processedMessages.length === 0) {
-      return
-    }
-
-    // Pass to main message handler
-    const { handleMessagesUpsert } = await import('../handlers/upsert.js')
-    await handleMessagesUpsert(sessionId, { 
-      messages: processedMessages, 
-      type 
-    }, sock)
-
   } catch (error) {
     logger.error(`Messages upsert error for ${sessionId}:`, error)
   }
@@ -160,7 +221,6 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
     }
 
     // Broadcast lists: [timestamp]@broadcast
-    // Example: 1234567890@broadcast
     if (remoteJid.endsWith('@broadcast') && remoteJid !== 'status@broadcast') {
       return true
     }
@@ -188,17 +248,10 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
 
   /**
    * Handle status messages specifically
-   * This can be called when processStatusMessages config is enabled
    */
   async handleStatusMessage(sock, sessionId, message) {
     try {
       logger.debug(`Processing status message from ${message.key?.participant || 'unknown'}`)
-
-      // Status messages contain:
-      // - message.key.remoteJid = 'status@broadcast'
-      // - message.key.participant = sender's JID
-      // - message.message = actual message content (image, video, text, etc.)
-      // - message.messageTimestamp = when status was posted
 
       const statusData = {
         id: message.key.id,
@@ -206,19 +259,11 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
         content: message.message,
         timestamp: message.messageTimestamp,
         type: this._getStatusMessageType(message.message),
-        // Additional metadata
         fromMe: message.key.fromMe || false,
         pushName: message.pushName
       }
 
       logger.info(`Status from ${statusData.sender}: ${statusData.type}`)
-
-      // TODO: Implement status processing logic here
-      // Examples:
-      // - Store status in database
-      // - Trigger webhook for status updates
-      // - Auto-view status
-      // - Download status media
 
       return statusData
 
@@ -246,17 +291,11 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
 
   /**
    * Handle broadcast list messages
-   * This can be called when processing broadcast messages
    */
   async handleBroadcastMessage(sock, sessionId, message) {
     try {
       const broadcastId = message.key.remoteJid
       logger.debug(`Processing broadcast list message from ${broadcastId}`)
-
-      // Broadcast list messages contain:
-      // - message.key.remoteJid = '[timestamp]@broadcast'
-      // - message.message = actual message content
-      // - message.messageTimestamp = when message was sent
 
       const broadcastData = {
         id: message.key.id,
@@ -268,12 +307,6 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
 
       logger.info(`Broadcast message from ${broadcastId}`)
 
-      // TODO: Implement broadcast processing logic here
-      // Examples:
-      // - Store broadcast message
-      // - Track broadcast delivery status
-      // - Get broadcast list info
-
       return broadcastData
 
     } catch (error) {
@@ -284,6 +317,7 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
 
   /**
    * Process message and resolve LIDs to actual JIDs
+   * ONLY calls LID resolver when participant actually ends with @lid
    */
   async _processMessageWithLidResolution(sock, message) {
     try {
@@ -293,9 +327,9 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
 
       const isGroup = message.key.remoteJid?.endsWith('@g.us')
       
-      // Resolve participant LID if present
-      if (message.key.participant?.endsWith('@lid') && isGroup) {
-        const { resolveLidToJid } = await import('../groups/lid-resolver.js')
+      // ONLY resolve participant LID if it actually ends with @lid
+      if (isGroup && message.key.participant?.endsWith('@lid')) {
+        const { resolveLidToJid } = await import('../groups/index.js')
         
         const actualJid = await resolveLidToJid(
           sock,
@@ -311,13 +345,13 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
         message.participant = message.key.participant
       }
 
-      // Resolve quoted message participant LID if present
+      // ONLY resolve quoted message participant LID if it actually ends with @lid
       const quotedParticipant = 
         message.message?.contextInfo?.participant ||
         message.message?.extendedTextMessage?.contextInfo?.participant
 
-      if (quotedParticipant?.endsWith('@lid') && isGroup) {
-        const { resolveLidToJid } = await import('../groups/lid-resolver.js')
+      if (isGroup && quotedParticipant?.endsWith('@lid')) {
+        const { resolveLidToJid } = await import('../groups/index.js')
         
         const actualJid = await resolveLidToJid(
           sock,
@@ -340,7 +374,7 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
 
     } catch (error) {
       logger.error('LID resolution error:', error)
-      return message // Return original message on error
+      return message
     }
   }
 
@@ -357,20 +391,17 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
 
       for (const update of updates) {
         try {
-          // Skip own messages
           if (update.key?.fromMe) {
             continue
           }
 
-          // Skip status/broadcast updates by default
-          // TODO: Add config check for processStatusMessages
           if (this._isStatusOrBroadcastMessage(update.key?.remoteJid)) {
             continue
           }
 
-          // Resolve LID if present
+          // ONLY resolve LID if it actually ends with @lid
           if (update.key?.participant?.endsWith('@lid')) {
-            const { resolveLidToJid } = await import('../groups/lid-resolver.js')
+            const { resolveLidToJid } = await import('../groups/index.js')
             
             const actualJid = await resolveLidToJid(
               sock,
@@ -382,7 +413,6 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
             update.participant = actualJid
           }
 
-          // Process update (can be extended to handle specific update types)
           await this._handleMessageUpdate(sock, sessionId, update)
 
         } catch (error) {
@@ -395,27 +425,17 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
     }
   }
 
-  /**
-   * Handle individual message update
-   */
   async _handleMessageUpdate(sock, sessionId, update) {
     try {
-      // Check update type
       const { key, update: updateData } = update
 
       if (updateData?.status) {
-        // Delivery status update
         logger.debug(`Message ${key.id} status: ${updateData.status}`)
       }
 
       if (updateData?.pollUpdates) {
-        // Poll vote update
         logger.debug(`Poll update for message ${key.id}`)
       }
-
-      // Can be extended to update message in database
-      // const { MessageQueries } = await import('../../database/query.js')
-      // await MessageQueries.updateMessage(key.id, updateData)
 
     } catch (error) {
       logger.error('Message update processing error:', error)
@@ -427,7 +447,6 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
    */
   async handleMessagesDelete(sock, sessionId, deletions) {
     try {
-      // Ensure deletions is an array
       const deletionArray = Array.isArray(deletions) ? deletions : [deletions]
 
       if (deletionArray.length === 0) {
@@ -438,15 +457,12 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
 
       for (const deletion of deletionArray) {
         try {
-          // Skip status/broadcast deletions by default
-          // TODO: Add config check for processStatusMessages
           if (this._isStatusOrBroadcastMessage(deletion.key?.remoteJid)) {
             continue
           }
 
-          // Resolve LID if present
           if (deletion.key?.participant?.endsWith('@lid')) {
-            const { resolveLidToJid } = await import('../groups/lid-resolver.js')
+            const { resolveLidToJid } = await import('../groups/index.js')
             
             const actualJid = await resolveLidToJid(
               sock,
@@ -470,19 +486,10 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
     }
   }
 
-  /**
-   * Handle individual message deletion
-   */
   async _handleMessageDeletion(sock, sessionId, deletion) {
     try {
       const { key } = deletion
-
       logger.debug(`Message deleted: ${key.id} from ${key.remoteJid}`)
-
-      // Can be extended to mark message as deleted in database
-      // const { MessageQueries } = await import('../../database/query.js')
-      // await MessageQueries.markAsDeleted(key.id)
-
     } catch (error) {
       logger.error('Message deletion processing error:', error)
     }
@@ -501,15 +508,12 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
 
       for (const reaction of reactions) {
         try {
-          // Skip status/broadcast reactions by default
-          // TODO: Add config check for processStatusMessages
           if (this._isStatusOrBroadcastMessage(reaction.key?.remoteJid)) {
             continue
           }
 
-          // Resolve LID if present
           if (reaction.key?.participant?.endsWith('@lid')) {
-            const { resolveLidToJid } = await import('../groups/lid-resolver.js')
+            const { resolveLidToJid } = await import('../groups/index.js')
             
             const actualJid = await resolveLidToJid(
               sock,
@@ -533,9 +537,6 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
     }
   }
 
-  /**
-   * Handle individual message reaction
-   */
   async _handleMessageReaction(sock, sessionId, reaction) {
     try {
       const { key, reaction: reactionData } = reaction
@@ -545,21 +546,13 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
         `by ${reaction.participant || key.participant}`
       )
 
-      // Can be extended to store reactions in database
-      // const { MessageQueries } = await import('../../database/query.js')
-      // await MessageQueries.storeReaction(key.id, reactionData)
-
     } catch (error) {
       logger.error('Reaction processing error:', error)
     }
   }
 
-  /**
-   * Handle read receipts (usually disabled)
-   */
   async handleReceiptUpdate(sock, sessionId, receipts) {
     try {
-      // Usually not needed - can be implemented if required
       logger.debug(`Receipt updates for ${sessionId}`)
     } catch (error) {
       logger.error(`Receipt update error:`, error)

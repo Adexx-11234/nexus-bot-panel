@@ -100,7 +100,7 @@ export default {
     return true
   },
 
-  async processMessage(sock, sessionId, m) {
+async processMessage(sock, sessionId, m) {
     try {
       if (!await this.isEnabled(m.chat)) return
       
@@ -110,7 +110,8 @@ export default {
       }
       
       // Check if this message shows bot characteristics
-      if (await this.detectBotFromMessage(m)) {
+      // FIXED: Pass sock to detectBotFromMessage
+      if (await this.detectBotFromMessage(sock, m)) {
         await this.handleDetectedBot(sock, m.chat, m.sender, "message_pattern")
       }
     } catch (error) {
@@ -338,12 +339,22 @@ export default {
     }
   },
 
-  async detectBotFromMessage(m) {
+  async detectBotFromMessage(sock, m) {
     try {
       // Check if message is explicitly marked as from a bot
       if (m.isBot) {
         logger.info(`Bot detected via isBot flag: ${m.sender}`)
         return true
+      }
+      
+      // CRITICAL: Skip fromMe messages - these are from the bot itself, not other bots
+      if (m.key?.fromMe === true) {
+        return false
+      }
+      
+      // Skip if sender is a group JID (not a user)
+      if (m.sender && m.sender.endsWith('@g.us')) {
+        return false
       }
       
       // Check message key structure (Baileys-specific patterns)
@@ -365,24 +376,8 @@ export default {
           if (normalizedParticipant !== normalizedSender) {
             logger.info(`Bot detected via participant mismatch: ${m.sender} (participant: ${m.key.participant})`)
             return true
-          } else {
-            logger.debug(`Participant and sender match after normalization: ${normalizedSender}`)
           }
         }
-        
-        // Check for fromMe inconsistencies (message marked as from bot but sender is different)
-        
-        if (m.key.fromMe === true && m.sender && sock?.user?.id) {
-          const normalizedSender = normalizeWhatsAppId(m.sender)
-          const normalizedBotId = normalizeWhatsAppId(sock.user.id)
-          
-          // Only flag as bot if the base numbers are actually different
-          if (normalizedBotId && normalizedSender !== normalizedBotId) {
-            logger.info(`Bot detected via fromMe inconsistency: ${m.sender} (bot: ${sock.user.id})`)
-            return true
-          }
-        }
-        
       }
       
       return false

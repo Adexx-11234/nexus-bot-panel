@@ -53,6 +53,7 @@ import { quickSetup as quickSetupWhatsApp, VIPHelper } from "./whatsapp/index.js
 import { WebInterface } from "./web/index.js"
 import { GroupScheduler } from "./database/groupscheduler.js"
 import pluginLoader from "./utils/plugin-loader.js"
+import { getRAMMonitor } from './ram-monitor.js'
 
 const logger = createComponentLogger("MAIN")
 const PORT = process.env.PORT || 3000
@@ -250,7 +251,16 @@ async function initializePlatform() {
     logger.error("❌ HTTP server failed - platform may be inaccessible")
     logger.error(error.message)
   }
-
+  logger.info("🔍 Starting RAM Monitor...")
+  try {
+    const ramMonitor = getRAMMonitor()
+    ramMonitor.start(30) // Every 30 minutes
+    logger.info(`✅ RAM Monitor started - snapshots every 30 minutes in ./memory-logs/`)
+  } catch (error) {
+    logger.error("❌ RAM Monitor failed - continuing anyway")
+    logger.error(error.message)
+  }
+    
   // Maintenance tasks
   setupMaintenanceTasks()
   setupConnectionMonitor()

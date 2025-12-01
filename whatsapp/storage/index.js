@@ -6,10 +6,11 @@ export { FileManager } from './file.js'
 export { 
   useMongoDBAuthState, 
   cleanupSessionAuthData, 
-  hasValidAuthData 
+  hasValidAuthData,
+  getAuthCacheStats
 } from './auth-state.js'
 
-// Re-export commonly used storage utilities
+// Re-export singleton functions
 export { 
   getSessionStorage,
   initializeStorage 

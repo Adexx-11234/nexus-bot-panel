@@ -16,10 +16,6 @@ export class MessageProcessor {
     this.messagePersistence = new MessagePersistence()
     this.messageExtractor = new MessageExtractor()
     this.userStates = new Map() // key: "chatId_userId" -> { type, data, expires, handler }
-    // PREFIX CACHE - Load all user prefixes into memory
-    this.prefixCache = new Map() // telegramId -> prefix
-    this.cacheLoadTime = null
-    this.CACHE_RELOAD_INTERVAL = 10 * 60 * 1000 // Reload every 10 minutes
     
     // Plugin loader (lazy loaded)
     this.pluginLoader = null
@@ -32,8 +28,7 @@ export class MessageProcessor {
     }
   }
 
-
-    /**
+  /**
    * Set state with custom handler function
    * @param {string} chatId - Chat ID
    * @param {string} userId - User ID  
@@ -114,7 +109,6 @@ export class MessageProcessor {
       return { processed: true, error: true }
     }
   }
-  
 
   /**
    * Initialize processor
@@ -129,246 +123,185 @@ export class MessageProcessor {
         await this.pluginLoader.loadPlugins()
       }
 
-      // LOAD ALL USER PREFIXES INTO MEMORY
-      await this.loadAllPrefixes()
-
       this.isInitialized = true
       logger.info('Message processor initialized')
     }
   }
 
   /**
-   * Load all user prefixes from database into memory
+   * Get user's custom prefix from database
+   * @private
    */
-  async loadAllPrefixes() {
+  async getUserPrefix(telegramId) {
     try {
-      const { pool } = await import('../../config/database.js')
+      const { UserQueries } = await import('../../database/query.js')
+      const settings = await UserQueries.getUserSettings(telegramId)
       
-      // Get ALL user prefixes in one query
-      const result = await pool.query(
-        `SELECT telegram_id, custom_prefix FROM whatsapp_users 
-         WHERE custom_prefix IS NOT NULL`
-      )
+      // Return custom prefix or default to '.'
+      const prefix = settings?.custom_prefix || '.'
       
-      // Store in Map for O(1) lookup
-      this.prefixCache.clear()
-      for (const row of result.rows) {
-        const prefix = row.custom_prefix === 'none' ? '' : row.custom_prefix
-        this.prefixCache.set(row.telegram_id, prefix)
-      }
-      
-      this.cacheLoadTime = Date.now()
-      
-      logger.info(`Loaded ${result.rows.length} user prefixes into memory`)
-      
-      // Schedule periodic reload every 10 minutes (only once)
-      if (!this.reloadInterval) {
-        this._schedulePrefixReload()
-      }
-      
+      // Handle 'none' prefix case (empty string means no prefix required)
+      return prefix === 'none' ? '' : prefix
     } catch (error) {
-      logger.error('Failed to load user prefixes:', error)
-      // Don't throw - use default prefix if cache load fails
+      logger.error('Error getting user prefix:', error)
+      return '.' // Fallback to default on error
     }
   }
 
   /**
-   * Schedule periodic prefix cache reload
-   * @private
+   * Process message through pipeline
    */
-  _schedulePrefixReload() {
-    this.reloadInterval = setInterval(async () => {
-      try {
-        await this.loadAllPrefixes()
-        logger.debug('User prefix cache reloaded')
-      } catch (error) {
-        logger.error('Failed to reload prefix cache:', error)
+  async processMessage(sock, sessionId, m, prefix = null) {
+    try {
+      await this.initialize()
+
+      // Validate message
+      if (!m || !m.message) {
+        return { processed: false, error: 'Invalid message object' }
       }
-    }, this.CACHE_RELOAD_INTERVAL)
-  }
 
-  /**
-   * Get user prefix from memory cache (O(1) lookup, NO DATABASE QUERY!)
-   * @private
-   */
-  _getUserPrefixFromCache(telegramId) {
-    // Check if cache needs reload (fallback safety)
-    if (this.cacheLoadTime && (Date.now() - this.cacheLoadTime) > 15 * 60 * 1000) {
-      logger.warn('Prefix cache is stale, triggering reload')
-      this.loadAllPrefixes().catch(() => {}) // Don't block, reload async
-    }
-    
-    // O(1) memory lookup - NO DATABASE QUERY!
-    const prefix = this.prefixCache.get(telegramId)
-    
-    // Return custom prefix or default '.'
-    return prefix !== undefined ? prefix : '.'
-  }
-
-  /**
-   * Update prefix cache when user changes their prefix
-   * Call this from setprefix command
-   */
-  updatePrefixCache(telegramId, newPrefix) {
-    const normalizedPrefix = newPrefix === 'none' ? '' : newPrefix
-    this.prefixCache.set(telegramId, normalizedPrefix)
-    logger.info(`✅ Updated prefix cache for user ${telegramId}: "${normalizedPrefix || '(none)'}"`)
-  }
-
-/**
- * Process message through pipeline
- */
-async processMessage(sock, sessionId, m, prefix = null) {
-  try {
-    await this.initialize()
-
-    // Validate message
-    if (!m || !m.message) {
-      return { processed: false, error: 'Invalid message object' }
-    }
-
-    const chat = m.key?.remoteJid || m.from
-    const isGroup = chat && chat.endsWith('@g.us')
-    
-    // Skip protocol/system messages
-    if (m.message?.protocolMessage) {
-      const protocolType = m.message.protocolMessage.type
+      const chat = m.key?.remoteJid || m.from
+      const isGroup = chat && chat.endsWith('@g.us')
       
-      const skipTypes = [
-        'PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE',
-        'MESSAGE_EDIT',
-        'REVOKE',
-        'EPHEMERAL_SETTING'
-      ]
-      
-      if (skipTypes.includes(protocolType)) {
-        logger.debug(`Skipping protocol message type: ${protocolType}`)
-        return { processed: false, silent: true, protocolMessage: true }
-      }
-    }
-      
-    // Set chat, isGroup, and sender
-    if (!m.chat) {
-      m.chat = m.key?.remoteJid || m.from
-    }
-    if (typeof m.isGroup === 'undefined') {
-      m.isGroup = m.chat && m.chat.endsWith('@g.us')
-    }
-
-    if (!m.sender) {
-      if (m.isGroup) {
-        m.sender = m.key?.participant || m.participant || m.key?.remoteJid
-      } else {
-        if (m.key?.fromMe) {
-          m.sender = m.originalSelfAuthorUserJidString || sock.user?.id
-        } else {
-          m.sender = m.key?.remoteJid || m.chat
+      // Skip protocol/system messages
+      if (m.message?.protocolMessage) {
+        const protocolType = m.message.protocolMessage.type
+        
+        const skipTypes = [
+          'PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE',
+          'MESSAGE_EDIT',
+          'REVOKE',
+          'EPHEMERAL_SETTING'
+        ]
+        
+        if (skipTypes.includes(protocolType)) {
+          logger.debug(`Skipping protocol message type: ${protocolType}`)
+          return { processed: false, silent: true, protocolMessage: true }
         }
       }
-    }
+        
+      // Set chat, isGroup, and sender
+      if (!m.chat) {
+        m.chat = m.key?.remoteJid || m.from
+      }
+      if (typeof m.isGroup === 'undefined') {
+        m.isGroup = m.chat && m.chat.endsWith('@g.us')
+      }
 
-    if (m.sender?.includes('@lid') && m.originalSelfAuthorUserJidString) {
-      m.sender = m.originalSelfAuthorUserJidString
-      logger.debug(`Corrected @lid sender to: ${m.sender}`)
-    }
-    
-    // Validate critical fields
-    if (!m.chat || !m.sender) {
-      logger.error('Missing critical message fields:', { chat: m.chat, sender: m.sender })
-      return { processed: false, error: 'Missing chat or sender information' }
-    }
+      if (!m.sender) {
+        if (m.isGroup) {
+          m.sender = m.key?.participant || m.participant || m.key?.remoteJid
+        } else {
+          if (m.key?.fromMe) {
+            m.sender = m.originalSelfAuthorUserJidString || sock.user?.id
+          } else {
+            m.sender = m.key?.remoteJid || m.chat
+          }
+        }
+      }
 
-    // Get session context
-    m.sessionContext = this._getSessionContext(sessionId)
-    m.sessionId = sessionId
-    
-    // Get user's custom prefix
-    const userPrefix = this._getUserPrefixFromCache(m.sessionContext.telegram_id)
-    m.prefix = userPrefix
-    logger.debug(`Using prefix '${m.prefix}' for user ${m.sessionContext.telegram_id}`)
-
-    // Extract contact info
-    await this._extractContactInfo(sock, m)
-
-    // Extract quoted message
-    m.quoted = this.messageExtractor.extractQuotedMessage(m)
-
-    // Extract message body
-    m.body = this.messageExtractor.extractMessageBody(m)
-    m.text = m.body
-
-    // Set admin status
-    await this._setAdminStatus(sock, m)
-
-    // Determine if it's a command
-    const isCommand = m.body && (m.prefix === '' || m.body.startsWith(m.prefix))
-    m.isCommand = isCommand
-
-    if (isCommand) {
-      this._parseCommand(m, m.prefix)
-    }
-
-    // Process anti-plugins (skip for commands)
-    if (!m.isCommand) {
-      await this._processAntiPlugins(sock, sessionId, m)
+      if (m.sender?.includes('@lid') && m.originalSelfAuthorUserJidString) {
+        m.sender = m.originalSelfAuthorUserJidString
+        logger.debug(`Corrected @lid sender to: ${m.sender}`)
+      }
       
-      if (m._wasDeletedByAntiPlugin) {
-        this.messagePersistence.persistMessage(sessionId, sock, m).catch(() => {})
-        this.messageLogger.logEnhancedMessageEntry(sock, sessionId, m).catch(() => {})
-        return { processed: true, deletedByAntiPlugin: true }
+      // Validate critical fields
+      if (!m.chat || !m.sender) {
+        logger.error('Missing critical message fields:', { chat: m.chat, sender: m.sender })
+        return { processed: false, error: 'Missing chat or sender information' }
       }
-    }
 
-    // Fire-and-forget for persistence and logging
-    this.messagePersistence.persistMessage(sessionId, sock, m).catch(err => {
-      logger.debug(`Persistence failed for ${m.key?.id}:`, err.message)
-    })
-    
-    this.messageLogger.logEnhancedMessageEntry(sock, sessionId, m).catch(err => {
-      logger.debug(`Logging failed for ${m.key?.id}:`, err.message)
-    })
+      // Get session context
+      m.sessionContext = this._getSessionContext(sessionId)
+      m.sessionId = sessionId
+      
+      // Get user's custom prefix directly from database
+      const userPrefix = await this.getUserPrefix(m.sessionContext.telegram_id)
+      m.prefix = userPrefix
+      logger.debug(`Using prefix '${m.prefix}' for user ${m.sessionContext.telegram_id}`)
 
-    // ✅ CHECK STATE REPLY FIRST (before interactive responses and commands)
-    // This handles number replies, text replies, etc. for multi-step flows
-    const stateReplyResult = await this._handleStateReply(sock, sessionId, m)
-    if (stateReplyResult) {
-      return stateReplyResult
-    }
+      // Extract contact info
+      await this._extractContactInfo(sock, m)
 
-    // Handle interactive responses (buttons, lists)
-    if (m.message?.listResponseMessage) {
-      return await this._handleListResponse(sock, sessionId, m)
-    }
+      // Extract quoted message
+      m.quoted = this.messageExtractor.extractQuotedMessage(m)
 
-    if (m.message?.interactiveResponseMessage || 
-        m.message?.templateButtonReplyMessage || 
-        m.message?.buttonsResponseMessage) {
-      return await this._handleInteractiveResponse(sock, sessionId, m)
-    }
+      // Extract message body
+      m.body = this.messageExtractor.extractMessageBody(m)
+      m.text = m.body
 
-    // Execute command if it's a command
-    if (m.isCommand && m.body) {
-      this.messageStats.commands++
-      return await this._handleCommand(sock, sessionId, m)
-    }
+      // Set admin status
+      await this._setAdminStatus(sock, m)
 
-    // Process game messages (non-commands only)
-    if (!m.isCommand && m.body && m.body.trim()) {
-      const gameResult = await this._handleGameMessage(sock, sessionId, m)
-      if (gameResult) {
-        return gameResult
+      // Determine if it's a command
+      const isCommand = m.body && (m.prefix === '' || m.body.startsWith(m.prefix))
+      m.isCommand = isCommand
+
+      if (isCommand) {
+        this._parseCommand(m, m.prefix)
       }
+
+      // Process anti-plugins (skip for commands)
+      if (!m.isCommand) {
+        await this._processAntiPlugins(sock, sessionId, m)
+        
+        if (m._wasDeletedByAntiPlugin) {
+          this.messagePersistence.persistMessage(sessionId, sock, m).catch(() => {})
+          this.messageLogger.logEnhancedMessageEntry(sock, sessionId, m).catch(() => {})
+          return { processed: true, deletedByAntiPlugin: true }
+        }
+      }
+
+      // Fire-and-forget for persistence and logging
+      this.messagePersistence.persistMessage(sessionId, sock, m).catch(err => {
+        logger.debug(`Persistence failed for ${m.key?.id}:`, err.message)
+      })
+      
+      this.messageLogger.logEnhancedMessageEntry(sock, sessionId, m).catch(err => {
+        logger.debug(`Logging failed for ${m.key?.id}:`, err.message)
+      })
+
+      // ✅ CHECK STATE REPLY FIRST (before interactive responses and commands)
+      // This handles number replies, text replies, etc. for multi-step flows
+      const stateReplyResult = await this._handleStateReply(sock, sessionId, m)
+      if (stateReplyResult) {
+        return stateReplyResult
+      }
+
+      // Handle interactive responses (buttons, lists)
+      if (m.message?.listResponseMessage) {
+        return await this._handleListResponse(sock, sessionId, m)
+      }
+
+      if (m.message?.interactiveResponseMessage || 
+          m.message?.templateButtonReplyMessage || 
+          m.message?.buttonsResponseMessage) {
+        return await this._handleInteractiveResponse(sock, sessionId, m)
+      }
+
+      // Execute command if it's a command
+      if (m.isCommand && m.body) {
+        this.messageStats.commands++
+        return await this._handleCommand(sock, sessionId, m)
+      }
+
+      // Process game messages (non-commands only)
+      if (!m.isCommand && m.body && m.body.trim()) {
+        const gameResult = await this._handleGameMessage(sock, sessionId, m)
+        if (gameResult) {
+          return gameResult
+        }
+      }
+
+      this.messageStats.processed++
+      return { processed: true }
+
+    } catch (error) {
+      logger.error('Error processing message:', error)
+      this.messageStats.errors++
+      return { error: error.message }
     }
-
-    this.messageStats.processed++
-    return { processed: true }
-
-  } catch (error) {
-    logger.error('Error processing message:', error)
-    this.messageStats.errors++
-    return { error: error.message }
   }
-}
 
   /**
    * Get session context
@@ -463,7 +396,7 @@ async processMessage(sock, sessionId, m, prefix = null) {
     }
   }
 
-/**
+  /**
    * Parse command from message
    * @private
    */
@@ -497,7 +430,7 @@ async processMessage(sock, sessionId, m, prefix = null) {
     }
   }
 
-/**
+  /**
    * Handle game messages
    * @private
    */
@@ -547,7 +480,6 @@ async processMessage(sock, sessionId, m, prefix = null) {
       return null
     }
   }
-
 
   /**
    * Check if message is a game command by checking plugin loader
@@ -718,9 +650,7 @@ async processMessage(sock, sessionId, m, prefix = null) {
     return {
       isInitialized: this.isInitialized,
       messageStats: { ...this.messageStats },
-      pluginStats: this.pluginLoader?.getPluginStats() || {},
-      prefixCacheSize: this.prefixCache.size,
-      prefixCacheAge: this.cacheLoadTime ? Math.floor((Date.now() - this.cacheLoadTime) / 1000) : 0
+      pluginStats: this.pluginLoader?.getPluginStats() || {}
     }
   }
 

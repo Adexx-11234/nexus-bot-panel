@@ -1,4 +1,4 @@
-// plugins/download/play.js - UPDATED VERSION
+// plugins/download/play.js - RACE CONDITION FIXED VERSION
 
 import youtubeDownloader from '../../lib/downloaders/index.js';
 import fs from 'fs';
@@ -12,6 +12,7 @@ export default {
   
   async execute(sock, sessionId, args, m) {
     let tempFile = null;
+    let audioBuffer = null;
     
     try {
       console.log('[Play Plugin] Execute called with args:', args);
@@ -39,10 +40,35 @@ export default {
       }
 
       const { data } = result;
-      tempFile = { cleanup: data.cleanup };
+      tempFile = { cleanup: data.cleanup, filePath: data.filePath };
 
-      const audioBuffer = fs.readFileSync(data.filePath);
+      // ============================================
+      // FIX: Read file IMMEDIATELY into buffer
+      // This prevents race conditions from concurrent requests
+      // ============================================
       
+      console.log('[Play Plugin] Reading file:', data.filePath);
+      
+      // Check if file exists before reading
+      if (!fs.existsSync(data.filePath)) {
+        throw new Error(`File not found: ${data.filePath}`);
+      }
+      
+      // Read file into memory IMMEDIATELY
+      audioBuffer = fs.readFileSync(data.filePath);
+      console.log('[Play Plugin] File loaded into memory, size:', audioBuffer.length);
+      
+      // ============================================
+      // FIX: Delete file IMMEDIATELY after reading
+      // This frees up disk space and prevents conflicts
+      // ============================================
+      
+      if (data.cleanup) {
+        data.cleanup();
+        console.log('[Play Plugin] Temporary file cleaned up');
+      }
+      
+      // Build caption
       let caption = `🎵 *Now Playing*\n\n`;
       caption += `📝 *Title:* ${data.title}\n`;
       caption += `🎧 *Quality:* ${data.quality}\n`;
@@ -63,31 +89,31 @@ export default {
       await sock.sendMessage(m.chat, {
         audio: audioBuffer,
         mimetype: 'audio/mp4',
-        ptt: true,
-        waveform: [0, 20, 40, 60, 80, 100, 80, 60, 40, 20, 0]
+        ptt: false
       }, { quoted: m });
 
       console.log('[Play Plugin] Audio sent successfully');
-
-      // Cleanup
-      if (data.cleanup) {
-        data.cleanup();
-      }
-
+      
       return { success: true };
 
     } catch (error) {
       console.error("[Play Plugin] Error:", error);
       console.error("[Play Plugin] Error stack:", error.stack);
       
-      // Cleanup on error
+      // Cleanup on error (only if file still exists)
       if (tempFile && tempFile.cleanup) {
-        tempFile.cleanup();
+        try {
+          tempFile.cleanup();
+        } catch (cleanupErr) {
+          console.error('[Play Plugin] Cleanup error (safe to ignore):', cleanupErr.message);
+        }
       }
       
       await sock.sendMessage(m.chat, {
         text: `❌ An error occurred!\n\n*Details:* ${error.message}\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
       }, { quoted: m });
+      
+      return { success: false, error: error.message };
     }
   },
 };

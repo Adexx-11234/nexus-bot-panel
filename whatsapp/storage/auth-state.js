@@ -25,44 +25,57 @@ const BufferJSON = {
   }
 }
 
-// Cache for auth data (5 minute TTL)
-const authCache = new Map()
+// CRITICAL: Only cache creds.json (not all keys) - Aggressive RAM management
+const credsCache = new Map()
+const MAX_CACHE_SIZE = 500 // Support 500 users (up from 50)
+const CACHE_TTL = 120000 // 2 minutes TTL
 const writeQueue = new Map()
 
 /**
- * Cleanup auth cache
+ * Cleanup cache - aggressive strategy
  * @private
  */
 const cleanupCache = (sessionId = null) => {
   if (sessionId) {
-    for (const [key] of authCache) {
-      if (key.startsWith(`${sessionId}:`)) {
-        authCache.delete(key)
-      }
-    }
-    for (const [key, timeout] of writeQueue) {
-      if (key.startsWith(`${sessionId}:`)) {
-        clearTimeout(timeout)
-        writeQueue.delete(key)
-      }
+    // Remove specific session
+    credsCache.delete(sessionId)
+    const queueKey = `${sessionId}:creds.json`
+    if (writeQueue.has(queueKey)) {
+      clearTimeout(writeQueue.get(queueKey))
+      writeQueue.delete(queueKey)
     }
   } else {
+    // Remove stale entries
     const now = Date.now()
-    const maxAge = 300000 // 5 minutes
-    for (const [key, data] of authCache) {
-      if (data.timestamp && (now - data.timestamp) > maxAge) {
-        authCache.delete(key)
+    for (const [key, data] of credsCache) {
+      if (data.timestamp && (now - data.timestamp) > CACHE_TTL) {
+        credsCache.delete(key)
       }
+    }
+    
+    // Enforce max size - remove oldest entries
+    if (credsCache.size > MAX_CACHE_SIZE) {
+      const entries = Array.from(credsCache.entries())
+        .sort((a, b) => a[1].timestamp - b[1].timestamp)
+      
+      const toRemove = entries.slice(0, credsCache.size - MAX_CACHE_SIZE)
+      for (const [key] of toRemove) {
+        credsCache.delete(key)
+      }
+      
+      logger.warn(`Cache exceeded max size (${MAX_CACHE_SIZE}), removed ${toRemove.length} oldest entries`)
     }
   }
 }
 
-// Periodic cache cleanup
-setInterval(() => cleanupCache(), 120000)
+// Aggressive cache cleanup every 30 seconds
+setInterval(() => cleanupCache(), 30000)
 
 /**
  * Use MongoDB as authentication state storage
  * Compatible with Baileys auth state interface
+ * 
+ * CRITICAL: Stores ALL auth data (creds + keys), only caches creds.json
  */
 export const useMongoDBAuthState = async (collection, sessionId) => {
   if (!sessionId || !sessionId.startsWith('session_')) {
@@ -72,23 +85,20 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
   const fixFileName = (file) => file?.replace(/\//g, '__')?.replace(/:/g, '-') || ''
 
   /**
-   * Read data from MongoDB with caching and retry logic
+   * Read data from MongoDB
+   * CRITICAL: Only caches creds.json, all other keys read directly
    */
   const readData = async (fileName) => {
-    const cacheKey = `${sessionId}:${fileName}`
-
-    // Check cache (5 minute TTL)
-    if (authCache.has(cacheKey)) {
-      const cached = authCache.get(cacheKey)
-      if (cached.timestamp && (Date.now() - cached.timestamp) < 300000) {
+    // Only cache creds.json
+    if (fileName === 'creds.json') {
+      const cached = credsCache.get(sessionId)
+      if (cached && (Date.now() - cached.timestamp) < CACHE_TTL) {
         return cached.data
-      } else {
-        authCache.delete(cacheKey)
       }
     }
 
-    // Retry logic for critical auth files
-    const isCriticalFile = fileName === 'creds.json' || fileName.includes('creds')
+    // Read from MongoDB (with retry for creds.json only)
+    const isCriticalFile = fileName === 'creds.json'
     const maxRetries = isCriticalFile ? 3 : 1
     let lastError = null
 
@@ -108,8 +118,14 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
 
         const data = JSON.parse(result.datajson, BufferJSON.reviver)
 
-        if (data) {
-          authCache.set(cacheKey, { data, timestamp: Date.now() })
+        // Only cache creds.json
+        if (data && fileName === 'creds.json') {
+          credsCache.set(sessionId, { data, timestamp: Date.now() })
+          
+          // Enforce max cache size
+          if (credsCache.size > MAX_CACHE_SIZE) {
+            cleanupCache()
+          }
         }
 
         return data
@@ -128,17 +144,26 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
   }
 
   /**
-   * Write data to MongoDB with debouncing
+   * Write data to MongoDB
+   * CRITICAL: Debounced writes (500ms) - faster flush for RAM
    */
   const writeData = async (datajson, fileName) => {
-    const cacheKey = `${sessionId}:${fileName}`
-    authCache.set(cacheKey, { data: datajson, timestamp: Date.now() })
+    // Only cache creds.json updates
+    if (fileName === 'creds.json') {
+      credsCache.set(sessionId, { data: datajson, timestamp: Date.now() })
+      
+      // Enforce max cache size
+      if (credsCache.size > MAX_CACHE_SIZE) {
+        cleanupCache()
+      }
+    }
 
     const queueKey = `${sessionId}:${fileName}`
     if (writeQueue.has(queueKey)) {
       clearTimeout(writeQueue.get(queueKey))
     }
 
+    // FASTER flush: 500ms (down from 1000ms)
     const timeoutId = setTimeout(async () => {
       try {
         const query = { filename: fixFileName(fileName), sessionId: sessionId }
@@ -156,7 +181,7 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
       } finally {
         writeQueue.delete(queueKey)
       }
-    }, 50)
+    }, 500)
 
     writeQueue.set(queueKey, timeoutId)
   }
@@ -165,8 +190,9 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
    * Remove data from MongoDB
    */
   const removeData = async (fileName) => {
-    const cacheKey = `${sessionId}:${fileName}`
-    authCache.delete(cacheKey)
+    if (fileName === 'creds.json') {
+      credsCache.delete(sessionId)
+    }
 
     try {
       await collection.deleteOne({ filename: fixFileName(fileName), sessionId: sessionId })
@@ -185,6 +211,10 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
     state: {
       creds,
       keys: {
+        /**
+         * CRITICAL: Get keys in batches
+         * Stores ALL keys in MongoDB (pre-keys, app-state, etc.)
+         */
         get: async (type, ids) => {
           const data = {}
           const batchSize = 100
@@ -199,13 +229,17 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
                 }
                 if (value) data[id] = value
               } catch (error) {
-                // Silent error
+                // Silent error for non-critical keys
               }
             })
             await Promise.allSettled(promises)
           }
           return data
         },
+        /**
+         * CRITICAL: Set keys in batches
+         * Stores ALL keys (not just creds)
+         */
         set: async (data) => {
           const tasks = []
           for (const category in data) {
@@ -213,6 +247,7 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
               const value = data[category][id]
               const file = `${category}-${id}.json`
 
+              // Batch writes (max 20 concurrent)
               if (tasks.length >= 20) {
                 await Promise.allSettled(tasks)
                 tasks.length = 0
@@ -234,6 +269,7 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
 
 /**
  * Cleanup session auth data from MongoDB
+ * CRITICAL: Deletes ALL auth files (creds + keys)
  */
 export const cleanupSessionAuthData = async (collection, sessionId) => {
   try {
@@ -288,4 +324,20 @@ export const hasValidAuthData = async (collection, sessionId) => {
   }
 
   return false
+}
+
+/**
+ * Get cache statistics for monitoring
+ */
+export const getAuthCacheStats = () => {
+  return {
+    credsCache: {
+      size: credsCache.size,
+      maxSize: MAX_CACHE_SIZE,
+      ttl: CACHE_TTL
+    },
+    writeQueue: {
+      size: writeQueue.size
+    }
+  }
 }

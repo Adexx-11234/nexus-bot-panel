@@ -2,9 +2,11 @@ import { createComponentLogger } from '../../utils/logger.js'
 import { SessionState } from './state.js'
 import { WebSessionDetector } from './detector.js'
 import { SessionEventHandlers } from './handlers.js'
-import { Boom } from '@hapi/boom'
 
 const logger = createComponentLogger('SESSION_MANAGER')
+
+// 515 Flow Toggle
+const ENABLE_515_FLOW = process.env.ENABLE_515_FLOW === 'true'
 
 /**
  * SessionManager - Main orchestrator for WhatsApp sessions
@@ -31,6 +33,12 @@ export class SessionManager {
     this.initializingSessions = new Set()
     this.voluntarilyDisconnected = new Set()
     this.detectedWebSessions = new Set()
+    
+    // 515 Flow tracking (only if enabled)
+    if (ENABLE_515_FLOW) {
+      this.sessions515Restart = new Set()
+      this.completed515Restart = new Set()
+    }
 
     // Configuration
     this.eventHandlersEnabled = false
@@ -42,6 +50,7 @@ export class SessionManager {
     this.sessionEventHandlers = new SessionEventHandlers(this)
 
     logger.info('Session manager created')
+    logger.info(`515 Flow: ${ENABLE_515_FLOW ? 'ENABLED' : 'DISABLED'}`)
   }
 
   /**
@@ -218,50 +227,40 @@ export class SessionManager {
     }
   }
 
-  /**
-   * Get active sessions from database
-   * @private
-   */
-  async _getActiveSessionsFromDatabase() {
-    try {
-    /*  if (this.storage.isPostgresConnected) {
-        return await this.storage.postgresStorage.getActiveSessionsFromDatabase()
-      }*/
+/**
+ * Get active sessions from database - use coordinator, not MongoDB directly
+ * @private
+ */
+async _getActiveSessionsFromDatabase() {
+  try {
+    // CRITICAL: Use coordinator, which handles fallback automatically
+    const sessions = await this.storage.getAllSessions()
+    
+    // Filter for active sessions
+    const activeSessions = sessions.filter(session => {
+      return session.sessionId && (
+        session.phoneNumber ||
+        session.isConnected ||
+        ['connected', 'connecting'].includes(session.connectionStatus)
+      )
+    })
 
-      if (this.storage.isMongoConnected) {
-        const sessions = await this.storage.sessions.find({
-          $and: [
-            { telegramId: { $exists: true, $ne: null } },
-            {
-              $or: [
-                { sessionId: { $exists: true, $ne: null, $ne: '' } },
-                { phoneNumber: { $exists: true, $ne: null } },
-                { isConnected: true },
-                { connectionStatus: { $in: ['connected', 'connecting'] } }
-              ]
-            }
-          ]
-        }).sort({ updatedAt: -1 }).toArray()
+    return activeSessions.map(session => ({
+      sessionId: session.sessionId,
+      userId: session.telegramId || session.userId,
+      telegramId: session.telegramId || session.userId,
+      phoneNumber: session.phoneNumber,
+      isConnected: session.isConnected !== undefined ? session.isConnected : false,
+      connectionStatus: session.connectionStatus || 'disconnected',
+      source: session.source || 'telegram',
+      detected: session.detected !== false
+    }))
 
-        return sessions.map(session => ({
-          sessionId: session.sessionId || `session_${session.telegramId}`,
-          userId: session.telegramId,
-          telegramId: session.telegramId,
-          phoneNumber: session.phoneNumber,
-          isConnected: session.isConnected !== undefined ? session.isConnected : false,
-          connectionStatus: session.connectionStatus || 'disconnected',
-          source: session.source || 'telegram',
-          detected: session.detected !== false
-        }))
-      }
-
-      return []
-
-    } catch (error) {
-      logger.error('Failed to get active sessions from database:', error)
-      return []
-    }
+  } catch (error) {
+    logger.error('Failed to get active sessions from database:', error)
+    return []
   }
+}
 
   /**
    * Enable features after initialization
@@ -313,6 +312,11 @@ export class SessionManager {
 
       this.eventDispatcher.setupEventHandlers(sock, sessionId)
       sock.eventHandlersSetup = true
+      
+      // Flush buffer after setup
+      if (sock.ev.isBuffering && sock.ev.isBuffering()) {
+        sock.ev.flush()
+      }
 
       logger.info(`Event handlers set up for ${sessionId}`)
 
@@ -366,20 +370,19 @@ export class SessionManager {
         return this.activeSockets.get(sessionId)
       }
 
-    // NEW FIX: Only return existing session if it's actually connected
-    if (this.activeSockets.has(sessionId) && !isReconnect) {
-      const existingSocket = this.activeSockets.get(sessionId)
-      const isConnected = existingSocket?.user && existingSocket?.readyState === existingSocket?.ws?.OPEN
-      
-      if (isConnected) {
-        logger.info(`Session ${sessionId} already exists and is connected`)
-        return existingSocket
-      } else {
-        logger.warn(`Session ${sessionId} exists but not connected - allowing recreate`)
-        // Clean up the disconnected session
-        await this._cleanupExistingSession(sessionId)
+      // Only return existing session if it's actually connected
+      if (this.activeSockets.has(sessionId) && !isReconnect) {
+        const existingSocket = this.activeSockets.get(sessionId)
+        const isConnected = existingSocket?.user && existingSocket?.readyState === existingSocket?.ws?.OPEN
+        
+        if (isConnected) {
+          logger.info(`Session ${sessionId} already exists and is connected`)
+          return existingSocket
+        } else {
+          logger.warn(`Session ${sessionId} exists but not connected - allowing recreate`)
+          await this._cleanupExistingSession(sessionId)
+        }
       }
-    }
 
       // Check session limit
       if (this.activeSockets.size >= this.maxSessions) {
@@ -390,20 +393,20 @@ export class SessionManager {
       logger.info(`Creating session ${sessionId} (source: ${source})`)
 
       // Cleanup existing session if reconnecting
-    if (isReconnect) {
-      await this._cleanupExistingSession(sessionId)
-    } else if (allowPairing) {
-      // NEW PAIRING: Check if there's stale auth that needs cleanup
-      const existingSocket = this.activeSockets.has(sessionId)
-      const authAvailability = await this.connectionManager.checkAuthAvailability(sessionId)
-      
-      // Only cleanup if there's BOTH old auth AND no active socket (stale session)
-      if (authAvailability.preferred !== 'none' && !existingSocket) {
-        logger.info(`Cleaning up stale auth for new pairing: ${sessionId}`)
-        await this.performCompleteUserCleanup(sessionId)
-        await new Promise(resolve => setTimeout(resolve, 1000))
+      if (isReconnect) {
+        await this._cleanupExistingSession(sessionId)
+      } else if (allowPairing) {
+        // Check if there's stale auth that needs cleanup
+        const existingSocket = this.activeSockets.has(sessionId)
+        const authAvailability = await this.connectionManager.checkAuthAvailability(sessionId)
+        
+        // Only cleanup if there's BOTH old auth AND no active socket (stale session)
+        if (authAvailability.preferred !== 'none' && !existingSocket) {
+          logger.info(`Cleaning up stale auth for new pairing: ${sessionId}`)
+          await this.performCompleteUserCleanup(sessionId)
+          await new Promise(resolve => setTimeout(resolve, 1000))
+        }
       }
-    }
 
       // Create socket connection
       const sock = await this.connectionManager.createConnection(
@@ -430,10 +433,16 @@ export class SessionManager {
         callbacks: callbacks
       })
 
-      // Setup connection event handlers
+      // Setup connection event handlers (connection.update, creds.update)
       this.sessionEventHandlers.setupConnectionHandler(sock, sessionId, callbacks)
+      this.sessionEventHandlers.setupCredsHandler(sock, sessionId)
+      
+      // Setup message/event handlers immediately (not waiting for connection to open)
+      if (!sock.eventHandlersSetup) {
+        await this._setupEventHandlers(sock, sessionId)
+      }
 
-      // Save to database
+      // Save to database - CRITICAL FIX
       await this.storage.saveSession(sessionId, {
         userId: userIdStr,
         telegramId: userIdStr,
@@ -482,7 +491,7 @@ export class SessionManager {
         },
         false,
         'web',
-        true // Allow pairing for web sessions
+        true
       )
 
       return !!sock
@@ -502,9 +511,8 @@ export class SessionManager {
     try {
       logger.info(`Disconnecting session ${sessionId} (force: ${forceCleanup})`)
 
-    // Get session data to check source
-    const sessionData = await this.storage.getSession(sessionId)
-    const isWebUser = sessionData?.source === 'web'
+      const sessionData = await this.storage.getSession(sessionId)
+      const isWebUser = sessionData?.source === 'web'
 
       // Full cleanup if forced
       if (forceCleanup) {
@@ -575,55 +583,54 @@ export class SessionManager {
     }
   }
 
-/**
- * Perform complete user cleanup (logout)
- */
-async performCompleteUserCleanup(sessionId) {
-  const results = { socket: false, database: false, authState: false }
+  /**
+   * Perform complete user cleanup (logout)
+   */
+  async performCompleteUserCleanup(sessionId) {
+    const results = { socket: false, database: false, authState: false }
 
-  try {
-    logger.info(`Performing complete cleanup for ${sessionId}`)
+    try {
+      logger.info(`Performing complete cleanup for ${sessionId}`)
 
-    // Get session data to check source
-    const sessionData = await this.storage.getSession(sessionId)
-    const isWebUser = sessionData?.source === 'web'
+      const sessionData = await this.storage.getSession(sessionId)
+      const isWebUser = sessionData?.source === 'web'
 
-    // Cleanup socket
-    const sock = this.activeSockets.get(sessionId)
-    if (sock) {
-      results.socket = await this._cleanupSocket(sessionId, sock)
+      // Cleanup socket
+      const sock = this.activeSockets.get(sessionId)
+      if (sock) {
+        results.socket = await this._cleanupSocket(sessionId, sock)
+      }
+
+      // Clear in-memory structures
+      this.activeSockets.delete(sessionId)
+      this.sessionState.delete(sessionId)
+      this.initializingSessions.delete(sessionId)
+      this.voluntarilyDisconnected.add(sessionId)
+      this.detectedWebSessions.delete(sessionId)
+
+      // Delete from databases based on source
+      if (isWebUser) {
+        // For web users: Keep PostgreSQL record, only delete auth
+        results.database = await this.storage.deleteSessionKeepUser(sessionId)
+        logger.info(`Web user ${sessionId} account preserved`)
+      } else {
+        // For Telegram users: Complete deletion including auth
+        results.database = await this.storage.completelyDeleteSession(sessionId)
+        logger.info(`Telegram user ${sessionId} completely deleted`)
+      }
+
+      // Cleanup auth state files
+      const authCleanupResults = await this.connectionManager.cleanupAuthState(sessionId)
+      results.authState = authCleanupResults.mongodb || authCleanupResults.file
+
+      logger.info(`Complete cleanup for ${sessionId}:`, results)
+      return results
+
+    } catch (error) {
+      logger.error(`Complete cleanup failed for ${sessionId}:`, error)
+      return results
     }
-
-    // Clear in-memory structures
-    this.activeSockets.delete(sessionId)
-    this.sessionState.delete(sessionId)
-    this.initializingSessions.delete(sessionId)
-    this.voluntarilyDisconnected.add(sessionId)
-    this.detectedWebSessions.delete(sessionId)
-
-    // Delete from databases based on source
-    if (isWebUser) {
-      // For web users: Keep PostgreSQL record, only delete auth
-      results.database = await this.storage.deleteSessionKeepUser(sessionId)
-      logger.info(`Web user ${sessionId} account preserved`)
-    } else {
-      // For Telegram users: Complete deletion including auth
-      results.database = await this.storage.completelyDeleteSession(sessionId)
-      logger.info(`Telegram user ${sessionId} completely deleted`)
-    }
-
-    // Cleanup auth state files
-    const authCleanupResults = await this.connectionManager.cleanupAuthState(sessionId)
-    results.authState = authCleanupResults.mongodb || authCleanupResults.file
-
-    logger.info(`Complete cleanup for ${sessionId}:`, results)
-    return results
-
-  } catch (error) {
-    logger.error(`Complete cleanup failed for ${sessionId}:`, error)
-    return results
   }
-}
 
   /**
    * Cleanup failed initialization
@@ -765,7 +772,8 @@ async performCompleteUserCleanup(sessionId) {
       activeSessions: this.activeSockets.size,
       initializingSessions: this.initializingSessions.size,
       eventHandlersEnabled: this.eventHandlersEnabled,
-      webDetectionActive: this.webSessionDetector?.isRunning() || false
+      webDetectionActive: this.webSessionDetector?.isRunning() || false,
+      enable515Flow: ENABLE_515_FLOW
     }
   }
 
@@ -789,6 +797,7 @@ async performCompleteUserCleanup(sessionId) {
         eventHandlersEnabled: this.eventHandlersEnabled,
         maxSessions: this.maxSessions,
         isInitialized: this.isInitialized,
+        enable515Flow: ENABLE_515_FLOW,
         storage: this.storage?.isConnected ? 'Connected' : 'Disconnected',
         webDetection: this.webSessionDetector?.isRunning() ? 'Active' : 'Inactive',
         mongoConnected: this.storage?.isMongoConnected || false,

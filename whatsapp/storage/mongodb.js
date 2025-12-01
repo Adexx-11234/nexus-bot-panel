@@ -4,8 +4,8 @@ import { createComponentLogger } from '../../utils/logger.js'
 const logger = createComponentLogger('MONGODB_STORAGE')
 
 /**
- * MongoDBStorage - MongoDB storage implementation
- * Handles sessions collection and connection management
+ * MongoDBStorage - Pure MongoDB operations
+ * NO business logic, only database operations
  */
 export class MongoDBStorage {
   constructor() {
@@ -14,7 +14,7 @@ export class MongoDBStorage {
     this.sessions = null
     this.isConnected = false
     this.retryCount = 0
-    this.maxRetries = 3
+    this.maxRetries = 4
     this.connectionTimeout = 30000
 
     this._initConnection()
@@ -27,10 +27,10 @@ export class MongoDBStorage {
   async _initConnection() {
     try {
       const mongoUrl = process.env.MONGODB_URI || 
-        ''
+        'mongodb://localhost:27017/whatsapp_bot'
 
       const options = {
-        maxPoolSize: 80,
+        maxPoolSize: 90,
         minPoolSize: 2,
         maxIdleTimeMS: 60000,
         serverSelectionTimeoutMS: 30000,
@@ -108,9 +108,9 @@ export class MongoDBStorage {
   }
 
   /**
-   * Save session
+   * Save session (PURE operation - no business logic)
    */
-  async saveSession(sessionId, sessionData, credentials) {
+  async saveSession(sessionId, sessionData) {
     if (!this.isConnected) return false
 
     try {
@@ -142,7 +142,7 @@ export class MongoDBStorage {
   }
 
   /**
-   * Get session
+   * Get session (PURE operation)
    */
   async getSession(sessionId) {
     if (!this.isConnected) return null
@@ -172,7 +172,7 @@ export class MongoDBStorage {
   }
 
   /**
-   * Update session
+   * Update session (PURE operation)
    */
   async updateSession(sessionId, updates) {
     if (!this.isConnected) return false
@@ -204,7 +204,7 @@ export class MongoDBStorage {
   }
 
   /**
-   * Delete session
+   * Delete session (PURE operation)
    */
   async deleteSession(sessionId) {
     if (!this.isConnected) return false
@@ -220,14 +220,7 @@ export class MongoDBStorage {
   }
 
   /**
-   * Completely delete session
-   */
-  async completelyDeleteSession(sessionId) {
-    return await this.deleteSession(sessionId)
-  }
-
-  /**
-   * Delete auth state
+   * Delete auth state from auth_baileys collection (PURE operation)
    */
   async deleteAuthState(sessionId) {
     if (!this.isConnected) return false
@@ -235,6 +228,7 @@ export class MongoDBStorage {
     try {
       const authCollection = this.db.collection('auth_baileys')
       const result = await authCollection.deleteMany({ sessionId })
+      logger.info(`Deleted ${result.deletedCount} auth documents for ${sessionId}`)
       return result.deletedCount > 0
 
     } catch (error) {
@@ -244,7 +238,7 @@ export class MongoDBStorage {
   }
 
   /**
-   * Get all sessions
+   * Get all sessions (PURE operation)
    */
   async getAllSessions() {
     if (!this.isConnected) return []
@@ -275,7 +269,7 @@ export class MongoDBStorage {
   }
 
   /**
-   * Get undetected web sessions
+   * Get undetected web sessions (PURE operation)
    */
   async getUndetectedWebSessions() {
     if (!this.isConnected) return []

@@ -3,10 +3,10 @@ import { UserQueries } from "../../database/query.js"
 export default {
   name: "Anti-Deleted",
   description: "Enable or disable automatic deleted message recovery and forwarding to your personal chat",
-  commands: ["antidelete", "adon", "adoff"],
+  commands: ["antidelete", "adon", "adoff", "antideleted"],
   category: "ownermenu", // Changed from "utility" to "ownermenu"
   ownerOnly: true, // Explicitly mark as owner-only
-  usage: `• \`.antideleted on\` - Enable deleted message recovery\n• \`.antideleted off\` - Disable deleted message recovery\n• \`.antideleted status\` - Check current status`,
+  usage: `• \`.antidelete on\` - Enable deleted message recovery\n• \`.antidelete off\` - Disable deleted message recovery\n• \`.antidelete status\` - Check current status`,
 
   _normalizeWhatsAppJid(jid) {
     if (!jid) return jid
@@ -28,7 +28,7 @@ export default {
       const action = args[0]?.toLowerCase()
       if (!action || !["on", "off", "enable", "disable", "status"].includes(action)) {
         return {
-          response: `❌ Invalid usage. Use:\n• \`.antideleted on\` - Enable deleted message recovery\n• \`.antideleted off\` - Disable deleted message recovery\n• \`.antideleted status\` - Check current status\n\n© 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+          response: `❌ Invalid usage. Use:\n• \`.antidelete on\` - Enable deleted message recovery\n• \`.antidelete off\` - Disable deleted message recovery\n• \`.antidelete status\` - Check current status\n\n© 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
           mentions: [],
         }
       }

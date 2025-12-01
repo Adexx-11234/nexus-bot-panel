@@ -38,7 +38,7 @@ export default {
   VIPHelper: VIPHelperDefault,
   VIPTakeover: VIPTakeoverDefault
 }
-
+export { getMessageDeduplicator } from './message-duplicator.js'
 // Re-export commonly used functions
 export {
   normalizeJid,

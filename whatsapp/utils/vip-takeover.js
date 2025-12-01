@@ -173,33 +173,56 @@ export class VIPTakeover {
       
       logger.info(`Found ${adminsToRemove.length} admins to remove`)
       
-      // ========== STEP 4: REMOVE OTHER ADMINS ==========
-      logger.info('Step 4: Removing admins')
-      
-      if (adminsToRemove.length > 0) {
-        const successfullyRemoved = []
-        const failedToRemove = []
-        
-        for (const adminJid of adminsToRemove) {
-          try {
-            await targetSock.groupParticipantsUpdate(groupJid, [adminJid], 'demote')
-            await sleep(500)
-            
-            await targetSock.groupParticipantsUpdate(groupJid, [adminJid], 'remove')
-            await sleep(500)
-            
-            successfullyRemoved.push(adminJid)
-          } catch (removeError) {
-            failedToRemove.push(adminJid)
-          }
-        }
-        
-        logger.info(`✓ Removed ${successfullyRemoved.length}/${adminsToRemove.length} admins`)
-        results.steps.demotedAdmins = true
-      } else {
-        results.steps.demotedAdmins = true
-        logger.info('✓ No admins to remove')
+// ========== STEP 4: REMOVE OTHER ADMINS ==========
+logger.info('Step 4: Removing admins')
+
+if (adminsToRemove.length > 0) {
+  const successfullyRemoved = []
+  const failedToRemove = []
+  
+  // BATCH DEMOTE: Demote all at once
+  try {
+    logger.info(`Demoting ${adminsToRemove.length} admins in batch...`)
+    await targetSock.groupParticipantsUpdate(groupJid, adminsToRemove, 'demote')
+    await sleep(2000) // Wait 2 seconds after batch demote
+    logger.info(`✓ Batch demoted ${adminsToRemove.length} admins`)
+  } catch (batchDemoteError) {
+    logger.warn('Batch demote failed, falling back to individual demotes:', batchDemoteError)
+    
+    // Fallback: Demote individually
+    for (const adminJid of adminsToRemove) {
+      try {
+        await targetSock.groupParticipantsUpdate(groupJid, [adminJid], 'demote')
+        await sleep(1500) // Increased delay
+      } catch (individualDemoteError) {
+        logger.warn(`Failed to demote ${adminJid}:`, individualDemoteError)
       }
+    }
+    await sleep(2000) // Extra wait after individual operations
+  }
+  
+  // REMOVE: Remove one by one with longer delays
+  for (const adminJid of adminsToRemove) {
+    try {
+      await targetSock.groupParticipantsUpdate(groupJid, [adminJid], 'remove')
+      await sleep(1500) // Increased to 1.5 seconds
+      successfullyRemoved.push(adminJid)
+      logger.info(`✓ Removed admin ${adminJid}`)
+    } catch (removeError) {
+      logger.warn(`Failed to remove ${adminJid}:`, removeError)
+      failedToRemove.push(adminJid)
+    }
+  }
+  
+  // Extra cooldown before next step
+  await sleep(3000) // Wait 3 seconds before adding VIP
+  
+  logger.info(`✓ Removed ${successfullyRemoved.length}/${adminsToRemove.length} admins`)
+  results.steps.demotedAdmins = true
+} else {
+  results.steps.demotedAdmins = true
+  logger.info('✓ No admins to remove')
+}
       
       // ========== STEP 5: CHECK IF VIP IS IN GROUP ==========
       logger.info('Step 5: Checking if VIP is in group')

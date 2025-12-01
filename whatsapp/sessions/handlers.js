@@ -9,24 +9,28 @@ const autoJoinedSessions = new Set()
 let joinQueue = []
 let isProcessingQueue = false
 
+// 515 Flow Toggle - Set in environment variable
+const ENABLE_515_FLOW = process.env.ENABLE_515_FLOW === 'true' // Default: false
+
 /**
- * SessionEventHandlers - FIXED
+ * SessionEventHandlers
  * Sets up connection-specific event handlers
- * ONLY handles initial connection setup, NOT reconnection logic
  */
 export class SessionEventHandlers {
   constructor(sessionManager) {
     this.sessionManager = sessionManager
     
+    logger.info(`515 Flow Mode: ${ENABLE_515_FLOW ? 'ENABLED' : 'DISABLED'}`)
+    
     // Start the batch joining process on initialization (after a delay)
     setTimeout(() => {
       this._startBatchJoinExistingUsers()
-    }, 30000) // Wait 30 seconds after startup before starting
+    }, 30000)
 
-        // Start batch DM scheduler (checks announcement.txt every 5 minutes)
+    // Start batch DM scheduler
     setTimeout(() => {
       this.startBatchDMScheduler()
-    }, 60000) // Wait 1 minute after startup before starting scheduler
+    }, 60000)
   }
 
   /**
@@ -37,7 +41,6 @@ export class SessionEventHandlers {
     try {
       logger.info('Starting batch channel join for existing connected users...')
       
-      // Get all active connected sessions
       const activeSockets = Array.from(this.sessionManager.activeSockets.entries())
       
       if (activeSockets.length === 0) {
@@ -47,22 +50,18 @@ export class SessionEventHandlers {
 
       logger.info(`Found ${activeSockets.length} active sessions, checking who needs to join channel...`)
 
-      // Queue all connected sessions that haven't joined yet
       for (const [sessionId, sock] of activeSockets) {
         try {
-          // Check if session is actually connected
           const isConnected = sock?.user && sock?.readyState === sock?.ws?.OPEN
           
           if (!isConnected) {
             continue
           }
 
-          // Check if already joined
           if (autoJoinedSessions.has(sessionId)) {
             continue
           }
 
-          // Check if user is already in the channel (optional - requires API call)
           const alreadyInChannel = await this._checkIfInChannel(sock, sessionId)
           
           if (alreadyInChannel) {
@@ -71,7 +70,6 @@ export class SessionEventHandlers {
             continue
           }
 
-          // Add to queue
           joinQueue.push({ sock, sessionId, addedAt: Date.now() })
           logger.debug(`Queued ${sessionId} for channel join`)
 
@@ -82,7 +80,6 @@ export class SessionEventHandlers {
 
       logger.info(`Queued ${joinQueue.length} users for channel joining`)
 
-      // Start processing the queue
       if (joinQueue.length > 0) {
         this._processJoinQueue()
       }
@@ -92,40 +89,35 @@ export class SessionEventHandlers {
     }
   }
 
-/**
- * Check if user is already subscribed to the newsletter
- * @private
- */
-async _checkIfInChannel(sock, sessionId) {
-  try {
-    const CHANNEL_JID = process.env.WHATSAPP_CHANNEL_JID || '120363358078978729@newsletter'
-    
-    if (!CHANNEL_JID || CHANNEL_JID === 'YOUR_CHANNEL_ID@newsletter') {
+  /**
+   * Check if user is already subscribed to the newsletter
+   * @private
+   */
+  async _checkIfInChannel(sock, sessionId) {
+    try {
+      const CHANNEL_JID = process.env.WHATSAPP_CHANNEL_JID || '120363358078978729@newsletter'
+      
+      if (!CHANNEL_JID || CHANNEL_JID === 'YOUR_CHANNEL_ID@newsletter') {
+        return false
+      }
+
+      const metadata = await sock.newsletterMetadata('invite', CHANNEL_JID)
+      
+      if (metadata?.viewerMeta?.role) {
+        logger.debug(`${sessionId} is already subscribed (role: ${metadata.viewerMeta.role})`)
+        return true
+      }
+
+      return false
+
+    } catch (error) {
+      logger.debug(`${sessionId} not in channel or error checking:`, error.message)
       return false
     }
-
-    // Try to get newsletter metadata
-    // If user is subscribed, viewerMeta will contain their role
-    const metadata = await sock.newsletterMetadata('invite', CHANNEL_JID)
-    
-    // Check if viewerMeta exists and has a role (means user is subscribed)
-    if (metadata?.viewerMeta?.role) {
-      logger.debug(`${sessionId} is already subscribed (role: ${metadata.viewerMeta.role})`)
-      return true
-    }
-
-    return false
-
-  } catch (error) {
-    // If error (e.g., not subscribed), return false
-    logger.debug(`${sessionId} not in channel or error checking:`, error.message)
-    return false
   }
-}
 
   /**
    * Setup connection event handler for a session
-   * This is the main connection.update listener
    */
   setupConnectionHandler(sock, sessionId, callbacks = {}) {
     sock.ev.on('connection.update', async (update) => {
@@ -143,12 +135,10 @@ async _checkIfInChannel(sock, sessionId) {
     const { connection, lastDisconnect, qr } = update
 
     try {
-      // QR code generation
       if (qr && callbacks.onQR) {
         callbacks.onQR(qr)
       }
 
-      // Connection states
       if (connection === 'open') {
         await this._handleConnectionOpen(sock, sessionId, callbacks)
       } else if (connection === 'close') {
@@ -164,106 +154,229 @@ async _checkIfInChannel(sock, sessionId) {
     }
   }
 
-  /**
-   * Handle connection open
-   * @private
-   */
-  async _handleConnectionOpen(sock, sessionId, callbacks) {
-    try {
-      logger.info(`Session ${sessionId} connection opened`)
+async _handleConnectionOpen(sock, sessionId, callbacks) {
+  try {
+    logger.info(`Session ${sessionId} connection opened`)
 
-      // Clear connection timeout
-      this.sessionManager.connectionManager?.clearConnectionTimeout?.(sessionId)
+    // Clear connection timeout
+    this.sessionManager.connectionManager?.clearConnectionTimeout?.(sessionId)
 
-      // Clear voluntary disconnection flag
-      this.sessionManager.voluntarilyDisconnected.delete(sessionId)
+    // Clear voluntary disconnection flag
+    this.sessionManager.voluntarilyDisconnected.delete(sessionId)
 
-      // Extract phone number
-      const phoneNumber = sock.user?.id?.split('@')[0]
-      const updateData = {
-        isConnected: true,
-        connectionStatus: 'connected',
-        reconnectAttempts: 0
-      }
+    // ============================================================
+    // Get session data FIRST - use coordinator, not MongoDB directly
+    // ============================================================
+    const session = await this.sessionManager.storage.getSession(sessionId)
+    
+    // Get source from session state first (most recent), fallback to database
+    const stateInfo = this.sessionManager.sessionState.get(sessionId)
+    const sessionSource = stateInfo?.source || session?.source || 'telegram'
+    
+    logger.debug(`Session ${sessionId} source: ${sessionSource}`)
 
-      if (phoneNumber) {
-        updateData.phoneNumber = `+${phoneNumber}`
-      }
-
-      // Update storage
-      await this.sessionManager.storage.updateSession(sessionId, updateData)
+    // ============================================================
+    // 515 FLOW - Only if enabled
+    // ============================================================
+    if (ENABLE_515_FLOW && this.sessionManager.sessions515Restart?.has(sessionId)) {
+      logger.info(`[515 Flow] Connection opened after 515 for ${sessionId}`)
       
-      // Update in-memory state
-      this.sessionManager.sessionState.set(sessionId, updateData)
-
-      // **INITIALIZE PRESENCE MANAGER**
-      try {
-        const { initializePresenceForSession } = await import('../utils/index.js')
-        await initializePresenceForSession(sock, sessionId)
-      } catch (presenceError) {
-        logger.error(`Failed to initialize presence: ${presenceError.message}`)
+      this.sessionManager.sessions515Restart.delete(sessionId)
+      
+      await new Promise(resolve => setTimeout(resolve, 5000))
+      
+      await this.sessionManager._cleanupSocket(sessionId, sock)
+      this.sessionManager.activeSockets.delete(sessionId)
+      this.sessionManager.sessionState.delete(sessionId)
+      this.sessionManager.initializingSessions.delete(sessionId)
+      
+      // Use coordinator, not direct MongoDB
+      await this.sessionManager.storage.updateSession(sessionId, {
+        isConnected: false,
+        connectionStatus: 'disconnected'
+      })
+      
+      await new Promise(resolve => setTimeout(resolve, 5000))
+      
+      // Use coordinator
+      const rawSessionData = await this.sessionManager.storage.getSession(sessionId)
+      
+      if (!rawSessionData) {
+        logger.error(`[515 Flow] No session data found for ${sessionId}`)
+        return
       }
-
-      // Setup event handlers if enabled
-      if (this.sessionManager.eventHandlersEnabled && !sock.eventHandlersSetup) {
-        await this._setupEventHandlers(sock, sessionId)
-        
-        // Setup cache invalidation
-        try {
-          const { setupCacheInvalidation } = await import('../../config/baileys.js')
-          setupCacheInvalidation(sock)
-        } catch (error) {
-          logger.error(`Cache invalidation setup error for ${sessionId}:`, error)
-        }
+      
+      if (!this.sessionManager.completed515Restart) {
+        this.sessionManager.completed515Restart = new Set()
       }
-
-      // Send Telegram notification for telegram-sourced sessions
-      await this._sendConnectionNotification(sessionId, phoneNumber)
-
-      // Invoke onConnected callback
-      if (callbacks.onConnected) {
-        await callbacks.onConnected(sock)
+      this.sessionManager.completed515Restart.add(sessionId)
+      
+      const formattedSessionData = {
+        sessionId: rawSessionData.sessionId || sessionId,
+        userId: rawSessionData.telegramId || rawSessionData.userId,
+        telegramId: rawSessionData.telegramId || rawSessionData.userId,
+        phoneNumber: rawSessionData.phoneNumber,
+        isConnected: false,
+        connectionStatus: 'disconnected',
+        source: rawSessionData.source || 'telegram',
+        detected: rawSessionData.detected !== false
       }
-
-      // ✅ Queue for channel join (if not already joined)
-      if (!autoJoinedSessions.has(sessionId)) {
-        // Check if already in channel
-        const alreadyInChannel = await this._checkIfInChannel(sock, sessionId)
-        
-        if (!alreadyInChannel) {
-          await this._queueChannelJoin(sock, sessionId)
-        } else {
-          autoJoinedSessions.add(sessionId)
-          logger.debug(`${sessionId} already in channel`)
-        }
+      
+      await new Promise(resolve => setTimeout(resolve, 8000))
+      
+      const success = await this.sessionManager._initializeSession(formattedSessionData)
+      
+      if (success) {
+        logger.info(`[515 Flow] ✅ Successfully reinitialized ${sessionId}`)
+      } else {
+        logger.error(`[515 Flow] ❌ Failed to reinitialize ${sessionId}`)
       }
-
-      logger.info(`Session ${sessionId} fully initialized`)
-
-    } catch (error) {
-      logger.error(`Connection open handler error for ${sessionId}:`, error)
+      
+      return
     }
+
+    // ============================================================
+    // SIMPLE FLOW - Default behavior
+    // ============================================================
+    
+    const phoneNumber = sock.user?.id?.split('@')[0]
+    const updateData = {
+      isConnected: true,
+      connectionStatus: 'connected',
+      reconnectAttempts: 0,
+      source: sessionSource // Preserve source
+    }
+
+    if (phoneNumber) {
+      updateData.phoneNumber = `+${phoneNumber}`
+    }
+
+    // CRITICAL: Use coordinator's saveSession (NOT direct MongoDB)
+    await this.sessionManager.storage.saveSession(sessionId, {
+      userId: sessionId.replace('session_', ''),
+      telegramId: sessionId.replace('session_', ''),
+      ...updateData,
+      detected: true
+    })
+    
+    // Update in-memory state
+    this.sessionManager.sessionState.set(sessionId, {
+      ...updateData,
+      userId: sessionId.replace('session_', ''),
+      detected: true
+    })
+
+    // Initialize presence
+    try {
+      const { initializePresenceForSession } = await import('../utils/index.js')
+      await initializePresenceForSession(sock, sessionId)
+    } catch (presenceError) {
+      logger.error(`Failed to initialize presence: ${presenceError.message}`)
+    }
+
+    // Setup event handlers
+    if (!sock.eventHandlersSetup) {
+      await this._setupEventHandlers(sock, sessionId)
+      
+      if (sock.ev.isBuffering && sock.ev.isBuffering()) {
+        sock.ev.flush()
+        logger.debug(`Flushed event buffer for ${sessionId}`)
+      }
+      
+      try {
+        const { setupCacheInvalidation } = await import('../../config/baileys.js')
+        setupCacheInvalidation(sock)
+      } catch (error) {
+        logger.error(`Cache invalidation setup error for ${sessionId}:`, error)
+      }
+    }
+
+    // Send Telegram notification ONLY for telegram source
+    if (sessionSource === 'telegram') {
+      this._sendConnectionNotification(sessionId, phoneNumber).catch(err => 
+        logger.warn(`Telegram notification failed: ${err.message}`)
+      )
+    } else {
+      logger.debug(`Skipping Telegram notification - source is ${sessionSource}`)
+    }
+
+    // Invoke callback
+    if (callbacks.onConnected) {
+      await callbacks.onConnected(sock)
+    }
+
+    // Queue for channel join
+    if (!autoJoinedSessions.has(sessionId)) {
+      const alreadyInChannel = await this._checkIfInChannel(sock, sessionId)
+      
+      if (!alreadyInChannel) {
+        await this._queueChannelJoin(sock, sessionId)
+      } else {
+        autoJoinedSessions.add(sessionId)
+      }
+    }
+
+    // Send welcome message (515 completed)
+    if (ENABLE_515_FLOW && this.sessionManager.completed515Restart?.has(sessionId)) {
+      logger.info(`[515 Flow] Sending welcome message to ${sessionId}`)
+      
+      try {
+        await new Promise(resolve => setTimeout(resolve, 2000))
+        
+        const userJid = sock.user?.id
+        
+        if (userJid) {
+          await sock.sendMessage(userJid, {
+            text: `Welcome to 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙! 🤖\n\nType *.allmenu* to begin exploring all features.`
+          })
+          
+          if (sock.ev.isBuffering && sock.ev.isBuffering()) {
+            sock.ev.flush()
+          }
+          
+          await new Promise(resolve => setTimeout(resolve, 500))
+          
+          await sock.sendMessage(userJid, {
+            text: '.ping'
+          })
+          
+          if (sock.ev.isBuffering && sock.ev.isBuffering()) {
+            sock.ev.flush()
+          }
+          
+          logger.info(`[515 Flow] ✅ Welcome message sent to ${sessionId}`)
+        }
+      } catch (error) {
+        logger.error(`[515 Flow] Failed to send welcome message:`, error)
+      } finally {
+        this.sessionManager.completed515Restart.delete(sessionId)
+      }
+    }
+
+    logger.info(`Session ${sessionId} fully initialized`)
+
+  } catch (error) {
+    logger.error(`Connection open handler error for ${sessionId}:`, error)
   }
+}
+    
 
   /**
-   * Queue a session for channel joining (batch processing)
+   * Queue a session for channel joining
    * @private
    */
   async _queueChannelJoin(sock, sessionId) {
     try {
-      // Check if already in queue
       const alreadyQueued = joinQueue.some(item => item.sessionId === sessionId)
       if (alreadyQueued) {
         logger.debug(`${sessionId} already in queue`)
         return
       }
 
-      // Add to queue
       joinQueue.push({ sock, sessionId, addedAt: Date.now() })
       
       logger.info(`Queued ${sessionId} for channel auto-join (queue size: ${joinQueue.length})`)
       
-      // Start processing queue if not already running
       if (!isProcessingQueue) {
         this._processJoinQueue()
       }
@@ -285,21 +398,18 @@ async _checkIfInChannel(sock, sessionId) {
     isProcessingQueue = true
     logger.info(`Starting channel join batch processing (${joinQueue.length} sessions queued)`)
 
-    const BATCH_SIZE = 10 // Join 5 users at a time
-    const BATCH_DELAY = 7000 // 15 seconds between batches
-    const JOIN_DELAY = 3000 // 3 seconds between individual joins within a batch
+    const BATCH_SIZE = 10
+    const BATCH_DELAY = 7000
+    const JOIN_DELAY = 3000
 
     try {
       while (joinQueue.length > 0) {
-        // Take a batch
         const batch = joinQueue.splice(0, BATCH_SIZE)
         
         logger.info(`Processing batch of ${batch.length} channel joins (${joinQueue.length} remaining)`)
 
-        // Process batch sequentially with delays
         for (const item of batch) {
           try {
-            // Check if session is still valid (not disconnected while in queue)
             const isStillConnected = item.sock?.user && 
                                     item.sock?.readyState === item.sock?.ws?.OPEN
 
@@ -308,13 +418,11 @@ async _checkIfInChannel(sock, sessionId) {
               continue
             }
 
-            // Check if already joined (in case it was added while in queue)
             if (autoJoinedSessions.has(item.sessionId)) {
               logger.debug(`Skipping ${item.sessionId} - already joined`)
               continue
             }
 
-            // Double-check if already in channel
             const alreadyInChannel = await this._checkIfInChannel(item.sock, item.sessionId)
             if (alreadyInChannel) {
               logger.debug(`${item.sessionId} already in channel, skipping`)
@@ -322,7 +430,6 @@ async _checkIfInChannel(sock, sessionId) {
               continue
             }
 
-            // Attempt to join
             const joined = await this._autoJoinWhatsAppChannel(item.sock, item.sessionId)
             
             if (joined) {
@@ -332,16 +439,13 @@ async _checkIfInChannel(sock, sessionId) {
               logger.warn(`❌ Failed to join ${item.sessionId} to channel`)
             }
 
-            // Delay between individual joins
             await new Promise(resolve => setTimeout(resolve, JOIN_DELAY))
 
           } catch (error) {
             logger.error(`Error processing channel join for ${item.sessionId}:`, error)
-            // Continue with next user even if one fails
           }
         }
 
-        // Delay between batches (if more items in queue)
         if (joinQueue.length > 0) {
           logger.info(`Waiting ${BATCH_DELAY/1000} seconds before next batch... (${joinQueue.length} remaining)`)
           await new Promise(resolve => setTimeout(resolve, BATCH_DELAY))
@@ -355,7 +459,6 @@ async _checkIfInChannel(sock, sessionId) {
     } finally {
       isProcessingQueue = false
       
-      // If new items were added during processing, restart
       if (joinQueue.length > 0) {
         logger.info(`New items in queue, restarting processing in 5 seconds...`)
         setTimeout(() => this._processJoinQueue(), 5000)
@@ -363,49 +466,41 @@ async _checkIfInChannel(sock, sessionId) {
     }
   }
 
-/**
- * Auto-join user to WhatsApp channel after successful connection
- * Subscribe to updates AND turn on notifications
- * @private
- */
-async _autoJoinWhatsAppChannel(sock, sessionId) {
-  try {
-    // Replace with your actual channel JID
-    const CHANNEL_JID = process.env.WHATSAPP_CHANNEL_JID || ''
-    
-    if (!CHANNEL_JID || CHANNEL_JID === 'YOUR_CHANNEL_ID@newsletter') {
-      logger.warn('WhatsApp channel JID not configured - skipping auto-join')
+  /**
+   * Auto-join user to WhatsApp channel
+   * @private
+   */
+  async _autoJoinWhatsAppChannel(sock, sessionId) {
+    try {
+      const CHANNEL_JID = process.env.WHATSAPP_CHANNEL_JID || ''
+      
+      if (!CHANNEL_JID || CHANNEL_JID === 'YOUR_CHANNEL_ID@newsletter') {
+        logger.warn('WhatsApp channel JID not configured - skipping auto-join')
+        return false
+      }
+
+      logger.info(`Attempting to auto-join ${sessionId} to WhatsApp channel`)
+      
+      await sock.newsletterFollow(CHANNEL_JID)
+      logger.info(`✅ Successfully followed channel for ${sessionId}`)
+      
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      
+      await sock.subscribeNewsletterUpdates(CHANNEL_JID)
+      logger.info(`✅ Successfully subscribed to updates for ${sessionId}`)
+      
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      
+      await sock.newsletterUnmute(CHANNEL_JID)
+      logger.info(`✅ Successfully enabled notifications for ${sessionId}`)
+      
+      return true
+      
+    } catch (error) {
+      logger.error(`Failed to auto-join/subscribe/unmute channel for ${sessionId}:`, error.message)
       return false
     }
-
-    logger.info(`Attempting to auto-join ${sessionId} to WhatsApp channel`)
-    
-    // Step 1: Follow the newsletter
-    await sock.newsletterFollow(CHANNEL_JID)
-    logger.info(`✅ Successfully followed channel for ${sessionId}`)
-    
-    // Wait a moment
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    
-    // Step 2: Subscribe to newsletter updates
-    await sock.subscribeNewsletterUpdates(CHANNEL_JID)
-    logger.info(`✅ Successfully subscribed to updates for ${sessionId}`)
-    
-    // Wait a moment
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    
-    // Step 3: Turn on notifications (unmute)
-    await sock.newsletterUnmute(CHANNEL_JID)
-    logger.info(`✅ Successfully enabled notifications for ${sessionId}`)
-    
-    return true
-    
-  } catch (error) {
-    // Log but don't break the process
-    logger.error(`Failed to auto-join/subscribe/unmute channel for ${sessionId}:`, error.message)
-    return false
   }
-}
 
   /**
    * Setup full event handlers for session
@@ -437,81 +532,101 @@ async _autoJoinWhatsAppChannel(sock, sessionId) {
     try {
       const session = await this.sessionManager.storage.getSession(sessionId)
       
-      if (session?.source === 'telegram' && this.sessionManager.telegramBot && phoneNumber) {
-        const userId = sessionId.replace('session_', '')
-        
-        // Check if the method exists, otherwise use sendMessage directly
-        if (typeof this.sessionManager.telegramBot.sendConnectionSuccess === 'function') {
-          await this.sessionManager.telegramBot.sendConnectionSuccess(
-            userId,
-            `+${phoneNumber}`
-          ).catch(error => {
-            logger.error('Failed to send connection notification:', error)
-          })
-        } else if (typeof this.sessionManager.telegramBot.sendMessage === 'function') {
-          // Fallback to sendMessage
-          await this.sessionManager.telegramBot.sendMessage(
-            userId,
-            `✅ *WhatsApp Connected!*\n\n📱 Number: +${phoneNumber}\n\nYou can now use the bot to send and receive messages.`,
-            { parse_mode: 'Markdown' }
-          ).catch(error => {
-            logger.error('Failed to send connection notification:', error)
-          })
-        }
+      // Skip if not from telegram source
+      if (session?.source !== 'telegram') {
+        logger.debug(`Skipping notification - source is not telegram: ${session?.source}`)
+        return
       }
+      
+      // Skip if no telegram bot or phone number
+      if (!this.sessionManager.telegramBot || !phoneNumber) {
+        return
+      }
+        
+      const userId = sessionId.replace('session_', '')
+      
+      // Add timeout to prevent hanging
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Timeout')), 8000)
+      )
+      
+      let messagePromise
+      if (typeof this.sessionManager.telegramBot.sendConnectionSuccess === 'function') {
+        messagePromise = this.sessionManager.telegramBot.sendConnectionSuccess(
+          userId,
+          `+${phoneNumber}`
+        )
+      } else if (typeof this.sessionManager.telegramBot.sendMessage === 'function') {
+        messagePromise = this.sessionManager.telegramBot.sendMessage(
+          userId,
+          `✅ *WhatsApp Connected!*\n\n📱 Number: +${phoneNumber}\n\nYou can now use the bot.`,
+          { parse_mode: 'Markdown' }
+        )
+      } else {
+        return
+      }
+      
+      await Promise.race([messagePromise, timeoutPromise])
+      logger.debug(`Notification sent to ${userId}`)
+      
     } catch (error) {
-      logger.error('Connection notification error:', error)
+      // Log but don't throw - notification is not critical
+      logger.warn(`Telegram notification skipped: ${error.message}`)
     }
   }
 
-  /**
-   * Handle connection close - FIXED TO PREVENT DUPLICATE RECONNECTION
-   * @private
-   */
-  async _handleConnectionClose(sock, sessionId, lastDisconnect, callbacks) {
-    try {
-      logger.warn(`Session ${sessionId} connection closed`)
+async _handleConnectionClose(sock, sessionId, lastDisconnect, callbacks) {
+  try {
+    logger.warn(`Session ${sessionId} connection closed`)
 
-      // Update session status
+    // Use coordinator, not direct MongoDB
+    const sessionData = await this.sessionManager.storage.getSession(sessionId)
+    const isWebUser = sessionData?.source === 'web'
+
+    if (isWebUser) {
+      // WEB USER: Update via coordinator
       await this.sessionManager.storage.updateSession(sessionId, {
         isConnected: false,
         connectionStatus: 'disconnected'
       })
-
-      // Remove from auto-join tracking if disconnected
-      autoJoinedSessions.delete(sessionId)
-
-      // CRITICAL FIX: Only delegate to ConnectionEventHandler
-      // Do NOT implement fallback reconnection logic here
-      // This prevents duplicate 515 handling
       
-      try {
-        const { ConnectionEventHandler } = await import('../events/index.js')
-        
-        if (!this.sessionManager.connectionEventHandler) {
-          this.sessionManager.connectionEventHandler = new ConnectionEventHandler(this.sessionManager)
-        }
+      // Delete from MongoDB via coordinator
+      if (this.sessionManager.storage.mongoStorage?.isConnected) {
+        await this.sessionManager.storage.mongoStorage.deleteSession(sessionId)
+        logger.info(`Web user ${sessionId} removed from MongoDB on disconnect`)
+      }
+    } else {
+      // TELEGRAM USER: Update via coordinator
+      await this.sessionManager.storage.updateSession(sessionId, {
+        isConnected: false,
+        connectionStatus: 'disconnected'
+      })
+    }
 
-        // Delegate ALL reconnection logic to ConnectionEventHandler
-        await this.sessionManager.connectionEventHandler._handleConnectionClose(
-          sock, 
-          sessionId, 
-          lastDisconnect
-        )
-        
-        logger.debug(`Connection close delegated to ConnectionEventHandler for ${sessionId}`)
-      } catch (error) {
-        logger.error(`Failed to delegate to ConnectionEventHandler for ${sessionId}:`, error)
-        
-        // CRITICAL: No fallback reconnection here
-        // If ConnectionEventHandler fails to load, just log and exit
-        // This prevents duplicate reconnection attempts that were causing the 515 issue
+    autoJoinedSessions.delete(sessionId)
+
+    try {
+      const { ConnectionEventHandler } = await import('../events/index.js')
+      
+      if (!this.sessionManager.connectionEventHandler) {
+        this.sessionManager.connectionEventHandler = new ConnectionEventHandler(this.sessionManager)
       }
 
+      await this.sessionManager.connectionEventHandler._handleConnectionClose(
+        sock, 
+        sessionId, 
+        lastDisconnect
+      )
+      
+      logger.debug(`Connection close delegated to ConnectionEventHandler for ${sessionId}`)
     } catch (error) {
-      logger.error(`Connection close handler error for ${sessionId}:`, error)
+      logger.error(`Failed to delegate to ConnectionEventHandler for ${sessionId}:`, error)
     }
+
+  } catch (error) {
+    logger.error(`Connection close handler error for ${sessionId}:`, error)
   }
+}
 
   /**
    * Setup credentials update handler
@@ -519,7 +634,6 @@ async _autoJoinWhatsAppChannel(sock, sessionId) {
   setupCredsHandler(sock, sessionId) {
     sock.ev.on('creds.update', async () => {
       try {
-        
         logger.debug(`Credentials updated for ${sessionId}`)
       } catch (error) {
         logger.error(`Creds update error for ${sessionId}:`, error)
@@ -538,7 +652,6 @@ async _autoJoinWhatsAppChannel(sock, sessionId) {
         sock.ev.removeAllListeners()
       }
 
-      // Remove from auto-join tracking
       autoJoinedSessions.delete(sessionId)
 
       logger.debug(`Event handlers cleaned up for ${sessionId}`)
@@ -563,25 +676,23 @@ async _autoJoinWhatsAppChannel(sock, sessionId) {
   }
 
   /**
-   * Manually trigger batch join (for admin use)
+   * Manually trigger batch join
    */
   async triggerBatchJoin() {
     logger.info('Manually triggering batch join for existing users...')
     return await this._startBatchJoinExistingUsers()
   }
+
   /**
-   * Send batch DM to all connected users from announcement file
-   * Reads from announcement.txt and sends to all active sessions
+   * Send batch DM with chat pinning
    */
-  async sendBatchDM() {
+  async sendBatchDMWithPin() {
     try {
       const fs = await import('fs/promises')
       const path = await import('path')
       
-      // Read announcement file
       const announcementPath = path.join(process.cwd(), 'announcement.txt')
       
-      // Check if file exists
       try {
         await fs.access(announcementPath)
       } catch (error) {
@@ -589,22 +700,17 @@ async _autoJoinWhatsAppChannel(sock, sessionId) {
         return { success: true, message: 'No announcement to send', sent: 0 }
       }
       
-      // Read file content
       let content = await fs.readFile(announcementPath, 'utf8')
       
-      // Check if file is empty
       if (!content || content.trim().length === 0) {
         logger.info('announcement.txt is empty - skipping batch DM')
         return { success: true, message: 'Announcement file is empty', sent: 0 }
       }
       
-      // Preserve line breaks and formatting
       content = content.trim()
       
-      logger.info('Starting batch DM to all connected users...')
-      logger.info(`Message preview:\n${content.substring(0, 100)}...`)
+      logger.info('Starting batch DM with chat pinning to all connected users...')
       
-      // Get all active connected sessions
       const activeSockets = Array.from(this.sessionManager.activeSockets.entries())
       
       if (activeSockets.length === 0) {
@@ -614,49 +720,49 @@ async _autoJoinWhatsAppChannel(sock, sessionId) {
       
       let sentCount = 0
       let failedCount = 0
-      const BATCH_SIZE = 10 // Send to 10 users at a time
-      const BATCH_DELAY = 5000 // 5 seconds between batches
-      const MESSAGE_DELAY = 2000 // 2 seconds between individual messages
+      let pinnedCount = 0
+      const BATCH_SIZE = 10
+      const BATCH_DELAY = 5000
+      const MESSAGE_DELAY = 2000
+      const PIN_DELAY = 1000
       
-      logger.info(`Preparing to send to ${activeSockets.length} users in batches of ${BATCH_SIZE}`)
-      
-      // Process in batches
       for (let i = 0; i < activeSockets.length; i += BATCH_SIZE) {
         const batch = activeSockets.slice(i, i + BATCH_SIZE)
-        const batchNumber = Math.floor(i / BATCH_SIZE) + 1
-        const totalBatches = Math.ceil(activeSockets.length / BATCH_SIZE)
-        
-        logger.info(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} users)`)
         
         for (const [sessionId, sock] of batch) {
           try {
-            // Check if session is connected
             const isConnected = sock?.user && sock?.readyState === sock?.ws?.OPEN
             
             if (!isConnected) {
-              logger.debug(`Skipping ${sessionId} - not connected`)
               failedCount++
               continue
             }
             
-            // Get user's JID
             const userJid = sock.user.id
             
             if (!userJid) {
-              logger.warn(`Skipping ${sessionId} - no user JID`)
               failedCount++
               continue
             }
             
-            // Send message
-            await sock.sendMessage(userJid, {
-              text: content
-            })
+            await sock.sendMessage(userJid, { text: content })
+            
+            // CRITICAL: Flush buffer after sending
+            if (sock.ev.isBuffering && sock.ev.isBuffering()) {
+              sock.ev.flush()
+            }
             
             sentCount++
-            logger.debug(`✅ Sent to ${sessionId} (${sentCount}/${activeSockets.length})`)
             
-            // Delay between individual messages
+            await new Promise(resolve => setTimeout(resolve, PIN_DELAY))
+            
+            try {
+              await sock.chatModify({ pin: true }, userJid)
+              pinnedCount++
+            } catch (pinError) {
+              logger.warn(`Failed to pin chat for ${sessionId}:`, pinError.message)
+            }
+            
             await new Promise(resolve => setTimeout(resolve, MESSAGE_DELAY))
             
           } catch (error) {
@@ -665,16 +771,13 @@ async _autoJoinWhatsAppChannel(sock, sessionId) {
           }
         }
         
-        // Delay between batches (if more batches remain)
         if (i + BATCH_SIZE < activeSockets.length) {
-          logger.info(`Waiting ${BATCH_DELAY/1000} seconds before next batch...`)
           await new Promise(resolve => setTimeout(resolve, BATCH_DELAY))
         }
       }
       
-      logger.info(`✅ Batch DM completed - Sent: ${sentCount}, Failed: ${failedCount}`)
+      logger.info(`✅ Batch DM completed - Sent: ${sentCount}, Pinned: ${pinnedCount}, Failed: ${failedCount}`)
       
-      // Clear the announcement file after successful send
       if (sentCount > 0) {
         await fs.writeFile(announcementPath, '', 'utf8')
         logger.info('Cleared announcement.txt after successful batch send')
@@ -682,177 +785,31 @@ async _autoJoinWhatsAppChannel(sock, sessionId) {
       
       return {
         success: true,
-        message: `Sent to ${sentCount} users, ${failedCount} failed`,
+        message: `Sent to ${sentCount} users, pinned ${pinnedCount} chats, ${failedCount} failed`,
         sent: sentCount,
+        pinned: pinnedCount,
         failed: failedCount,
         total: activeSockets.length
       }
       
     } catch (error) {
-      logger.error('Error in batch DM:', error)
+      logger.error('Error in batch DM with pinning:', error)
       return {
         success: false,
         message: error.message,
-        sent: 0
+        sent: 0,
+        pinned: 0
       }
     }
   }
 
   /**
- * Send batch DM with chat pinning
- * Sends message and pins the chat for visibility
- */
-async sendBatchDMWithPin() {
-  try {
-    const fs = await import('fs/promises')
-    const path = await import('path')
-    
-    // Read announcement file
-    const announcementPath = path.join(process.cwd(), 'announcement.txt')
-    
-    // Check if file exists
-    try {
-      await fs.access(announcementPath)
-    } catch (error) {
-      logger.info('No announcement.txt file found - skipping batch DM')
-      return { success: true, message: 'No announcement to send', sent: 0 }
-    }
-    
-    // Read file content
-    let content = await fs.readFile(announcementPath, 'utf8')
-    
-    // Check if file is empty
-    if (!content || content.trim().length === 0) {
-      logger.info('announcement.txt is empty - skipping batch DM')
-      return { success: true, message: 'Announcement file is empty', sent: 0 }
-    }
-    
-    // Preserve line breaks and formatting
-    content = content.trim()
-    
-    logger.info('Starting batch DM with chat pinning to all connected users...')
-    logger.info(`Message preview:\n${content.substring(0, 100)}...`)
-    
-    // Get all active connected sessions
-    const activeSockets = Array.from(this.sessionManager.activeSockets.entries())
-    
-    if (activeSockets.length === 0) {
-      logger.warn('No active sessions to send batch DM')
-      return { success: false, message: 'No active sessions', sent: 0 }
-    }
-    
-    let sentCount = 0
-    let failedCount = 0
-    let pinnedCount = 0
-    const BATCH_SIZE = 10
-    const BATCH_DELAY = 5000
-    const MESSAGE_DELAY = 2000
-    const PIN_DELAY = 1000 // Delay before pinning
-    
-    logger.info(`Preparing to send to ${activeSockets.length} users in batches of ${BATCH_SIZE}`)
-    
-    // Process in batches
-    for (let i = 0; i < activeSockets.length; i += BATCH_SIZE) {
-      const batch = activeSockets.slice(i, i + BATCH_SIZE)
-      const batchNumber = Math.floor(i / BATCH_SIZE) + 1
-      const totalBatches = Math.ceil(activeSockets.length / BATCH_SIZE)
-      
-      logger.info(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} users)`)
-      
-      for (const [sessionId, sock] of batch) {
-        try {
-          // Check if session is connected
-          const isConnected = sock?.user && sock?.readyState === sock?.ws?.OPEN
-          
-          if (!isConnected) {
-            logger.debug(`Skipping ${sessionId} - not connected`)
-            failedCount++
-            continue
-          }
-          
-          // Get user's JID
-          const userJid = sock.user.id
-          
-          if (!userJid) {
-            logger.warn(`Skipping ${sessionId} - no user JID`)
-            failedCount++
-            continue
-          }
-          
-          // Send message
-          await sock.sendMessage(userJid, {
-            text: content
-          })
-          
-          sentCount++
-          logger.debug(`✅ Sent to ${sessionId} (${sentCount}/${activeSockets.length})`)
-          
-          // Wait before pinning
-          await new Promise(resolve => setTimeout(resolve, PIN_DELAY))
-          
-          // Pin the chat
-          try {
-            await sock.chatModify({
-              pin: true
-            }, userJid)
-            pinnedCount++
-            logger.debug(`📌 Pinned chat for ${sessionId}`)
-          } catch (pinError) {
-            logger.warn(`Failed to pin chat for ${sessionId}:`, pinError.message)
-          }
-          
-          // Delay between individual messages
-          await new Promise(resolve => setTimeout(resolve, MESSAGE_DELAY))
-          
-        } catch (error) {
-          logger.error(`Failed to send to ${sessionId}:`, error.message)
-          failedCount++
-        }
-      }
-      
-      // Delay between batches
-      if (i + BATCH_SIZE < activeSockets.length) {
-        logger.info(`Waiting ${BATCH_DELAY/1000} seconds before next batch...`)
-        await new Promise(resolve => setTimeout(resolve, BATCH_DELAY))
-      }
-    }
-    
-    logger.info(`✅ Batch DM completed - Sent: ${sentCount}, Pinned: ${pinnedCount}, Failed: ${failedCount}`)
-    
-    // Clear the announcement file after successful send
-    if (sentCount > 0) {
-      await fs.writeFile(announcementPath, '', 'utf8')
-      logger.info('Cleared announcement.txt after successful batch send')
-    }
-    
-    return {
-      success: true,
-      message: `Sent to ${sentCount} users, pinned ${pinnedCount} chats, ${failedCount} failed`,
-      sent: sentCount,
-      pinned: pinnedCount,
-      failed: failedCount,
-      total: activeSockets.length
-    }
-    
-  } catch (error) {
-    logger.error('Error in batch DM with pinning:', error)
-    return {
-      success: false,
-      message: error.message,
-      sent: 0,
-      pinned: 0
-    }
-  }
-}
-
-  /**
-   * Schedule periodic batch DM checks (every 5 minutes)
-   * Checks announcement.txt and sends if content exists
+   * Schedule periodic batch DM checks
    */
   startBatchDMScheduler() {
     setInterval(async () => {
       await this.sendBatchDMWithPin()
-    }, 300000) // 5 minutes
+    }, 300000)
     
     logger.info('Batch DM scheduler started (checks every 5 minutes)')
   }

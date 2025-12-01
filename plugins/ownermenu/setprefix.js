@@ -59,17 +59,6 @@ export default {
       // Update prefix in database
       await UserQueries.updateUserPrefix(telegramId, newPrefix)
 
-      // ✅ IMMEDIATELY UPDATE IN-MEMORY CACHE (NO WAITING!)
-      try {
-        const { getMessageProcessor } = await import('../../whatsapp/index.js')
-        const processor = await getMessageProcessor()
-        processor.updatePrefixCache(telegramId, newPrefix)
-        logger.info(`✅ Prefix cache updated immediately for user ${telegramId}`)
-      } catch (cacheError) {
-        logger.warn('Failed to update prefix cache immediately:', cacheError)
-        // Continue anyway - it will be reloaded in 10 minutes
-      }
-
       // Prepare response based on what was set
       let response = "✅ *Prefix Updated Successfully!*\n\n"
 
@@ -86,7 +75,7 @@ export default {
           `• \`${newPrefix}ping\`\n` +
           `• \`${newPrefix}antilink on\`\n` +
           `• \`${newPrefix}menu\`\n\n` +
-          `✅ *Prefix active immediately!* No restart needed.\n\n`
+          `⚠️ *Restart Required:* Please send any message to refresh your prefix.\n\n`
       }
 
       response += `> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
