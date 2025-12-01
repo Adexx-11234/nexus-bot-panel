@@ -95,6 +95,58 @@ app.get("/health", async (req, res) => {
   })
 })
 
+// RAM monitoring endpoint
+app.get("/api/memory", async (req, res) => {
+  try {
+    const ramMonitor = getRAMMonitor()
+    const memUsage = process.memoryUsage()
+    const uptime = process.uptime()
+    
+    // Get storage stats
+    let storageStats = null
+    try {
+      if (sessionManager?.storage) {
+        storageStats = sessionManager.storage.getStats()
+      }
+    } catch (error) {
+      storageStats = { error: error.message }
+    }
+    
+    res.json({
+      timestamp: new Date().toISOString(),
+      uptime: `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m`,
+      memory: {
+        rss: `${(memUsage.rss / 1024 / 1024).toFixed(2)} MB`,
+        heapUsed: `${(memUsage.heapUsed / 1024 / 1024).toFixed(2)} MB`,
+        heapTotal: `${(memUsage.heapTotal / 1024 / 1024).toFixed(2)} MB`,
+        external: `${(memUsage.external / 1024 / 1024).toFixed(2)} MB`,
+        arrayBuffers: `${(memUsage.arrayBuffers / 1024 / 1024).toFixed(2)} MB`
+      },
+      storage: storageStats,
+      activeHandles: process._getActiveHandles().length,
+      activeRequests: process._getActiveRequests().length,
+      activeSessions: sessionManager?.activeSockets?.size || 0
+    })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Force memory snapshot on demand
+app.post("/api/memory/snapshot", async (req, res) => {
+  try {
+    const ramMonitor = getRAMMonitor()
+    await ramMonitor.captureMemorySnapshot()
+    res.json({ 
+      success: true, 
+      message: 'Memory snapshot captured',
+      location: './memory-logs/'
+    })
+  } catch (error) {
+    res.status(500).json({ error: error.message })
+  }
+})
+
 // Status endpoint
 app.get("/api/status", async (req, res) => {
   const stats = sessionManager ? await safeAsync(() => sessionManager.getStats(), {}) : {}
