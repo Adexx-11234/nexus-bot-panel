@@ -553,35 +553,77 @@ async _getActiveSessionsFromDatabase() {
     }
   }
 
-  /**
-   * Cleanup socket
-   * @private
-   */
-  async _cleanupSocket(sessionId, sock) {
-    try {
-      // Remove event listeners
-      if (sock.ev && typeof sock.ev.removeAllListeners === 'function') {
+/**
+ * Cleanup socket - AGGRESSIVE cleanup to prevent leaks
+ */
+async _cleanupSocket(sessionId, sock) {
+  if (!sock) return
+  
+  try {
+    logger.debug(`Cleaning up socket for ${sessionId}`)
+
+    
+    // CRITICAL: Remove ALL event listeners first
+    if (sock.ev) {
+      try { 
+        if (sock.ev.isBuffering && sock.ev.isBuffering()) {
+            sock.ev.flush()
+          }
+        // Get all event names
+        const events = sock.ev.eventNames ? sock.ev.eventNames() : []
+        
+        // Remove all listeners for each event
+        for (const event of events) {
+          sock.ev.removeAllListeners(event)
+        }
+        
+        // Force remove any remaining listeners
         sock.ev.removeAllListeners()
+        
+      } catch (error) {
+        logger.warn(`Event listener cleanup warning for ${sessionId}:`, error.message)
       }
-
-      // Close WebSocket
-      if (sock.ws && sock.ws.readyState === sock.ws.OPEN) {
-        sock.ws.close(1000, 'Cleanup')
-      }
-
-      // Clear socket properties
-      sock.user = null
-      sock.eventHandlersSetup = false
-      sock.connectionCallbacks = null
-
-      logger.debug(`Socket cleaned up for ${sessionId}`)
-      return true
-
-    } catch (error) {
-      logger.error(`Failed to cleanup socket for ${sessionId}:`, error)
-      return false
     }
+    
+    // Close the WebSocket connection
+    if (sock.ws) {
+      try {
+        if (typeof sock.ws.terminate === 'function') {
+          sock.ws.terminate()
+        }
+        if (typeof sock.ws.close === 'function') {
+          sock.ws.close()
+        }
+        sock.ws = null
+      } catch (error) {
+        logger.warn(`WebSocket close warning for ${sessionId}:`, error.message)
+      }
+    }
+    
+    // Close the main socket
+    try {
+      if (typeof sock.end === 'function') {
+        sock.end()
+      }
+      if (typeof sock.close === 'function') {
+        sock.close()
+      }
+      if (typeof sock.destroy === 'function') {
+        sock.destroy()
+      }
+    } catch (error) {
+      logger.warn(`Socket close warning for ${sessionId}:`, error.message)
+    }
+    
+    // Nullify to help garbage collection
+    sock = null
+    
+    logger.debug(`Socket cleanup completed for ${sessionId}`)
+    
+  } catch (error) {
+    logger.error(`Socket cleanup error for ${sessionId}:`, error.message)
   }
+}
 
   /**
    * Perform complete user cleanup (logout)
