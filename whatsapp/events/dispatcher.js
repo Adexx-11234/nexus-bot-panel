@@ -63,84 +63,207 @@ export class EventDispatcher {
     }
   }
 
+  /**
+   * Setup message event listeners with optimized filtering
+   */
   _setupMessageEvents(sock, sessionId) {
-      
+    // ============= MESSAGES_UPSERT =============
     sock.ev.on(EventTypes.MESSAGES_UPSERT, async (messageUpdate) => {
-        await this.messageHandler.handleMessagesUpsert(sock, sessionId, messageUpdate)
+      try {
+        // Fast filter: Remove useless messages before processing
+        if (messageUpdate.messages && messageUpdate.messages.length > 0) {
+          messageUpdate.messages = messageUpdate.messages.filter(msg => {
+            // Filter stub type 2 (decryption pending - actual message arrives later)
+            if (msg.messageStubType === 2) {
+              return false
+            }
+            
+            // Filter protocol messages EXCEPT REVOKE (type 0 = deleted messages)
+            if (msg.message?.protocolMessage) {
+              const protocolType = msg.message.protocolMessage.type
+              
+              // Keep REVOKE messages (type 0)
+              if (protocolType === 0) {
+                return true
+              }
+              
+              // Filter types: 1-5 (PEER_DATA, HISTORY_SYNC, APP_STATE_SYNC, etc.)
+              if ([1, 2, 3, 4, 5].includes(protocolType)) {
+                return false
+              }
+            }
+            
+            return true
+          })
+          
+          // Skip if no messages left after filtering
+          if (messageUpdate.messages.length === 0) {
+            return
+          }
+        }
+        
+        // Fire and forget - process without blocking
+        this.messageHandler.handleMessagesUpsert(sock, sessionId, messageUpdate)
+          .catch(err => logger.error(`Error processing message upsert for ${sessionId}:`, err))
+        
+      } catch (error) {
+        logger.error(`Error in MESSAGES_UPSERT handler for ${sessionId}:`, error)
+      }
     })
- 
 
+    // ============= MESSAGES_UPDATE =============
     sock.ev.on(EventTypes.MESSAGES_UPDATE, async (updates) => {
-      await this.messageHandler.handleMessagesUpdate(sock, sessionId, updates)
+      try {
+        // Fast filter: Remove useless updates
+        if (updates && updates.length > 0) {
+          updates = updates.filter(update => {
+            // Skip empty updates
+            if (!update.update) {
+              return false
+            }
+            
+            // Skip status-only updates (read receipts)
+            const updateKeys = Object.keys(update.update)
+            if (updateKeys.length === 1 && updateKeys[0] === 'status') {
+              return false
+            }
+            
+            // Skip edited message placeholders with null content
+            if (update.update.message?.editedMessage?.message === null) {
+              return false
+            }
+            
+            return true
+          })
+          
+          // Skip if no updates left
+          if (updates.length === 0) {
+            return
+          }
+        }
+        
+        // Fire and forget
+        this.messageHandler.handleMessagesUpdate(sock, sessionId, updates)
+          .catch(err => logger.error(`Error processing message update for ${sessionId}:`, err))
+        
+      } catch (error) {
+        logger.error(`Error in MESSAGES_UPDATE handler for ${sessionId}:`, error)
+      }
     })
 
+    // ============= MESSAGES_DELETE =============
     sock.ev.on(EventTypes.MESSAGES_DELETE, async (deletions) => {
-      await this.messageHandler.handleMessagesDelete(sock, sessionId, deletions)
+      try {
+        // Fire and forget
+        this.messageHandler.handleMessagesDelete(sock, sessionId, deletions)
+          .catch(err => logger.error(`Error processing message delete for ${sessionId}:`, err))
+        
+      } catch (error) {
+        logger.error(`Error in MESSAGES_DELETE handler for ${sessionId}:`, error)
+      }
     })
 
+    // ============= MESSAGES_REACTION =============
     sock.ev.on(EventTypes.MESSAGES_REACTION, async (reactions) => {
-      await this.messageHandler.handleMessagesReaction(sock, sessionId, reactions)
+      try {
+        // Fire and forget
+        this.messageHandler.handleMessagesReaction(sock, sessionId, reactions)
+          .catch(err => logger.error(`Error processing message reaction for ${sessionId}:`, err))
+        
+      } catch (error) {
+        logger.error(`Error in MESSAGES_REACTION handler for ${sessionId}:`, error)
+      }
     })
   }
 
+  /**
+   * Setup group event listeners
+   */
   _setupGroupEvents(sock, sessionId) {
     sock.ev.on(EventTypes.GROUPS_UPSERT, async (groups) => {
-      await this.groupHandler.handleGroupsUpsert(sock, sessionId, groups)
+      this.groupHandler.handleGroupsUpsert(sock, sessionId, groups)
+        .catch(err => logger.error(`Error in GROUPS_UPSERT for ${sessionId}:`, err))
     })
 
     sock.ev.on(EventTypes.GROUPS_UPDATE, async (updates) => {
-      await this.groupHandler.handleGroupsUpdate(sock, sessionId, updates)
+      this.groupHandler.handleGroupsUpdate(sock, sessionId, updates)
+        .catch(err => logger.error(`Error in GROUPS_UPDATE for ${sessionId}:`, err))
     })
 
     sock.ev.on(EventTypes.GROUP_PARTICIPANTS_UPDATE, async (update) => {
-      await this.groupHandler.handleParticipantsUpdate(sock, sessionId, update)
+      this.groupHandler.handleParticipantsUpdate(sock, sessionId, update)
+        .catch(err => logger.error(`Error in GROUP_PARTICIPANTS_UPDATE for ${sessionId}:`, err))
     })
   }
 
+  /**
+   * Setup contact event listeners
+   */
   _setupContactEvents(sock, sessionId) {
     sock.ev.on(EventTypes.CONTACTS_UPSERT, async (contacts) => {
-      await this.connectionHandler.handleContactsUpsert(sock, sessionId, contacts)
+      this.connectionHandler.handleContactsUpsert(sock, sessionId, contacts)
+        .catch(err => logger.error(`Error in CONTACTS_UPSERT for ${sessionId}:`, err))
     })
 
     sock.ev.on(EventTypes.CONTACTS_UPDATE, async (updates) => {
-      await this.connectionHandler.handleContactsUpdate(sock, sessionId, updates)
+      this.connectionHandler.handleContactsUpdate(sock, sessionId, updates)
+        .catch(err => logger.error(`Error in CONTACTS_UPDATE for ${sessionId}:`, err))
     })
   }
 
+  /**
+   * Setup chat event listeners
+   */
   _setupChatEvents(sock, sessionId) {
     sock.ev.on(EventTypes.CHATS_UPSERT, async (chats) => {
-      await this.connectionHandler.handleChatsUpsert(sock, sessionId, chats)
+      this.connectionHandler.handleChatsUpsert(sock, sessionId, chats)
+        .catch(err => logger.error(`Error in CHATS_UPSERT for ${sessionId}:`, err))
     })
 
     sock.ev.on(EventTypes.CHATS_UPDATE, async (updates) => {
-      await this.connectionHandler.handleChatsUpdate(sock, sessionId, updates)
+      this.connectionHandler.handleChatsUpdate(sock, sessionId, updates)
+        .catch(err => logger.error(`Error in CHATS_UPDATE for ${sessionId}:`, err))
     })
 
     sock.ev.on(EventTypes.CHATS_DELETE, async (deletions) => {
-      await this.connectionHandler.handleChatsDelete(sock, sessionId, deletions)
+      this.connectionHandler.handleChatsDelete(sock, sessionId, deletions)
+        .catch(err => logger.error(`Error in CHATS_DELETE for ${sessionId}:`, err))
     })
   }
 
+  /**
+   * Setup presence event listeners
+   */
   _setupPresenceEvents(sock, sessionId) {
     sock.ev.on(EventTypes.PRESENCE_UPDATE, async (update) => {
-      await this.connectionHandler.handlePresenceUpdate(sock, sessionId, update)
+      this.connectionHandler.handlePresenceUpdate(sock, sessionId, update)
+        .catch(err => logger.error(`Error in PRESENCE_UPDATE for ${sessionId}:`, err))
     })
   }
 
+  /**
+   * Setup utility event listeners
+   */
   _setupUtilityEvents(sock, sessionId) {
     sock.ev.on(EventTypes.CALL, async (calls) => {
-      await this.utilityHandler.handleCalls(sock, sessionId, calls)
+      this.utilityHandler.handleCalls(sock, sessionId, calls)
+        .catch(err => logger.error(`Error in CALL for ${sessionId}:`, err))
     })
 
     sock.ev.on(EventTypes.BLOCKLIST_SET, async (blocklist) => {
-      await this.utilityHandler.handleBlocklistSet(sock, sessionId, blocklist)
+      this.utilityHandler.handleBlocklistSet(sock, sessionId, blocklist)
+        .catch(err => logger.error(`Error in BLOCKLIST_SET for ${sessionId}:`, err))
     })
 
     sock.ev.on(EventTypes.BLOCKLIST_UPDATE, async (update) => {
-      await this.utilityHandler.handleBlocklistUpdate(sock, sessionId, update)
+      this.utilityHandler.handleBlocklistUpdate(sock, sessionId, update)
+        .catch(err => logger.error(`Error in BLOCKLIST_UPDATE for ${sessionId}:`, err))
     })
   }
 
+  /**
+   * Cleanup handlers for a session
+   */
   cleanup(sessionId) {
     try {
       const handlers = this.handlers.get(sessionId)
@@ -156,6 +279,9 @@ export class EventDispatcher {
     }
   }
 
+  /**
+   * Get dispatcher statistics
+   */
   getStats() {
     return {
       activeSessions: this.handlers.size,

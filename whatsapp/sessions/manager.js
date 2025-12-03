@@ -423,13 +423,13 @@ async _getActiveSessionsFromDatabase() {
       // Store socket and state
       this.activeSockets.set(sessionId, sock)
       sock.connectionCallbacks = callbacks
-
+        
       this.sessionState.set(sessionId, {
         userId: userIdStr,
         phoneNumber,
         source,
-        isConnected: false,
-        connectionStatus: 'connecting',
+        isConnected: true,
+        connectionStatus: 'connected',
         callbacks: callbacks
       })
 
@@ -447,8 +447,8 @@ async _getActiveSessionsFromDatabase() {
         userId: userIdStr,
         telegramId: userIdStr,
         phoneNumber,
-        isConnected: false,
-        connectionStatus: 'connecting',
+        isConnected: true,
+        connectionStatus: 'connected',
         reconnectAttempts: 0,
         source: source,
         detected: source === 'web' ? false : true
@@ -553,75 +553,43 @@ async _getActiveSessionsFromDatabase() {
     }
   }
 
-/**
- * Cleanup socket - AGGRESSIVE cleanup to prevent leaks
- */
+  /**
+   * Cleanup socket
+   * @private
+   */
 async _cleanupSocket(sessionId, sock) {
-  if (!sock) return
-  
   try {
-    logger.debug(`Cleaning up socket for ${sessionId}`)
+    // ✅ Cleanup session store first
+    if (sock._storeCleanup) {
+      sock._storeCleanup()
+    }
+    
+    // Delete store from config - FIXED IMPORT PATH
+    const { deleteSessionStore } = await import('../core/index.js')  // ✅ This is CORRECT
+    deleteSessionStore(sessionId)
+    
+    // Remove event listeners
+    if (sock.ev && typeof sock.ev.removeAllListeners === 'function') {
+      sock.ev.removeAllListeners()
+    }
 
-    
-    // CRITICAL: Remove ALL event listeners first
-    if (sock.ev) {
-      try { 
-        if (sock.ev.isBuffering && sock.ev.isBuffering()) {
-            sock.ev.flush()
-          }
-        // Get all event names
-        const events = sock.ev.eventNames ? sock.ev.eventNames() : []
-        
-        // Remove all listeners for each event
-        for (const event of events) {
-          sock.ev.removeAllListeners(event)
-        }
-        
-        // Force remove any remaining listeners
-        sock.ev.removeAllListeners()
-        
-      } catch (error) {
-        logger.warn(`Event listener cleanup warning for ${sessionId}:`, error.message)
-      }
+    // Close WebSocket
+    if (sock.ws && sock.ws.readyState === sock.ws.OPEN) {
+      sock.ws.close(1000, 'Cleanup')
     }
-    
-    // Close the WebSocket connection
-    if (sock.ws) {
-      try {
-        if (typeof sock.ws.terminate === 'function') {
-          sock.ws.terminate()
-        }
-        if (typeof sock.ws.close === 'function') {
-          sock.ws.close()
-        }
-        sock.ws = null
-      } catch (error) {
-        logger.warn(`WebSocket close warning for ${sessionId}:`, error.message)
-      }
-    }
-    
-    // Close the main socket
-    try {
-      if (typeof sock.end === 'function') {
-        sock.end()
-      }
-      if (typeof sock.close === 'function') {
-        sock.close()
-      }
-      if (typeof sock.destroy === 'function') {
-        sock.destroy()
-      }
-    } catch (error) {
-      logger.warn(`Socket close warning for ${sessionId}:`, error.message)
-    }
-    
-    // Nullify to help garbage collection
-    sock = null
-    
-    logger.debug(`Socket cleanup completed for ${sessionId}`)
-    
+
+    // Clear socket properties
+    sock.user = null
+    sock.eventHandlersSetup = false
+    sock.connectionCallbacks = null
+    sock._sessionStore = null  // ✅ This is CORRECT
+
+    logger.debug(`Socket cleaned up for ${sessionId}`)
+    return true
+
   } catch (error) {
-    logger.error(`Socket cleanup error for ${sessionId}:`, error.message)
+    logger.error(`Failed to cleanup socket for ${sessionId}:`, error)
+    return false
   }
 }
 

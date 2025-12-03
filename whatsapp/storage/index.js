@@ -6,8 +6,7 @@ export { FileManager } from './file.js'
 export { 
   useMongoDBAuthState, 
   cleanupSessionAuthData, 
-  hasValidAuthData,
-  getAuthCacheStats
+  hasValidAuthData
 } from './auth-state.js'
 
 // Re-export singleton functions

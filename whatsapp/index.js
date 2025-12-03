@@ -9,8 +9,7 @@
 export {
   WhatsAppClient,
   ConnectionManager,
-  baileysConfig,
-  getBaileysSocket,
+  baileysConfig,  // ✅ Added comma
   createBaileysSocket,
   setupSocketDefaults
 } from './core/index.js'
@@ -181,7 +180,7 @@ export {
   handleGroupParticipantsUpdate,
   WhatsAppEventHandler,
   messageProcessor,
-  getMessageProcessor  // ✅ ADDED: Export message processor getter
+  getMessageProcessor
 } from './handlers/index.js'
 
 // ============================================================================
@@ -272,35 +271,9 @@ export async function quickSetup(telegramBot) {
 // DEFAULT EXPORT - For backward compatibility
 // ============================================================================
 export default {
-  // Re-export everything that was already exported
-  ...await (async () => {
-    const core = await import('./core/index.js')
-    const sessions = await import('./sessions/index.js')
-    const storage = await import('./storage/index.js')
-    const events = await import('./events/index.js')
-    const messages = await import('./messages/index.js')
-    const groups = await import('./groups/index.js')
-    const contacts = await import('./contacts/index.js')
-    const utils = await import('./utils/index.js')
-    const handlers = await import('./handlers/index.js')
-    const config = await import('../config/baileys.js')
-    
-    return {
-      ...core,
-      ...sessions,
-      ...storage,
-      ...events,
-      ...messages,
-      ...groups,
-      ...contacts,
-      ...utils,
-      ...handlers,
-      ...config,
-      VERSION,
-      MODULE_NAME,
-      getModuleInfo,
-      initializeWhatsAppModule,
-      quickSetup
-    }
-  })()
+  VERSION,
+  MODULE_NAME,
+  getModuleInfo,
+  initializeWhatsAppModule,
+  quickSetup
 }

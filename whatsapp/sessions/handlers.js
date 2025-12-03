@@ -274,13 +274,29 @@ async _handleConnectionOpen(sock, sessionId, callbacks) {
       logger.error(`Failed to initialize presence: ${presenceError.message}`)
     }
 
-    // Setup event handlers
+ // ✅ CRITICAL FIX: Setup event handlers but DON'T flush immediately
     if (!sock.eventHandlersSetup) {
       await this._setupEventHandlers(sock, sessionId)
       
+      // ✅ CRITICAL: Wait for store to process initial sync data AND establish sessions
+      // This prevents flushing messages before decryption sessions are ready
+      logger.info(`⏳ Waiting for store and session establishment for ${sessionId}`)
+      
+      // Wait 5 seconds for store to load message history
+      await new Promise(resolve => setTimeout(resolve, 5000))
+      
+      // ✅ Check if store is ready by verifying it has loaded data
+      const store = sock._sessionStore
+      if (store) {
+        logger.debug(`📊 Store ready for ${sessionId}`)
+      } else {
+        logger.warn(`⚠️ Store not found for ${sessionId}, events may have decryption delays`)
+      }
+      
+      // ✅ Now it's safe to flush the buffer
       if (sock.ev.isBuffering && sock.ev.isBuffering()) {
+        logger.info(`📤 Flushing event buffer for ${sessionId}`)
         sock.ev.flush()
-        logger.debug(`Flushed event buffer for ${sessionId}`)
       }
       
       try {
@@ -575,56 +591,32 @@ async _handleConnectionOpen(sock, sessionId, callbacks) {
     }
   }
 
+ /**
+   * Handle connection close
+   * @private
+   */
 async _handleConnectionClose(sock, sessionId, lastDisconnect, callbacks) {
   try {
     logger.warn(`Session ${sessionId} connection closed`)
 
-    // Import disconnect configuration
-    const { getDisconnectConfig } = await import('../events/index.js')
-    const { Boom } = await import('@hapi/boom')
-    
-    // Extract disconnect reason
-    const error = lastDisconnect?.error
-    const statusCode = error instanceof Boom ? error.output?.statusCode : null
-    
-    // Get configuration for this disconnect reason
-    const config = getDisconnectConfig(statusCode)
-    
-    logger.info(`📋 Disconnect config for ${sessionId}: shouldReconnect=${config.shouldReconnect}, isPermanent=${config.isPermanent}`)
-
-    // Use coordinator, not direct MongoDB
+    // Get session data to check source
     const sessionData = await this.sessionManager.storage.getSession(sessionId)
     const isWebUser = sessionData?.source === 'web'
 
     if (isWebUser) {
-      logger.info(`🌐 Web user ${sessionId} disconnect - Status: ${statusCode}`)
+      // WEB USER: Only update PostgreSQL, delete from MongoDB
+      await this.sessionManager.storage.updateSession(sessionId, {
+        isConnected: false,
+        connectionStatus: 'disconnected'
+      })
       
-      // Only delete if it's a PERMANENT disconnect
-      if (config.isPermanent && !config.shouldReconnect) {
-        logger.info(`🗑️  Permanent disconnect - removing web user ${sessionId} from MongoDB`)
-        
-        // Update via coordinator
-        await this.sessionManager.storage.updateSession(sessionId, {
-          isConnected: false,
-          connectionStatus: 'disconnected'
-        })
-        
-        // Delete from MongoDB via coordinator
-        if (this.sessionManager.storage.mongoStorage?.isConnected) {
-          await this.sessionManager.storage.mongoStorage.deleteSession(sessionId)
-          logger.info(`Web user ${sessionId} removed from MongoDB on permanent disconnect`)
-        }
-      } else {
-        logger.info(`🔄 Reconnectable disconnect - keeping web user ${sessionId} in MongoDB`)
-        
-        // Just update status, don't delete
-        await this.sessionManager.storage.updateSession(sessionId, {
-          isConnected: false,
-          connectionStatus: 'disconnected'
-        })
+      // Delete from MongoDB sessions collection
+      if (this.sessionManager.storage.mongoStorage?.isConnected) {
+        await this.sessionManager.storage.mongoStorage.deleteSession(sessionId)
+        logger.info(`Web user ${sessionId} removed from MongoDB on disconnect`)
       }
     } else {
-      // TELEGRAM USER: Just update status
+      // TELEGRAM USER: Update both storages
       await this.sessionManager.storage.updateSession(sessionId, {
         isConnected: false,
         connectionStatus: 'disconnected'

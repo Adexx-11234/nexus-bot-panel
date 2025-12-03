@@ -6,22 +6,16 @@ import { FileManager } from './file.js'
 
 const logger = createComponentLogger('SESSION_STORAGE')
 
-// CRITICAL: Reduced cache sizes and TTL
-const SESSION_CACHE_MAX_SIZE = 500 // Supports 500 users
-const SESSION_CACHE_TTL = 120000 // 2 minutes TTL
-const WRITE_BUFFER_FLUSH_INTERVAL = 500 // Faster flush
+const SESSION_CACHE_MAX_SIZE = 900
+const SESSION_CACHE_TTL = 120000
+const WRITE_BUFFER_FLUSH_INTERVAL = 1000
 
-/**
- * SessionStorage - Pure Coordinator
- * NO database code, only orchestration + fallback logic
- */
 export class SessionStorage {
   constructor() {
     this.mongoStorage = new MongoDBStorage()
     this.postgresStorage = new PostgreSQLStorage()
     this.fileManager = new FileManager()
     
-    // CRITICAL: Limited cache
     this.sessionCache = new Map()
     this.writeBuffer = new Map()
     
@@ -63,82 +57,64 @@ export class SessionStorage {
     return this.postgresStorage.pool
   }
 
-  /**
-   * CRITICAL: Aggressive cache cleanup every 30 seconds
-   */
   _startAggressiveCacheCleanup() {
     this.cacheCleanupInterval = setInterval(() => {
       this._cleanupStaleCache()
-    }, 30000) // Every 30 seconds
+    }, 30000)
   }
 
-  /**
-   * CRITICAL: Remove stale cache entries
-   */
-_cleanupStaleCache() {
-  const now = Date.now()
-  let removed = 0
+  _cleanupStaleCache() {
+    const now = Date.now()
+    let removed = 0
 
-  try {
-    // Clean session cache - ONLY if expired by TTL
-    for (const [key, value] of this.sessionCache.entries()) {
-      // Only check TTL - if expired, remove
-      if (value.lastCached && (now - value.lastCached > SESSION_CACHE_TTL)) {
-        this.sessionCache.delete(key)
-        removed++
+    try {
+      for (const [key, value] of this.sessionCache.entries()) {
+        if (value.lastCached && (now - value.lastCached > SESSION_CACHE_TTL)) {
+          this.sessionCache.delete(key)
+          removed++
+        }
       }
-    }
 
-    // Enforce max size (remove oldest entries ONLY if over limit)
-    if (this.sessionCache.size > SESSION_CACHE_MAX_SIZE) {
-      const entries = Array.from(this.sessionCache.entries())
-        .sort((a, b) => a[1].lastCached - b[1].lastCached)
-      
-      const toRemove = entries.slice(0, this.sessionCache.size - SESSION_CACHE_MAX_SIZE)
-      toRemove.forEach(([key]) => {
-        this.sessionCache.delete(key)
-        removed++
-      })
-    }
+      if (this.sessionCache.size > SESSION_CACHE_MAX_SIZE) {
+        const entries = Array.from(this.sessionCache.entries())
+          .sort((a, b) => a[1].lastCached - b[1].lastCached)
+        
+        const toRemove = entries.slice(0, this.sessionCache.size - SESSION_CACHE_MAX_SIZE)
+        toRemove.forEach(([key]) => {
+          this.sessionCache.delete(key)
+          removed++
+        })
+      }
 
-    if (removed > 0) {
-      logger.debug(`Cleaned ${removed} stale cache entries (size: ${this.sessionCache.size}/${SESSION_CACHE_MAX_SIZE})`)
-    }
+      if (removed > 0) {
+        logger.debug(`Cleaned ${removed} stale cache entries (size: ${this.sessionCache.size}/${SESSION_CACHE_MAX_SIZE})`)
+      }
 
-  } catch (error) {
-    // If cleanup itself errors, just log - DON'T delete anything
-    logger.error('Cache cleanup error (entries preserved):', error.message)
+    } catch (error) {
+      logger.error('Cache cleanup error (entries preserved):', error.message)
+    }
   }
-}
 
-  /**
-   * Save session with fallback chain: MongoDB → PostgreSQL → File
-   */
   async saveSession(sessionId, sessionData, credentials = null) {
     try {
       let saved = false
 
-      // Try MongoDB first
       if (this.mongoStorage.isConnected) {
         saved = await this.mongoStorage.saveSession(sessionId, sessionData)
       }
 
-      // Try PostgreSQL
       if (this.postgresStorage.isConnected) {
         const pgSaved = await this.postgresStorage.saveSession(sessionId, sessionData)
         saved = saved || pgSaved
       }
 
-      // FALLBACK: Use file storage if both DBs failed
       if (!saved) {
         logger.warn(`DB unavailable for ${sessionId}, using file fallback`)
         saved = await this.fileManager.saveSession(sessionId, sessionData)
       }
 
-      // CRITICAL: Only cache if saved successfully + enforce max size
       if (saved) {
         if (this.sessionCache.size >= SESSION_CACHE_MAX_SIZE) {
-          // Remove oldest entry
           const oldestKey = Array.from(this.sessionCache.entries())
             .sort((a, b) => a[1].lastCached - b[1].lastCached)[0][0]
           this.sessionCache.delete(oldestKey)
@@ -159,12 +135,8 @@ _cleanupStaleCache() {
     }
   }
 
-  /**
-   * Get session with fallback chain + cache
-   */
   async getSession(sessionId) {
     try {
-      // Check cache (with TTL)
       const cached = this.sessionCache.get(sessionId)
       if (cached && (Date.now() - cached.lastCached) < SESSION_CACHE_TTL) {
         return this._formatSessionData(cached)
@@ -172,22 +144,18 @@ _cleanupStaleCache() {
 
       let sessionData = null
 
-      // Try MongoDB
       if (this.mongoStorage.isConnected) {
         sessionData = await this.mongoStorage.getSession(sessionId)
       }
 
-      // Try PostgreSQL
       if (!sessionData && this.postgresStorage.isConnected) {
         sessionData = await this.postgresStorage.getSession(sessionId)
       }
 
-      // FALLBACK: Try file storage
       if (!sessionData) {
         sessionData = await this.fileManager.getSession(sessionId)
       }
 
-      // CRITICAL: Cache only if found + enforce max size
       if (sessionData) {
         if (this.sessionCache.size >= SESSION_CACHE_MAX_SIZE) {
           const oldestKey = Array.from(this.sessionCache.entries())
@@ -212,7 +180,59 @@ _cleanupStaleCache() {
   }
 
   /**
-   * Update session with write buffering (faster flush)
+   * ✅ NEW: Immediate update without buffering
+   * Use this for critical updates like connection status changes
+   */
+  async updateSessionImmediate(sessionId, updates) {
+    try {
+      logger.info(`🚀 IMMEDIATE update for ${sessionId}:`, updates)
+      
+      // Clear any pending buffered update
+      this._clearWriteBuffer(sessionId)
+      
+      // Add timestamp
+      updates.updatedAt = new Date()
+
+      // Update both databases immediately
+      let updated = false
+      
+      if (this.mongoStorage.isConnected) {
+        updated = await this.mongoStorage.updateSession(sessionId, updates)
+        if (updated) {
+          logger.info(`✅ MongoDB updated immediately for ${sessionId}`)
+        }
+      }
+
+      if (this.postgresStorage.isConnected) {
+        const pgUpdated = await this.postgresStorage.updateSession(sessionId, updates)
+        if (pgUpdated) {
+          logger.info(`✅ PostgreSQL updated immediately for ${sessionId}`)
+        }
+        updated = updated || pgUpdated
+      }
+
+      if (!updated) {
+        await this.fileManager.updateSession(sessionId, updates)
+        logger.info(`✅ File storage updated immediately for ${sessionId}`)
+      }
+
+      // Update cache immediately
+      if (this.sessionCache.has(sessionId)) {
+        const cachedSession = this.sessionCache.get(sessionId)
+        Object.assign(cachedSession, updates)
+        cachedSession.lastCached = Date.now()
+      }
+
+      return updated
+
+    } catch (error) {
+      logger.error(`Error in immediate update for ${sessionId}:`, error)
+      return false
+    }
+  }
+
+  /**
+   * Standard buffered update - use for non-critical updates
    */
   async updateSession(sessionId, updates) {
     try {
@@ -238,24 +258,20 @@ _cleanupStaleCache() {
         try {
           bufferedData.updatedAt = new Date()
 
-          // Try MongoDB
           let updated = false
           if (this.mongoStorage.isConnected) {
             updated = await this.mongoStorage.updateSession(sessionId, bufferedData)
           }
 
-          // Try PostgreSQL
           if (this.postgresStorage.isConnected) {
             const pgUpdated = await this.postgresStorage.updateSession(sessionId, bufferedData)
             updated = updated || pgUpdated
           }
 
-          // FALLBACK: Use file storage
           if (!updated) {
             await this.fileManager.updateSession(sessionId, bufferedData)
           }
 
-          // Update cache
           if (this.sessionCache.has(sessionId)) {
             const cachedSession = this.sessionCache.get(sessionId)
             Object.assign(cachedSession, bufferedData)
@@ -279,9 +295,6 @@ _cleanupStaleCache() {
     }
   }
 
-  /**
-   * Delete session but keep user (web users)
-   */
   async deleteSessionKeepUser(sessionId) {
     try {
       this.sessionCache.delete(sessionId)
@@ -296,16 +309,13 @@ _cleanupStaleCache() {
         hadWebAuth: false
       }
 
-      // Delete from MongoDB
       if (this.mongoStorage.isConnected) {
         results.authBaileysDeleted = await this.mongoStorage.deleteAuthState(sessionId)
         results.mongoSessionDeleted = await this.mongoStorage.deleteSession(sessionId)
       }
 
-      // Delete file-based auth
       results.fileDeleted = await this.fileManager.cleanupSessionFiles(sessionId)
 
-      // Handle PostgreSQL
       if (this.postgresStorage.isConnected) {
         const pgResult = await this.postgresStorage.deleteSessionKeepUser(sessionId)
         results.postgresUpdated = pgResult.updated
@@ -324,9 +334,6 @@ _cleanupStaleCache() {
     }
   }
 
-  /**
-   * Delete session (soft delete)
-   */
   async deleteSession(sessionId) {
     try {
       this.sessionCache.delete(sessionId)
@@ -343,7 +350,6 @@ _cleanupStaleCache() {
         deleted = deleted || pgDeleted
       }
 
-      // Also delete from file storage
       await this.fileManager.cleanupSessionFiles(sessionId)
 
       return deleted
@@ -354,9 +360,6 @@ _cleanupStaleCache() {
     }
   }
 
-  /**
-   * Completely delete session (hard delete)
-   */
   async completelyDeleteSession(sessionId) {
     try {
       this.sessionCache.delete(sessionId)
@@ -387,9 +390,6 @@ _cleanupStaleCache() {
     }
   }
 
-  /**
-   * Cleanup orphaned sessions
-   */
   async cleanupOrphanedSessions() {
     if (!this.mongoStorage.isConnected) {
       logger.warn('MongoDB not connected - skipping orphan cleanup')
@@ -421,21 +421,17 @@ _cleanupStaleCache() {
           if (!credsExists) {
             logger.warn(`Session ${sessionId} has no auth - cleaning up`)
 
-            // Delete from MongoDB
             if (this.mongoStorage.isConnected) {
               await this.mongoStorage.deleteSession(sessionId)
             }
             
-            // Delete files
             await this.fileManager.cleanupSessionFiles(sessionId)
             
-            // Handle PostgreSQL
             if (this.postgresStorage.isConnected) {
               const source = session.source || 'telegram'
               await this.postgresStorage.cleanupOrphanedSession(sessionId, source)
             }
 
-            // Clear cache
             this.sessionCache.delete(sessionId)
             this._clearWriteBuffer(sessionId)
             
@@ -457,9 +453,6 @@ _cleanupStaleCache() {
     }
   }
 
-  /**
-   * Get all sessions with fallback chain
-   */
   async getAllSessions() {
     try {
       let sessions = []
@@ -469,7 +462,6 @@ _cleanupStaleCache() {
       } else if (this.mongoStorage.isConnected) {
         sessions = await this.mongoStorage.getAllSessions()
       } else {
-        // FALLBACK: Get from files
         sessions = await this.fileManager.getAllSessions()
       }
 
@@ -708,7 +700,6 @@ _cleanupStaleCache() {
   }
 }
 
-// Singleton
 let storageInstance = null
 
 export function initializeStorage() {

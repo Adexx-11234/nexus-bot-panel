@@ -1,12 +1,9 @@
 import { createComponentLogger } from '../../utils/logger.js'
-import { createBaileysSocket } from './config.js'
-import { useMultiFileAuthState } from '@whiskeysockets/baileys'
+import { useMultiFileAuthState, makeCacheableSignalKeyStore } from '@whiskeysockets/baileys'
+import pino from 'pino'
+
 const logger = createComponentLogger('CONNECTION_MANAGER')
 
-/**
- * ConnectionManager - Manages WhatsApp socket connections
- * Handles auth state retrieval and socket creation
- */
 export class ConnectionManager {
   constructor() {
     this.fileManager = null
@@ -16,74 +13,89 @@ export class ConnectionManager {
     this.connectionTimeouts = new Map()
   }
 
-  /**
-   * Initialize with dependencies
-   */
   initialize(fileManager, mongoClient = null) {
     this.fileManager = fileManager
     this.mongoClient = mongoClient
     logger.info('Connection manager initialized')
   }
 
-  /**
-   * Create a new WhatsApp socket connection
-   * @param {string} sessionId - Session identifier
-   * @param {string} phoneNumber - Phone number for pairing (optional)
-   * @param {Object} callbacks - Connection callbacks
-   * @param {boolean} allowPairing - Whether to allow pairing code generation
-   * @returns {Promise<Object>} WhatsApp socket instance
-   */
-  async createConnection(sessionId, phoneNumber = null, callbacks = {}, allowPairing = true) {
-    try {
-      logger.info(`Creating connection for ${sessionId}`)
+async createConnection(sessionId, phoneNumber = null, callbacks = {}, allowPairing = true) {
+  try {
+    logger.info(`Creating connection for ${sessionId}`)
 
-      // Get authentication state
-      const authState = await this._getAuthState(sessionId)
-      if (!authState) {
-        throw new Error('Failed to get authentication state')
-      }
-
-      // Create socket
-      const sock = createBaileysSocket(authState.state, {
-        // Additional config can be passed here
-      })
-
-      // Setup credentials update handler
-      sock.ev.on('creds.update', authState.saveCreds)
-
-      // Store socket metadata
-      sock.sessionId = sessionId
-      sock.authMethod = authState.method
-      sock.authCleanup = authState.cleanup
-      sock.connectionCallbacks = callbacks
-
-      // Track active socket
-      this.activeSockets.set(sessionId, sock)
-
-      // Handle pairing if needed
-      if (allowPairing && phoneNumber && !authState.state.creds?.registered) {
-        this._schedulePairing(sock, sessionId, phoneNumber, callbacks)
-      }
-
-      logger.info(`Socket created for ${sessionId} using ${authState.method} auth`)
-      return sock
-
-    } catch (error) {
-      logger.error(`Failed to create connection for ${sessionId}:`, error)
-      throw error
+    // Get authentication state
+    const authState = await this._getAuthState(sessionId)
+    if (!authState) {
+      throw new Error('Failed to get authentication state')
     }
-  }
 
-  /**
-   * Get authentication state (MongoDB or file-based)
-   * @private
-   */
+    // ✅ Create store BEFORE socket
+    const { createSessionStore, createBaileysSocket, bindStoreToSocket } = await import('./config.js')
+    const store = createSessionStore(sessionId)
+
+    // ✅ CRITICAL: Create getMessage BEFORE socket creation
+    const getMessage = async (key) => {
+      if (store) {
+        try {
+          const msg = await store.loadMessage(key.remoteJid, key.id)
+          return msg?.message || undefined
+        } catch (error) {
+          logger.debug(`getMessage failed for ${key.id}:`, error.message)
+          return undefined
+        }
+      }
+      return undefined
+    }
+
+    // ✅ Create socket WITH getMessage function
+    const sock = createBaileysSocket(authState.state, sessionId, getMessage)
+
+    // ✅ CRITICAL: Bind store to socket IMMEDIATELY and wait for initial sync
+    logger.info(`Binding store to socket for ${sessionId}`)
+    bindStoreToSocket(sock, sessionId)
+    
+    // ✅ IMPORTANT: Give the store a moment to start listening to events
+    // This ensures it catches all the initial sync data
+    await new Promise(resolve => setTimeout(resolve, 1000))
+    
+    logger.info(`Store bound and ready for ${sessionId}`)
+
+    // Setup credentials update handler
+    sock.ev.on('creds.update', authState.saveCreds)
+
+    // Store socket metadata
+    sock.sessionId = sessionId
+    sock.authMethod = authState.method
+    sock.authCleanup = authState.cleanup
+    sock.connectionCallbacks = callbacks
+    sock._sessionStore = store
+    sock._storeCleanup = () => {
+      if (authState.cleanup) authState.cleanup()
+    }
+
+    // Track active socket
+    this.activeSockets.set(sessionId, sock)
+
+    // Handle pairing if needed
+    if (allowPairing && phoneNumber && !authState.state.creds?.registered) {
+      this._schedulePairing(sock, sessionId, phoneNumber, callbacks)
+    }
+
+    logger.info(`Socket created for ${sessionId} using ${authState.method} auth`)
+    return sock
+
+  } catch (error) {
+    logger.error(`Failed to create connection for ${sessionId}:`, error)
+    throw error
+  }
+}
+
   async _getAuthState(sessionId) {
     try {
       // Try MongoDB first if available
       if (this.mongoClient) {
         try {
-            const { useMongoDBAuthState } = await import('../storage/index.js')
+          const { useMongoDBAuthState } = await import('../storage/index.js')
           const db = this.mongoClient.db()
           const collection = db.collection('auth_baileys')
           const mongoAuth = await useMongoDBAuthState(collection, sessionId)
@@ -91,8 +103,18 @@ export class ConnectionManager {
           // Validate MongoDB auth
           if (mongoAuth?.state?.creds?.noiseKey && mongoAuth.state.creds?.signedIdentityKey) {
             logger.info(`Using MongoDB auth for ${sessionId}`)
+            
+            // ✅ CRITICAL: Wrap keys with makeCacheableSignalKeyStore
+            const authState = {
+              creds: mongoAuth.state.creds,
+              keys: makeCacheableSignalKeyStore(
+                mongoAuth.state.keys,
+                pino({ level: 'silent' })
+              )
+            }
+            
             return {
-              state: mongoAuth.state,
+              state: authState,
               saveCreds: mongoAuth.saveCreds,
               cleanup: mongoAuth.cleanup,
               method: 'mongodb'
@@ -117,8 +139,18 @@ export class ConnectionManager {
       // Validate file auth
       if (fileAuth?.state?.creds?.noiseKey && fileAuth.state.creds?.signedIdentityKey) {
         logger.info(`Using file auth for ${sessionId}`)
+        
+        // ✅ CRITICAL: Wrap keys with makeCacheableSignalKeyStore
+        const authState = {
+          creds: fileAuth.state.creds,
+          keys: makeCacheableSignalKeyStore(
+            fileAuth.state.keys,
+            pino({ level: 'silent' })
+          )
+        }
+        
         return {
-          state: fileAuth.state,
+          state: authState,
           saveCreds: fileAuth.saveCreds,
           cleanup: () => {},
           method: 'file'
@@ -133,12 +165,7 @@ export class ConnectionManager {
     }
   }
 
-  /**
-   * Schedule pairing code generation
-   * @private
-   */
   _schedulePairing(sock, sessionId, phoneNumber, callbacks) {
-    // Prevent duplicate pairing
     if (this.pairingInProgress.has(sessionId)) {
       logger.warn(`Pairing already in progress for ${sessionId}`)
       return
@@ -146,13 +173,11 @@ export class ConnectionManager {
 
     this.pairingInProgress.add(sessionId)
 
-    // Wait a bit before requesting pairing code
     setTimeout(async () => {
       try {
         const { handlePairing } = await import('../utils/index.js')
         await handlePairing(sock, sessionId, phoneNumber, new Map(), callbacks)
 
-        // Clear pairing state after 5 minutes
         setTimeout(() => {
           this.pairingInProgress.delete(sessionId)
         }, 500000)
@@ -168,9 +193,6 @@ export class ConnectionManager {
     }, 2000)
   }
 
-  /**
-   * Check authentication availability across storage methods
-   */
   async checkAuthAvailability(sessionId) {
     const availability = {
       mongodb: false,
@@ -178,7 +200,6 @@ export class ConnectionManager {
       preferred: 'none'
     }
 
-    // Check MongoDB auth
     if (this.mongoClient) {
       try {
         const { hasValidAuthData } = await import('../storage/index.js')
@@ -190,27 +211,21 @@ export class ConnectionManager {
       }
     }
 
-    // Check file-based auth
     if (this.fileManager) {
       availability.file = this.fileManager.hasValidCredentials(sessionId)
     }
 
-    // Determine preferred method
     availability.preferred = availability.mongodb ? 'mongodb' : 
                             availability.file ? 'file' : 'none'
 
     return availability
   }
 
-  /**
-   * Cleanup authentication state from all storage methods
-   */
   async cleanupAuthState(sessionId) {
     const results = { mongodb: false, file: false }
 
     logger.info(`Cleaning up auth state for ${sessionId}`)
 
-    // Cleanup MongoDB auth
     if (this.mongoClient) {
       try {
         const { cleanupSessionAuthData } = await import('../storage/index.js')
@@ -222,7 +237,6 @@ export class ConnectionManager {
       }
     }
 
-    // Cleanup file-based auth
     if (this.fileManager) {
       try {
         results.file = await this.fileManager.cleanupSessionFiles(sessionId)
@@ -231,7 +245,10 @@ export class ConnectionManager {
       }
     }
 
-    // Remove from tracking
+    // ✅ CRITICAL: Delete store on cleanup
+    const { deleteSessionStore } = await import('./config.js')
+    deleteSessionStore(sessionId)
+
     this.activeSockets.delete(sessionId)
     this.pairingInProgress.delete(sessionId)
     this.clearConnectionTimeout(sessionId)
@@ -239,14 +256,16 @@ export class ConnectionManager {
     return results
   }
 
-  /**
-   * Disconnect a socket
-   */
   async disconnectSocket(sessionId) {
     try {
       const sock = this.activeSockets.get(sessionId)
       
       if (sock) {
+        // Call store cleanup
+        if (sock._storeCleanup) {
+          sock._storeCleanup()
+        }
+
         // Call socket cleanup if available
         if (typeof sock.authCleanup === 'function') {
           sock.authCleanup()
@@ -263,7 +282,10 @@ export class ConnectionManager {
         }
       }
 
-      // Remove from tracking
+      // ✅ Delete store
+      const { deleteSessionStore } = await import('./config.js')
+      deleteSessionStore(sessionId)
+
       this.activeSockets.delete(sessionId)
       this.pairingInProgress.delete(sessionId)
       this.clearConnectionTimeout(sessionId)
@@ -277,23 +299,13 @@ export class ConnectionManager {
     }
   }
 
-  /**
-   * Set connection timeout for a session
-   */
   setConnectionTimeout(sessionId, callback, duration = 300000) {
-    // Clear existing timeout
     this.clearConnectionTimeout(sessionId)
-
-    // Set new timeout
     const timeout = setTimeout(callback, duration)
     this.connectionTimeouts.set(sessionId, timeout)
-    
     logger.debug(`Connection timeout set for ${sessionId} (${duration}ms)`)
   }
 
-  /**
-   * Clear connection timeout
-   */
   clearConnectionTimeout(sessionId) {
     const timeout = this.connectionTimeouts.get(sessionId)
     if (timeout) {
@@ -304,16 +316,10 @@ export class ConnectionManager {
     return false
   }
 
-  /**
-   * Check if socket is ready
-   */
   isSocketReady(sock) {
     return !!(sock?.user && sock.readyState === sock.ws?.OPEN)
   }
 
-  /**
-   * Wait for socket to be ready
-   */
   async waitForSocketReady(sock, timeout = 30000) {
     if (this.isSocketReady(sock)) {
       return true
@@ -337,9 +343,6 @@ export class ConnectionManager {
     })
   }
 
-  /**
-   * Get connection statistics
-   */
   getStats() {
     return {
       activeSockets: this.activeSockets.size,
@@ -351,26 +354,20 @@ export class ConnectionManager {
     }
   }
 
-  /**
-   * Cleanup all connections (for shutdown)
-   */
   async cleanup() {
     logger.info('Starting connection manager cleanup')
 
-    // Clear all timeouts
     for (const [sessionId, timeout] of this.connectionTimeouts.entries()) {
       clearTimeout(timeout)
     }
     this.connectionTimeouts.clear()
 
-    // Disconnect all sockets
     const disconnectPromises = []
     for (const sessionId of this.activeSockets.keys()) {
       disconnectPromises.push(this.disconnectSocket(sessionId))
     }
     await Promise.allSettled(disconnectPromises)
 
-    // Clear tracking
     this.activeSockets.clear()
     this.pairingInProgress.clear()
 

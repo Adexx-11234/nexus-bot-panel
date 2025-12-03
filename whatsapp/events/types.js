@@ -145,9 +145,9 @@ export const DisconnectConfig = {
   // ============================================================
   
   [DisconnectReason.CONNECTION_REPLACED]: {
-    shouldReconnect: false,
-    isPermanent: true,
-    requiresCleanup: true,
+    shouldReconnect: true,
+    isPermanent: false,
+    requiresCleanup: false,
     clearVoluntaryFlag: true,
     message: 'Connection replaced by another device',
     userAction: 'Reconnecting automatically',
@@ -197,9 +197,9 @@ export const DisconnectConfig = {
   // ============================================================
   
   [DisconnectReason.CONNECTION_CLOSED]: {
-    shouldReconnect: false,
-    isPermanent: true,
-    requiresCleanup: true,
+    shouldReconnect: true,
+    isPermanent: false,
+    requiresCleanup: false,
     clearVoluntaryFlag: true,
     message: 'Connection closed unexpectedly',
     handler: 'handleConnectionClosed'

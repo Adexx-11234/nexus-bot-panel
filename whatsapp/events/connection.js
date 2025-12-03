@@ -442,7 +442,7 @@ export class ConnectionEventHandler {
       const newAttempts = (session.reconnectAttempts || 0) + 1
       await this.sessionManager.storage.updateSession(sessionId, {
         reconnectAttempts: newAttempts,
-        connectionStatus: 'reconnecting'
+        connectionStatus: 'connected'
       })
 
       logger.info(`🔄 Reconnection attempt ${newAttempts} for ${sessionId}`)
