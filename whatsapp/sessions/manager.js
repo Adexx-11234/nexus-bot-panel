@@ -1,10 +1,10 @@
 import { createComponentLogger } from "../../utils/logger.js"
+import { SessionState } from "./state.js"
 import { WebSessionDetector } from "./detector.js"
 import { SessionEventHandlers } from "./handlers.js"
 
 const logger = createComponentLogger("SESSION_MANAGER")
 
-// 515 Flow Toggle
 const ENABLE_515_FLOW = process.env.ENABLE_515_FLOW === "true"
 
 /**
@@ -23,7 +23,9 @@ export class SessionManager {
     this.fileManager = null
     this.eventDispatcher = null
 
-    // Session tracking - only volatile flags, not state data
+    // Session tracking
+    this.activeSockets = new Map()
+    this.sessionState = new SessionState()
     this.webSessionDetector = null
 
     // Session flags
@@ -31,7 +33,7 @@ export class SessionManager {
     this.voluntarilyDisconnected = new Set()
     this.detectedWebSessions = new Set()
 
-    // 515 Flow tracking (only if enabled) - KEPT as requested
+    // 515 Flow tracking (only if enabled)
     if (ENABLE_515_FLOW) {
       this.sessions515Restart = new Set()
       this.completed515Restart = new Set()
@@ -40,14 +42,59 @@ export class SessionManager {
     // Configuration
     this.eventHandlersEnabled = false
     this.maxSessions = 200
-    this.concurrencyLimit = 8
+    this.concurrencyLimit = 10 // Increased from 8 to 10
     this.isInitialized = false
 
     // Event handlers helper
     this.sessionEventHandlers = new SessionEventHandlers(this)
 
-    logger.info("Session manager created")
+    this._startTrackingCleanup()
+
+    logger.info("Session manager created (maxSessions: 200)")
     logger.info(`515 Flow: ${ENABLE_515_FLOW ? "ENABLED" : "DISABLED"}`)
+  }
+
+  _startTrackingCleanup() {
+    setInterval(() => {
+      // Clear old entries from tracking sets
+      // Only keep entries for sessions that are currently active
+      const activeIds = new Set(this.activeSockets.keys())
+
+      for (const sessionId of this.initializingSessions) {
+        if (!activeIds.has(sessionId)) {
+          this.initializingSessions.delete(sessionId)
+        }
+      }
+
+      for (const sessionId of this.voluntarilyDisconnected) {
+        if (!activeIds.has(sessionId)) {
+          this.voluntarilyDisconnected.delete(sessionId)
+        }
+      }
+
+      for (const sessionId of this.detectedWebSessions) {
+        if (!activeIds.has(sessionId)) {
+          this.detectedWebSessions.delete(sessionId)
+        }
+      }
+
+      if (ENABLE_515_FLOW) {
+        for (const sessionId of this.sessions515Restart) {
+          if (!activeIds.has(sessionId)) {
+            this.sessions515Restart.delete(sessionId)
+          }
+        }
+        for (const sessionId of this.completed515Restart) {
+          if (!activeIds.has(sessionId)) {
+            this.completed515Restart.delete(sessionId)
+          }
+        }
+      }
+
+      logger.debug(
+        `Tracking cleanup: ${this.activeSockets.size} active, ${this.initializingSessions.size} initializing`,
+      )
+    }, 60000) // Every minute
   }
 
   /**
@@ -268,14 +315,13 @@ export class SessionManager {
   enableEventHandlers() {
     this.eventHandlersEnabled = true
 
-    // Fetch active sessions from storage when needed
-    // for (const [sessionId, sock] of this.activeSockets) {
-    //   if (sock.user && sock.readyState === sock.ws?.OPEN && !sock.eventHandlersSetup) {
-    //     this._setupEventHandlers(sock, sessionId).catch((error) => {
-    //       logger.error(`Failed to setup handlers for ${sessionId}:`, error)
-    //     })
-    //   }
-    // }
+    for (const [sessionId, sock] of this.activeSockets) {
+      if (sock.user && sock.readyState === sock.ws?.OPEN && !sock.eventHandlersSetup) {
+        this._setupEventHandlers(sock, sessionId).catch((error) => {
+          logger.error(`Failed to setup handlers for ${sessionId}:`, error)
+        })
+      }
+    }
 
     logger.info("Event handlers enabled")
   }
@@ -408,6 +454,24 @@ export class SessionManager {
       this.activeSockets.set(sessionId, sock)
       sock.connectionCallbacks = callbacks
 
+      this.sessionState.set(sessionId, {
+        userId: userIdStr,
+        phoneNumber,
+        source,
+        isConnected: true,
+        connectionStatus: "connected",
+        callbacks: callbacks,
+      })
+
+      // Setup connection event handlers (connection.update, creds.update)
+      this.sessionEventHandlers.setupConnectionHandler(sock, sessionId, callbacks)
+      this.sessionEventHandlers.setupCredsHandler(sock, sessionId)
+
+      // Setup message/event handlers immediately (not waiting for connection to open)
+      if (!sock.eventHandlersSetup) {
+        await this._setupEventHandlers(sock, sessionId)
+      }
+
       // Save to database - CRITICAL FIX
       await this.storage.saveSession(sessionId, {
         userId: userIdStr,
@@ -496,6 +560,7 @@ export class SessionManager {
 
       // Remove from tracking
       this.activeSockets.delete(sessionId)
+      this.sessionState.delete(sessionId)
 
       // Update database
       if (isWebUser) {
@@ -574,6 +639,7 @@ export class SessionManager {
 
       // Clear in-memory structures
       this.activeSockets.delete(sessionId)
+      this.sessionState.delete(sessionId)
       this.initializingSessions.delete(sessionId)
       this.voluntarilyDisconnected.add(sessionId)
       this.detectedWebSessions.delete(sessionId)
@@ -613,9 +679,10 @@ export class SessionManager {
       }
 
       this.activeSockets.delete(sessionId)
+      this.sessionState.delete(sessionId)
       this.initializingSessions.delete(sessionId)
-      this.voluntarilyDisconnected.delete(sessionId)
       this.detectedWebSessions.delete(sessionId)
+      this.voluntarilyDisconnected.delete(sessionId)
 
       await this.storage.completelyDeleteSession(sessionId)
       await this.connectionManager.cleanupAuthState(sessionId)
@@ -701,12 +768,12 @@ export class SessionManager {
   async getSessionInfo(sessionId) {
     const session = await this.storage.getSession(sessionId)
     const hasSocket = this.activeSockets.has(sessionId)
-    // const stateInfo = this.sessionState.get(sessionId)
+    const stateInfo = this.sessionState.get(sessionId)
 
     return {
       ...session,
       hasSocket,
-      // stateInfo,
+      stateInfo,
     }
   }
 
@@ -770,7 +837,7 @@ export class SessionManager {
         webDetection: this.webSessionDetector?.isRunning() ? "Active" : "Inactive",
         mongoConnected: this.storage?.isMongoConnected || false,
         postgresConnected: this.storage?.isPostgresConnected || false,
-        // stateStats: this.sessionState.getStats(),
+        stateStats: this.sessionState.getStats(),
       }
     } catch (error) {
       logger.error("Failed to get stats:", error)
@@ -823,7 +890,7 @@ export class SessionManager {
       logger.debug("Performing session manager maintenance")
 
       // Cleanup stale session states
-      // this.sessionState.cleanupStale()
+      this.sessionState.cleanupStale()
 
       // Flush storage write buffers
       if (this.storage?.flushWriteBuffers) {
@@ -856,9 +923,9 @@ export class SessionManager {
   /**
    * Get session state instance
    */
-  // getSessionState() {
-  //   return this.sessionState
-  // }
+  getSessionState() {
+    return this.sessionState
+  }
 
   /**
    * Get event dispatcher instance

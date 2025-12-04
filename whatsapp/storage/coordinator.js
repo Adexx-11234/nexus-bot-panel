@@ -6,9 +6,9 @@ import { FileManager } from "./file.js"
 
 const logger = createComponentLogger("SESSION_STORAGE")
 
-const SESSION_CACHE_MAX_SIZE = 100 // Reduced from 900
-const SESSION_CACHE_TTL = 15000 // Reduced from 120000 to 15 seconds
-const WRITE_BUFFER_FLUSH_INTERVAL = 1000
+const SESSION_CACHE_MAX_SIZE = 200
+const SESSION_CACHE_TTL = 30000
+const WRITE_BUFFER_FLUSH_INTERVAL = 500
 
 export class SessionStorage {
   constructor() {
@@ -19,20 +19,16 @@ export class SessionStorage {
     this.sessionCache = new Map()
     this.writeBuffer = new Map()
 
-    this.sessionFlags = new Map()
-
     this.encryptionKey = this._getEncryptionKey()
     this.healthCheckInterval = null
     this.orphanCleanupInterval = null
     this.cacheCleanupInterval = null
-    this.flagCleanupInterval = null
 
     this._startHealthCheck()
     this._startOrphanCleanup()
     this._startAggressiveCacheCleanup()
-    this._startFlagCleanup()
 
-    logger.info("Session storage coordinator initialized")
+    logger.info("Session storage coordinator initialized (cache: 200 max, 30s TTL)")
   }
 
   get isConnected() {
@@ -62,35 +58,7 @@ export class SessionStorage {
   _startAggressiveCacheCleanup() {
     this.cacheCleanupInterval = setInterval(() => {
       this._cleanupStaleCache()
-    }, 5000)
-  }
-
-  _startFlagCleanup() {
-    this.flagCleanupInterval = setInterval(() => {
-      const now = Date.now()
-      for (const [key, value] of this.sessionFlags.entries()) {
-        if (value.expiry && now > value.expiry) {
-          this.sessionFlags.delete(key)
-        }
-      }
-    }, 5000)
-  }
-
-  async setFlag(key, value, ttl = 60000) {
-    this.sessionFlags.set(key, {
-      value,
-      expiry: Date.now() + ttl,
-    })
-  }
-
-  async getFlag(key) {
-    const flag = this.sessionFlags.get(key)
-    if (!flag) return false
-    if (flag.expiry && Date.now() > flag.expiry) {
-      this.sessionFlags.delete(key)
-      return false
-    }
-    return flag.value
+    }, 15000)
   }
 
   _cleanupStaleCache() {
@@ -108,21 +76,48 @@ export class SessionStorage {
       if (this.sessionCache.size > SESSION_CACHE_MAX_SIZE) {
         const entries = Array.from(this.sessionCache.entries()).sort((a, b) => a[1].lastCached - b[1].lastCached)
 
-        const toRemove = entries.slice(0, this.sessionCache.size - SESSION_CACHE_MAX_SIZE)
+        const toRemove = entries.slice(0, this.sessionCache.size - SESSION_CACHE_MAX_SIZE / 2)
         toRemove.forEach(([key]) => {
           this.sessionCache.delete(key)
           removed++
         })
       }
 
+      if (this.writeBuffer.size > 50) {
+        this._flushWriteBuffer()
+      }
+
       if (removed > 0) {
-        logger.debug(
-          `Cleaned ${removed} stale cache entries (size: ${this.sessionCache.size}/${SESSION_CACHE_MAX_SIZE})`,
-        )
+        logger.debug(`Cleaned ${removed} cache entries (size: ${this.sessionCache.size}/${SESSION_CACHE_MAX_SIZE})`)
       }
     } catch (error) {
-      logger.error("Cache cleanup error (entries preserved):", error.message)
+      logger.error("Cache cleanup error:", error.message)
     }
+  }
+
+  async _flushWriteBuffer() {
+    if (this.writeBuffer.size === 0) return
+
+    const entries = Array.from(this.writeBuffer.entries())
+    this.writeBuffer.clear()
+
+    for (const [sessionId, data] of entries) {
+      try {
+        await this._writeToStorage(sessionId, data)
+      } catch (error) {
+        logger.error(`Failed to flush buffer for ${sessionId}:`, error.message)
+      }
+    }
+  }
+
+  async _writeToStorage(sessionId, sessionData) {
+    if (this.mongoStorage.isConnected) {
+      return await this.mongoStorage.saveSession(sessionId, sessionData)
+    }
+    if (this.postgresStorage.isConnected) {
+      return await this.postgresStorage.saveSession(sessionId, sessionData)
+    }
+    return await this.fileManager.saveSession(sessionId, sessionData)
   }
 
   async saveSession(sessionId, sessionData, credentials = null) {
@@ -144,18 +139,13 @@ export class SessionStorage {
       }
 
       if (saved) {
-        if (this.sessionCache.size >= SESSION_CACHE_MAX_SIZE) {
-          const oldestKey = Array.from(this.sessionCache.entries()).sort(
-            (a, b) => a[1].lastCached - b[1].lastCached,
-          )[0][0]
-          this.sessionCache.delete(oldestKey)
+        if (this.sessionCache.size < SESSION_CACHE_MAX_SIZE) {
+          this.sessionCache.set(sessionId, {
+            ...sessionData,
+            credentials,
+            lastCached: Date.now(),
+          })
         }
-
-        this.sessionCache.set(sessionId, {
-          ...sessionData,
-          credentials,
-          lastCached: Date.now(),
-        })
       }
 
       return saved
@@ -170,6 +160,10 @@ export class SessionStorage {
       const cached = this.sessionCache.get(sessionId)
       if (cached && Date.now() - cached.lastCached < SESSION_CACHE_TTL) {
         return this._formatSessionData(cached)
+      }
+
+      if (cached) {
+        this.sessionCache.delete(sessionId)
       }
 
       let sessionData = null
@@ -187,17 +181,12 @@ export class SessionStorage {
       }
 
       if (sessionData) {
-        if (this.sessionCache.size >= SESSION_CACHE_MAX_SIZE) {
-          const oldestKey = Array.from(this.sessionCache.entries()).sort(
-            (a, b) => a[1].lastCached - b[1].lastCached,
-          )[0][0]
-          this.sessionCache.delete(oldestKey)
+        if (this.sessionCache.size < SESSION_CACHE_MAX_SIZE) {
+          this.sessionCache.set(sessionId, {
+            ...sessionData,
+            lastCached: Date.now(),
+          })
         }
-
-        this.sessionCache.set(sessionId, {
-          ...sessionData,
-          lastCached: Date.now(),
-        })
         return this._formatSessionData(sessionData)
       }
 
@@ -209,21 +198,14 @@ export class SessionStorage {
     }
   }
 
-  /**
-   * ✅ NEW: Immediate update without buffering
-   * Use this for critical updates like connection status changes
-   */
   async updateSessionImmediate(sessionId, updates) {
     try {
       logger.info(`🚀 IMMEDIATE update for ${sessionId}:`, updates)
 
-      // Clear any pending buffered update
       this._clearWriteBuffer(sessionId)
 
-      // Add timestamp
       updates.updatedAt = new Date()
 
-      // Update both databases immediately
       let updated = false
 
       if (this.mongoStorage.isConnected) {
@@ -246,7 +228,6 @@ export class SessionStorage {
         logger.info(`✅ File storage updated immediately for ${sessionId}`)
       }
 
-      // Update cache immediately
       if (this.sessionCache.has(sessionId)) {
         const cachedSession = this.sessionCache.get(sessionId)
         Object.assign(cachedSession, updates)
@@ -260,9 +241,6 @@ export class SessionStorage {
     }
   }
 
-  /**
-   * Standard buffered update - use for non-critical updates
-   */
   async updateSession(sessionId, updates) {
     try {
       const bufferId = `${sessionId}_update`
@@ -682,10 +660,6 @@ export class SessionStorage {
         clearInterval(this.cacheCleanupInterval)
       }
 
-      if (this.flagCleanupInterval) {
-        clearInterval(this.flagCleanupInterval)
-      }
-
       await this.flushWriteBuffers()
       this.sessionCache.clear()
 
@@ -714,10 +688,6 @@ export class SessionStorage {
       writeBuffer: {
         size: this.writeBuffer.size,
         entries: Array.from(this.writeBuffer.keys()).slice(0, 10),
-      },
-      sessionFlags: {
-        size: this.sessionFlags.size,
-        entries: Array.from(this.sessionFlags.keys()).slice(0, 10),
       },
       fileManager: this.fileManager.getStats(),
     }

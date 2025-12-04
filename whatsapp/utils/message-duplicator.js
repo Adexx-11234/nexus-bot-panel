@@ -1,6 +1,6 @@
-import { createComponentLogger } from "../../utils/logger.js"
+import { createComponentLogger } from '../../utils/logger.js'
 
-const logger = createComponentLogger("MESSAGE_DEDUP")
+const logger = createComponentLogger('MESSAGE_DEDUP')
 
 /**
  * MessageDeduplicator - Prevents duplicate message processing across ALL sessions
@@ -9,11 +9,11 @@ const logger = createComponentLogger("MESSAGE_DEDUP")
 export class MessageDeduplicator {
   constructor(options = {}) {
     this.cache = new Map() // messageId -> timestamp
-    this.ttl = options.ttl || 10000 // 10 seconds default
-    this.maxSize = options.maxSize || 500
-
-    // Auto-cleanup every 5 seconds
-    this.cleanupInterval = setInterval(() => this.cleanup(), 5000)
+    this.ttl = options.ttl || 60000 // 60 seconds default
+    this.maxSize = options.maxSize || 1000
+    
+    // Auto-cleanup every 30 seconds
+    this.cleanupInterval = setInterval(() => this.cleanup(), 30000)
   }
 
   /**
@@ -21,7 +21,7 @@ export class MessageDeduplicator {
    */
   generateKey(remoteJid, messageId) {
     if (!remoteJid || !messageId) return null
-
+    
     // GLOBAL key - same across all sessions
     return `${remoteJid}:${messageId}`
   }
@@ -35,7 +35,7 @@ export class MessageDeduplicator {
     if (!key) return false
 
     const timestamp = this.cache.get(key)
-
+    
     if (!timestamp) {
       return false // Not seen before
     }
@@ -63,11 +63,6 @@ export class MessageDeduplicator {
     }
 
     this.cache.set(key, Date.now())
-
-    setTimeout(() => {
-      this.cache.delete(key)
-    }, 10000)
-
     return true
   }
 
@@ -109,7 +104,7 @@ export class MessageDeduplicator {
    */
   clear() {
     this.cache.clear()
-    logger.debug("Message deduplication cache cleared")
+    logger.debug('Message deduplication cache cleared')
   }
 
   /**
@@ -119,7 +114,7 @@ export class MessageDeduplicator {
     return {
       cacheSize: this.cache.size,
       maxSize: this.maxSize,
-      ttl: this.ttl,
+      ttl: this.ttl
     }
   }
 
@@ -132,7 +127,7 @@ export class MessageDeduplicator {
       this.cleanupInterval = null
     }
     this.cache.clear()
-    logger.info("Message deduplicator destroyed")
+    logger.info('Message deduplicator destroyed')
   }
 }
 
@@ -145,10 +140,10 @@ let deduplicatorInstance = null
 export function getMessageDeduplicator() {
   if (!deduplicatorInstance) {
     deduplicatorInstance = new MessageDeduplicator({
-      ttl: 10000, // 10 seconds
-      maxSize: 500,
+      ttl: 60000, // 60 seconds
+      maxSize: 1000
     })
-    logger.info("Global message deduplicator initialized")
+    logger.info('Global message deduplicator initialized')
   }
   return deduplicatorInstance
 }

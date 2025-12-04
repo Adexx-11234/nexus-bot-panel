@@ -1,7 +1,8 @@
-import { createComponentLogger } from '../../utils/logger.js'
-import { normalizeJid } from '../utils/index.js'
+import { createComponentLogger } from "../../utils/logger.js"
+import { normalizeJid } from "../utils/index.js"
+import { getGroupMetadata } from "../../config/baileys.js"
 
-const logger = createComponentLogger('CONTACT_RESOLVER')
+const logger = createComponentLogger("CONTACT_RESOLVER")
 
 /**
  * ContactResolver - Resolves push names from messages
@@ -22,9 +23,7 @@ export class ContactResolver {
       const senderJid = m.sender
 
       // Method 1: Direct from message (most reliable when available)
-      pushName = m.pushName || 
-                 m.message?.pushName || 
-                 m.key?.notify
+      pushName = m.pushName || m.message?.pushName || m.key?.notify
 
       // Method 2: Try to get from sock store if available
       if (!pushName && sock.store?.contacts?.[senderJid]) {
@@ -32,13 +31,11 @@ export class ContactResolver {
         pushName = contact.notify || contact.name || contact.pushName
       }
 
-      // Method 3: Extract from participant info (groups) - direct API call
       if (!pushName && m.isGroup) {
         try {
-          const groupMetadata = await sock.groupMetadata(m.chat)
-          const participant = groupMetadata.participants?.find(
-            p => normalizeJid(p.jid) === normalizeJid(senderJid) ||
-                 normalizeJid(p.id) === normalizeJid(senderJid)
+          const groupMetadata = await getGroupMetadata(sock, m.chat)
+          const participant = groupMetadata?.participants?.find(
+            (p) => normalizeJid(p.jid) === normalizeJid(senderJid) || normalizeJid(p.id) === normalizeJid(senderJid),
           )
           if (participant?.notify) {
             pushName = participant.notify
@@ -48,10 +45,11 @@ export class ContactResolver {
         }
       }
 
-      // Method 4: Try WhatsApp contact query (last resort)
-      if (!pushName && sock.onWhatsApp) {
+      // Method 4: Try WhatsApp contact query (last resort) - skip for performance
+      // This is expensive and rarely provides value
+      if (!pushName && sock.onWhatsApp && !m.isGroup) {
         try {
-          const phoneNumber = senderJid.split('@')[0]
+          const phoneNumber = senderJid.split("@")[0]
           const [result] = await sock.onWhatsApp(phoneNumber)
           if (result?.notify) {
             pushName = result.notify
@@ -65,9 +63,8 @@ export class ContactResolver {
       m.pushName = pushName || this._generateFallbackName(senderJid)
 
       logger.debug(`Push name resolved for ${senderJid}: ${m.pushName}`)
-
     } catch (error) {
-      logger.error('Push name extraction error:', error)
+      logger.error("Push name extraction error:", error)
       // Ensure pushName is always set, even on error
       m.pushName = this._generateFallbackName(m.sender)
     }
@@ -78,13 +75,13 @@ export class ContactResolver {
    * @private
    */
   _generateFallbackName(jid) {
-    if (!jid) return 'Unknown'
+    if (!jid) return "Unknown"
 
-    const phoneNumber = jid.split('@')[0]
+    const phoneNumber = jid.split("@")[0]
     if (phoneNumber && phoneNumber.length > 4) {
       return `User ${phoneNumber.slice(-4)}`
     }
-    return 'Unknown User'
+    return "Unknown User"
   }
 
   /**

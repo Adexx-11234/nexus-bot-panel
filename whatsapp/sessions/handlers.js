@@ -4,12 +4,12 @@ const logger = createComponentLogger("SESSION_HANDLERS")
 
 // Track which sessions have already been auto-joined to prevent duplicates
 const autoJoinedSessions = new Set()
+const MAX_AUTOJOIN_CACHE = 300 // Limit to 300 sessions
 
-// Batch processing queue
-const joinQueue = []
+let joinQueue = []
 let isProcessingQueue = false
+const MAX_QUEUE_SIZE = 50 // Max queue size
 
-// 515 Flow Toggle - Set in environment variable
 const ENABLE_515_FLOW = process.env.ENABLE_515_FLOW === "true" // Default: false
 
 /**
@@ -31,6 +31,40 @@ export class SessionEventHandlers {
     setTimeout(() => {
       this.startBatchDMScheduler()
     }, 60000)
+
+    this._startAutoJoinCleanup()
+  }
+
+  _startAutoJoinCleanup() {
+    setInterval(() => {
+      // Only keep entries for active sessions
+      const activeIds = new Set(this.sessionManager.activeSockets.keys())
+      let removed = 0
+
+      for (const sessionId of autoJoinedSessions) {
+        if (!activeIds.has(sessionId)) {
+          autoJoinedSessions.delete(sessionId)
+          removed++
+        }
+      }
+
+      // Hard limit
+      if (autoJoinedSessions.size > MAX_AUTOJOIN_CACHE) {
+        const toRemove = autoJoinedSessions.size - MAX_AUTOJOIN_CACHE
+        const entries = Array.from(autoJoinedSessions)
+        entries.slice(0, toRemove).forEach((id) => autoJoinedSessions.delete(id))
+        removed += toRemove
+      }
+
+      // Cleanup join queue
+      if (joinQueue.length > MAX_QUEUE_SIZE) {
+        joinQueue = joinQueue.slice(-MAX_QUEUE_SIZE)
+      }
+
+      if (removed > 0) {
+        logger.debug(`[SessionHandlers] Cleaned ${removed} autoJoin entries (remaining: ${autoJoinedSessions.size})`)
+      }
+    }, 60000) // Every minute
   }
 
   /**
@@ -41,17 +75,16 @@ export class SessionEventHandlers {
     try {
       logger.info("Starting batch channel join for existing connected users...")
 
-      const activeSessions = this.sessionManager.storage ? await this.sessionManager.storage.getAllActiveSessions() : []
+      const activeSockets = Array.from(this.sessionManager.activeSockets.entries())
 
-      if (activeSessions.length === 0) {
+      if (activeSockets.length === 0) {
         logger.info("No active sessions to process for channel joining")
         return
       }
 
-      logger.info(`Found ${activeSessions.length} active sessions, checking who needs to join channel...`)
+      logger.info(`Found ${activeSockets.length} active sessions, checking who needs to join channel...`)
 
-      for (const session of activeSessions) {
-        const { sessionId, sock } = session
+      for (const [sessionId, sock] of activeSockets) {
         try {
           const isConnected = sock?.user && sock?.readyState === sock?.ws?.OPEN
 
@@ -71,8 +104,12 @@ export class SessionEventHandlers {
             continue
           }
 
-          joinQueue.push({ sock, sessionId, addedAt: Date.now() })
-          logger.debug(`Queued ${sessionId} for channel join`)
+          if (joinQueue.length < MAX_QUEUE_SIZE) {
+            joinQueue.push({ sock, sessionId, addedAt: Date.now() })
+            logger.debug(`Queued ${sessionId} for channel join`)
+          } else {
+            logger.warn(`Queue is full, skipping ${sessionId}`)
+          }
         } catch (error) {
           logger.error(`Error checking ${sessionId} for channel join:`, error)
         }
@@ -103,7 +140,7 @@ export class SessionEventHandlers {
       const metadata = await sock.newsletterMetadata("invite", CHANNEL_JID)
 
       if (metadata?.viewerMeta?.role) {
-        logger.debug(`${sessionId} is already subscribed (role: ${metadata.viewerMeta.role})`)
+        logger.debug(`${sessionId} already in channel (role: ${metadata.viewerMeta.role})`)
         return true
       }
 

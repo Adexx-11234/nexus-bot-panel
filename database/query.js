@@ -7,11 +7,12 @@ import { logger } from "../utils/logger.js"
 class QueryManager {
   constructor() {
     this.cache = new Map()
-    this.cacheTimeout = 15 * 1000 // 15 seconds
+    this.cacheTimeout = 30 * 1000 // 30 seconds
     this.queryQueue = []
     this.isProcessing = false
-    this.maxQueueSize = 100
-    this.cleanupInterval = 5 * 1000 // Cleanup every 5 seconds
+    this.maxQueueSize = 50
+    this.cleanupInterval = 15 * 1000 // 15 seconds
+    this.maxCacheSize = 200
     this.initCleanup()
   }
 
@@ -23,10 +24,24 @@ class QueryManager {
 
   cleanExpiredCache() {
     const now = Date.now()
+    let removed = 0
+
     for (const [key, value] of this.cache.entries()) {
       if (now - value.timestamp > this.cacheTimeout) {
         this.cache.delete(key)
+        removed++
       }
+    }
+
+    if (this.cache.size > this.maxCacheSize) {
+      const entries = Array.from(this.cache.entries()).sort((a, b) => a[1].timestamp - b[1].timestamp)
+      const toRemove = entries.slice(0, this.cache.size - 100)
+      toRemove.forEach(([key]) => this.cache.delete(key))
+      removed += toRemove.length
+    }
+
+    if (removed > 0) {
+      logger.debug(`[QueryManager] Cleaned ${removed} cache entries (remaining: ${this.cache.size})`)
     }
   }
 
@@ -52,11 +67,15 @@ class QueryManager {
 
     const result = await this.execute(query, params)
 
-    this.cache.set(cacheKey, {
-      data: result,
-      timestamp: Date.now(),
-      ttl: ttl,
-    })
+    if (this.cache.size < this.maxCacheSize) {
+      this.cache.set(cacheKey, {
+        data: result,
+        timestamp: Date.now(),
+        ttl: ttl,
+      })
+
+      setTimeout(() => this.cache.delete(cacheKey), ttl)
+    }
 
     return result
   }
@@ -82,6 +101,7 @@ class QueryManager {
   getCacheStats() {
     return {
       size: this.cache.size,
+      maxSize: this.maxCacheSize,
       maxTimeout: this.cacheTimeout,
     }
   }

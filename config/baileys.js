@@ -3,29 +3,32 @@ import { makeInMemoryStore, makeWASocket, Browsers } from "@whiskeysockets/baile
 import { logger } from "../utils/logger.js"
 import pino from "pino"
 
-// ==================== BAILEYS SILENT LOGGER ====================
 const baileysLogger = pino({
   level: process.env.BAILEYS_LOG_LEVEL || "silent",
 })
-// ==================== END BAILEYS SILENT LOGGER ====================
 
+// ==================== GROUP CACHE ====================
 const groupCache = new NodeCache({
-  stdTTL: 30,
-  checkperiod: 10,
-  useClones: true,
+  stdTTL: 15,
+  checkperiod: 5,
+  useClones: false,
+  maxKeys: 500,
 })
 
+// ==================== REQUEST QUEUE ====================
+const MAX_QUEUE_SIZE = 500
 const requestQueue = []
 let isProcessingQueue = false
-const RATE_LIMIT_DELAY = 500 // ms between requests to same endpoint
+const RATE_LIMIT_DELAY = 50
 
-const sessionStores = new Map()
+const pendingRequests = new Map()
+
+// ==================== SESSION STORE MANAGEMENT ====================
 const sessionLastActivity = new Map()
 
-const SESSION_CLEANUP_INTERVAL = 5 * 60 * 1000
-const SESSION_INACTIVITY_TIMEOUT = 30 * 60 * 1000 // 30 minutes
+const SESSION_CLEANUP_INTERVAL = 2 * 60 * 1000
+const SESSION_INACTIVITY_TIMEOUT = 10 * 60 * 1000
 
-// ✅ Default getMessage function
 const defaultGetMessage = async (key) => {
   return undefined
 }
@@ -33,16 +36,14 @@ const defaultGetMessage = async (key) => {
 export const baileysConfig = {
   logger: baileysLogger,
   printQRInTerminal: false,
-  msgRetryCounterMap: {},
   browser: Browsers.windows("safari"),
-  retryRequestDelayMs: 250,
-  markOnlineOnConnect: false,
+  retryRequestDelayMs: 1500,
+  markOnlineOnConnect: true,
   getMessage: defaultGetMessage,
   version: [2, 3000, 1025190524],
-  emitOwnEvents: true,
-  syncFullHistory: true,
+  syncFullHistory: false,
   fireInitQueries: true,
-  maxMsgRetryCount: 40,
+  maxMsgRetryCount: 20,
   patchMessageBeforeSending: (message) => {
     const requiresPatch = !!(message.buttonsMessage || message.templateMessage || message.listMessage)
     if (requiresPatch) {
@@ -60,8 +61,8 @@ export const baileysConfig = {
     }
     return message
   },
-  appStateSyncInitialTimeoutMs: 10000,
-  generateHighQualityLinkPreview: true,
+  appStateSyncInitialTimeoutMs: 5000,
+  generateHighQualityLinkPreview: false,
 }
 
 export const eventTypes = [
@@ -74,80 +75,72 @@ export const eventTypes = [
 ]
 
 // ==================== RATE LIMITING ====================
-
 async function processRequestQueue() {
-  if (isProcessingQueue || requestQueue.length === 0) return
+  if (isProcessingQueue) return
 
   isProcessingQueue = true
 
   while (requestQueue.length > 0) {
-    const { fn, resolve, reject } = requestQueue.shift()
+    const { fn, resolve, reject, key } = requestQueue.shift()
     try {
       const result = await fn()
       resolve(result)
+      if (key) pendingRequests.delete(key)
     } catch (error) {
       reject(error)
+      if (key) pendingRequests.delete(key)
     }
 
     if (requestQueue.length > 0) {
-      await new Promise((resolve) => setTimeout(resolve, RATE_LIMIT_DELAY))
+      await new Promise((resolve) => setTimeout(resolve, 50))
     }
   }
 
   isProcessingQueue = false
 }
 
-export function queueRequest(fn) {
-  return new Promise((resolve, reject) => {
-    requestQueue.push({ fn, resolve, reject })
+export function queueRequest(fn, key = null) {
+  if (key && pendingRequests.has(key)) {
+    return pendingRequests.get(key)
+  }
+
+  const promise = new Promise((resolve, reject) => {
+    if (requestQueue.length >= MAX_QUEUE_SIZE) {
+      logger.warn(`Request queue at max capacity (${MAX_QUEUE_SIZE}), waiting...`)
+    }
+
+    requestQueue.push({ fn, resolve, reject, key })
     processRequestQueue()
   })
+
+  if (key) {
+    pendingRequests.set(key, promise)
+  }
+
+  return promise
 }
 
 // ==================== SESSION STORE MANAGEMENT ====================
-
-/**
- * Create in-memory store for a session
- */
 export function createSessionStore(sessionId) {
-  if (sessionStores.has(sessionId)) {
-    sessionLastActivity.set(sessionId, Date.now())
-    return sessionStores.get(sessionId)
-  }
-
   const store = makeInMemoryStore({
     logger: baileysLogger,
   })
 
-  sessionStores.set(sessionId, store)
   sessionLastActivity.set(sessionId, Date.now())
-
-  logger.debug(`[Store] Created in-memory store for ${sessionId}`)
+  logger.debug(`[Store] Created fresh store for ${sessionId}`)
 
   return store
 }
 
-/**
- * Get existing store for a session
- */
 export function getSessionStore(sessionId) {
-  if (sessionStores.has(sessionId)) {
-    sessionLastActivity.set(sessionId, Date.now())
-  }
-  return sessionStores.get(sessionId)
+  sessionLastActivity.set(sessionId, Date.now())
+  return createSessionStore(sessionId)
 }
 
-/**
- * Delete store on cleanup
- */
 export function deleteSessionStore(sessionId) {
-  if (sessionStores.has(sessionId)) {
-    sessionStores.delete(sessionId)
-    sessionLastActivity.delete(sessionId)
-    logger.debug(`[Store] Deleted store for ${sessionId}`)
-    return true
-  }
-  return false
+  sessionLastActivity.delete(sessionId)
+  logger.debug(`[Store] Cleaned up activity tracker for ${sessionId}`)
+  return true
 }
 
 export function startSessionCleanup() {
@@ -157,73 +150,35 @@ export function startSessionCleanup() {
 
     for (const [sessionId, lastActivity] of sessionLastActivity.entries()) {
       if (now - lastActivity > SESSION_INACTIVITY_TIMEOUT) {
-        deleteSessionStore(sessionId)
+        sessionLastActivity.delete(sessionId)
         cleanedCount++
       }
     }
 
+    const cacheStats = groupCache.getStats()
+    if (cacheStats.keys > 300) {
+      groupCache.flushAll()
+      logger.info(`[Cache] Flushed group cache (was ${cacheStats.keys} keys)`)
+    }
+
     if (cleanedCount > 0) {
-      logger.info(`[Store] Cleaned up ${cleanedCount} abandoned sessions`)
+      logger.info(`[Store] Cleaned up ${cleanedCount} inactive sessions`)
     }
   }, SESSION_CLEANUP_INTERVAL)
 
-  logger.info("[Store] Session cleanup interval started")
+  logger.info("[Store] Session cleanup interval started (2min)")
 }
 
 export function getSessionStoreStats() {
   return {
-    activeStores: sessionStores.size,
+    activeTrackers: sessionLastActivity.size,
     queuedRequests: requestQueue.length,
     isProcessingQueue,
-  }
-}
-
-/**
- * Bind store to socket and setup getMessage
- */
-export function bindStoreToSocket(sock, sessionId) {
-  try {
-    const store = getSessionStore(sessionId)
-
-    if (!store) {
-      logger.warn(`[Store] No store found for ${sessionId}, creating new one`)
-      const newStore = createSessionStore(sessionId)
-      newStore.bind(sock.ev)
-
-      sock.getMessage = async (key) => {
-        if (newStore) {
-          const msg = await newStore.loadMessage(key.remoteJid, key.id)
-          return msg?.message || undefined
-        }
-        return undefined
-      }
-
-      return newStore
-    }
-
-    store.bind(sock.ev)
-
-    sock.getMessage = async (key) => {
-      if (store) {
-        const msg = await store.loadMessage(key.remoteJid, key.id)
-        return msg?.message || undefined
-      }
-      return undefined
-    }
-
-    logger.info(`[Store] Bound store to socket for ${sessionId}`)
-    return store
-  } catch (error) {
-    logger.error(`[Store] Error binding store for ${sessionId}:`, error.message)
-    return null
+    groupCacheKeys: groupCache.getStats().keys,
   }
 }
 
 // ==================== SOCKET CREATION ====================
-
-/**
- * Create Baileys socket with custom config and getMessage function
- */
 export function createBaileysSocket(authState, sessionId, getMessage = null) {
   try {
     const sock = makeWASocket({
@@ -251,37 +206,27 @@ export function createBaileysSocket(authState, sessionId, getMessage = null) {
   }
 }
 
-/**
- * Setup default properties and utilities on socket
- */
 export function setupSocketDefaults(sock) {
   try {
     if (sock.ev && typeof sock.ev.setMaxListeners === "function") {
-      sock.ev.setMaxListeners(900)
+      sock.ev.setMaxListeners(1500)
     }
 
     sock.sessionId = null
     sock.eventHandlersSetup = false
     sock.connectionCallbacks = null
 
-    logger.debug("Socket defaults configured")
+    logger.debug("Socket defaults configured (maxListeners: 1500)")
   } catch (error) {
     logger.error("Failed to setup socket defaults:", error)
   }
 }
 
-/**
- * Get Baileys socket configuration
- */
 export function getBaileysConfig() {
   return { ...baileysConfig }
 }
 
 // ==================== CACHE FUNCTIONS ====================
-
-/**
- * Get group metadata with smart caching and rate-limiting
- */
 export const getGroupMetadata = async (sock, jid, forceRefresh = false) => {
   try {
     const cacheKey = `group_${jid}`
@@ -291,14 +236,12 @@ export const getGroupMetadata = async (sock, jid, forceRefresh = false) => {
     }
 
     let metadata = groupCache.get(cacheKey)
-
-    if (!metadata) {
-      metadata = await queueRequest(() => sock.groupMetadata(jid))
-      groupCache.set(cacheKey, metadata, 30)
-      logger.debug(`[Cache] Fetched and cached group metadata: ${jid}`)
-    } else {
-      logger.debug(`[Cache] Retrieved group metadata from cache: ${jid}`)
+    if (metadata) {
+      return metadata
     }
+
+    metadata = await queueRequest(() => sock.groupMetadata(jid), cacheKey)
+    groupCache.set(cacheKey, metadata, 15)
 
     return metadata
   } catch (error) {
@@ -307,9 +250,10 @@ export const getGroupMetadata = async (sock, jid, forceRefresh = false) => {
   }
 }
 
-/**
- * Proactively update cache from group events
- */
+export const refreshGroupMetadata = async (sock, jid) => {
+  return await getGroupMetadata(sock, jid, true)
+}
+
 export const updateCacheFromEvent = (groupJid, updateData) => {
   try {
     const cacheKey = `group_${groupJid}`
@@ -317,21 +261,16 @@ export const updateCacheFromEvent = (groupJid, updateData) => {
 
     if (existing) {
       const updated = { ...existing, ...updateData }
-      groupCache.set(cacheKey, updated, 30)
-      logger.debug(`[Cache] Proactively updated cache for ${groupJid}`)
+      groupCache.set(cacheKey, updated, 15)
       return true
     }
 
     return false
   } catch (error) {
-    logger.error(`[Cache] Error updating cache from event:`, error.message)
     return false
   }
 }
 
-/**
- * Update participants in cache from participant events
- */
 export const updateParticipantsInCache = async (sock, groupJid, participantUpdate) => {
   try {
     const cacheKey = `group_${groupJid}`
@@ -341,9 +280,8 @@ export const updateParticipantsInCache = async (sock, groupJid, participantUpdat
 
     if (!metadata) {
       if (action === "add" || action === "remove") {
-        metadata = await queueRequest(() => sock.groupMetadata(groupJid))
-        groupCache.set(cacheKey, metadata, 30)
-        logger.debug(`[Cache] Fetched metadata for participants update: ${groupJid}`)
+        metadata = await queueRequest(() => sock.groupMetadata(groupJid), cacheKey)
+        groupCache.set(cacheKey, metadata, 15)
         return
       }
       return
@@ -351,7 +289,7 @@ export const updateParticipantsInCache = async (sock, groupJid, participantUpdat
 
     switch (action) {
       case "add": {
-        const fresh = await queueRequest(() => sock.groupMetadata(groupJid))
+        const fresh = await queueRequest(() => sock.groupMetadata(groupJid), cacheKey)
         metadata.participants = fresh.participants
         break
       }
@@ -374,55 +312,29 @@ export const updateParticipantsInCache = async (sock, groupJid, participantUpdat
         })
         break
       }
-
-      default:
-        logger.warn(`[Cache] Unknown participant action: ${action}`)
     }
 
-    groupCache.set(cacheKey, metadata, 30)
-    logger.debug(`[Cache] Updated participants cache for ${groupJid} (${action})`)
+    groupCache.set(cacheKey, metadata, 15)
   } catch (error) {
-    logger.error(`[Cache] Error updating participants in cache:`, error.message)
     invalidateGroupCache(groupJid, "update_error")
   }
 }
 
-/**
- * Invalidate group cache entry
- */
 export const invalidateGroupCache = (groupJid, reason = "update") => {
   const cacheKey = `group_${groupJid}`
   if (groupCache.has(cacheKey)) {
     groupCache.del(cacheKey)
-    logger.debug(`[Cache] Invalidated group cache: ${groupJid} (${reason})`)
     return true
   }
   return false
 }
 
-/**
- * Force refresh group data and update cache
- */
-export const refreshGroupMetadata = async (sock, jid) => {
-  try {
-    invalidateGroupCache(jid, "forced_refresh")
-    return await getGroupMetadata(sock, jid)
-  } catch (error) {
-    logger.error(`[Baileys] Error refreshing group metadata: ${error.message}`)
-    throw error
-  }
-}
-
 // ==================== ADMIN FUNCTIONS ====================
-
 const normalizeJid = (jid) => {
   if (!jid) return null
   return jid.split("@")[0] + "@s.whatsapp.net"
 }
 
-/**
- * Check if user is a group admin
- */
 export const isUserGroupAdmin = async (sock, groupJid, userJid) => {
   try {
     const metadata = await getGroupMetadata(sock, groupJid)
@@ -442,9 +354,6 @@ export const isUserGroupAdmin = async (sock, groupJid, userJid) => {
   }
 }
 
-/**
- * Check if bot is a group admin
- */
 export const isBotGroupAdmin = async (sock, groupJid) => {
   try {
     if (!sock.user?.id) {
@@ -461,10 +370,6 @@ export const isBotGroupAdmin = async (sock, groupJid) => {
 }
 
 // ==================== EVENT LISTENERS ====================
-
-/**
- * Setup cache invalidation listeners
- */
 export const setupCacheInvalidation = (sock) => {
   try {
     sock.ev.on("group-participants.update", async (update) => {
@@ -493,11 +398,10 @@ export const setupCacheInvalidation = (sock) => {
 }
 
 // ==================== CACHE MANAGEMENT ====================
-
 export const updateGroupCache = (jid, metadata) => {
   try {
     const cacheKey = `group_${jid}`
-    groupCache.set(cacheKey, metadata, 30)
+    groupCache.set(cacheKey, metadata, 15)
     logger.debug(`[Cache] Manually updated group cache for ${jid}`)
     return true
   } catch (error) {
@@ -539,11 +443,34 @@ export const getCacheStats = () => {
       hitRate: stats.hits > 0 ? ((stats.hits / (stats.hits + stats.misses)) * 100).toFixed(2) + "%" : "0%",
       groups: groupKeys.length,
       groupKeys: groupKeys,
-      activeStores: sessionStores.size,
+      activeTrackers: sessionLastActivity.size,
       queuedRequests: requestQueue.length,
     }
   } catch (error) {
     logger.error("[Cache] Error getting cache stats:", error.message)
+    return null
+  }
+}
+
+// ==================== SOCKET BINDING ====================
+export function bindStoreToSocket(sock, sessionId) {
+  try {
+    const store = getSessionStore(sessionId)
+    store.bind(sock.ev)
+
+    sock.getMessage = async (key) => {
+      try {
+        const msg = await store.loadMessage(key.remoteJid, key.id)
+        return msg?.message || undefined
+      } catch {
+        return undefined
+      }
+    }
+
+    logger.debug(`[Store] Bound fresh store to socket for ${sessionId}`)
+    return store
+  } catch (error) {
+    logger.error(`[Store] Error binding store for ${sessionId}:`, error.message)
     return null
   }
 }

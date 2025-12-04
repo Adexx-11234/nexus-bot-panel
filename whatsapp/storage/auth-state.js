@@ -25,7 +25,7 @@ const BufferJSON = {
   },
 }
 
-// Cache for auth data (15 second TTL)
+// Cache for auth data (30 second TTL)
 const authCache = new Map()
 const writeQueue = new Map()
 const MAX_CACHE_SIZE = 52428800 // 50MB limit
@@ -57,7 +57,7 @@ const cleanupCache = (sessionId = null) => {
     }
   } else {
     const now = Date.now()
-    const maxAge = 15000 // 15 seconds
+    const maxAge = 30000 // Reduced from 300000 (5min) to 30000 (30sec)
     for (const [key, data] of authCache) {
       if (data.timestamp && now - data.timestamp > maxAge) {
         try {
@@ -84,8 +84,7 @@ const cleanupCache = (sessionId = null) => {
   }
 }
 
-// Cleanup cache every 5 seconds
-setInterval(() => cleanupCache(), 5000)
+setInterval(() => cleanupCache(), 30000)
 
 /**
  * Use MongoDB as authentication state storage
@@ -104,10 +103,10 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
   const readData = async (fileName) => {
     const cacheKey = `${sessionId}:${fileName}`
 
-    // Check cache (15 second TTL instead of 30 seconds)
+    // Check cache (30 second TTL instead of 5 minute)
     if (authCache.has(cacheKey)) {
       const cached = authCache.get(cacheKey)
-      if (cached.timestamp && Date.now() - cached.timestamp < 15000) {
+      if (cached.timestamp && Date.now() - cached.timestamp < 30000) {
         return cached.data
       } else {
         try {
@@ -163,13 +162,13 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
    */
   const writeData = async (datajson, fileName) => {
     const cacheKey = `${sessionId}:${fileName}`
-    // Subtract old entry size if it exists
-    const cached = authCache.get(cacheKey)
-    if (cached?.data) {
-      try {
-        currentCacheSize -= JSON.stringify(cached.data).length
-      } catch (e) {}
-    }
+      // Subtract old entry size if it exists
+  const cached = authCache.get(cacheKey)
+  if (cached?.data) {
+    try {
+      currentCacheSize -= JSON.stringify(cached.data).length
+    } catch (e) {}
+  }
     const size = JSON.stringify(datajson).length
     currentCacheSize += size
     authCache.set(cacheKey, { data: datajson, timestamp: Date.now() })
@@ -232,7 +231,7 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
       keys: {
         get: async (type, ids) => {
           const data = {}
-          const batchSize = 20
+          const batchSize = 10
 
           for (let i = 0; i < ids.length; i += batchSize) {
             const batch = ids.slice(i, i + batchSize)
