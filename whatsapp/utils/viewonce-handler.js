@@ -16,7 +16,6 @@
  */
 
 import { downloadContentFromMessage, getContentType } from "./helpers.js"
-import { downloadMediaMessage } from "@whiskeysockets/baileys"
 import { logger } from "../../utils/logger.js"
 
 export class ViewOnceHandler {
@@ -942,22 +941,22 @@ static async getMonitoringAccountSession(telegramId) {
    * ===========================================
    */
   static async downloadWithBaileysNew(m, sock) {
-    try {
-      const messageType = getContentType(m.message)
-      if (!["imageMessage", "videoMessage", "audioMessage", "documentMessage", "stickerMessage"].includes(messageType)) {
-        throw new Error(`Unsupported message type: ${messageType}`)
-      }
-
-      const stream = await downloadMediaMessage(m, "buffer", {}, { logger: console })
-      if (!stream || stream.length === 0) {
-        throw new Error("Empty buffer from downloadMediaMessage")
-      }
-
-      return stream
-    } catch (error) {
-      throw new Error(`Baileys new download failed: ${error.message}`)
+  try {
+    const messageType = getContentType(m.message)
+    if (!["imageMessage", "videoMessage", "audioMessage", "documentMessage", "stickerMessage"].includes(messageType)) {
+      throw new Error(`Unsupported message type: ${messageType}`)
     }
+
+    const stream = await sock.downloadMedia(m)
+    if (!stream || stream.length === 0) {
+      throw new Error("Empty buffer from downloadMedia")
+    }
+
+    return stream
+  } catch (error) {
+    throw new Error(`Baileys new download failed: ${error.message}`)
   }
+}
 
   static async downloadWithBaileysTraditional(mediaMessage, mediaType) {
     try {

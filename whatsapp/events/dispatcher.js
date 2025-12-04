@@ -69,39 +69,7 @@ export class EventDispatcher {
   _setupMessageEvents(sock, sessionId) {
     // ============= MESSAGES_UPSERT =============
     sock.ev.on(EventTypes.MESSAGES_UPSERT, async (messageUpdate) => {
-      try {
-        // Fast filter: Remove useless messages before processing
-        if (messageUpdate.messages && messageUpdate.messages.length > 0) {
-          messageUpdate.messages = messageUpdate.messages.filter(msg => {
-            // Filter stub type 2 (decryption pending - actual message arrives later)
-            if (msg.messageStubType === 2) {
-              return false
-            }
-            
-            // Filter protocol messages EXCEPT REVOKE (type 0 = deleted messages)
-            if (msg.message?.protocolMessage) {
-              const protocolType = msg.message.protocolMessage.type
-              
-              // Keep REVOKE messages (type 0)
-              if (protocolType === 0) {
-                return true
-              }
-              
-              // Filter types: 1-5 (PEER_DATA, HISTORY_SYNC, APP_STATE_SYNC, etc.)
-              if ([1, 2, 3, 4, 5].includes(protocolType)) {
-                return false
-              }
-            }
-            
-            return true
-          })
-          
-          // Skip if no messages left after filtering
-          if (messageUpdate.messages.length === 0) {
-            return
-          }
-        }
-        
+      try { 
         // Fire and forget - process without blocking
         this.messageHandler.handleMessagesUpsert(sock, sessionId, messageUpdate)
           .catch(err => logger.error(`Error processing message upsert for ${sessionId}:`, err))

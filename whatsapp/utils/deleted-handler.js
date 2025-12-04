@@ -18,7 +18,6 @@
  */
 
 import { logger } from "../../utils/logger.js"
-import { downloadMediaMessage } from "@whiskeysockets/baileys"
 
 export class AntiDeletedHandler {
   // ===========================================
@@ -231,10 +230,8 @@ export class AntiDeletedHandler {
       }
 
       // Download the media using the imported function
-      const buffer = await downloadMediaMessage(mockMessage, 'buffer', {}, {
-        logger: undefined,
-        reuploadRequest: sock.updateMediaMessage
-      })
+  // Download the media using sock.downloadMedia
+const buffer = await sock.downloadMedia(mockMessage)
       
       return buffer
     } catch (error) {

@@ -1,25 +1,22 @@
-import { createComponentLogger } from '../../utils/logger.js'
-import { 
-  DisconnectReason, 
+import { createComponentLogger } from "../../utils/logger.js"
+import {
+  DisconnectReason,
   getDisconnectConfig,
-  isPermanentDisconnect,
-  shouldReconnect,
   supports515Flow,
   getReconnectDelay,
   getMaxAttempts,
-  getDisconnectMessage,
   shouldClearVoluntaryFlag,
   requiresAuthClear,
   requiresCleanup,
   requiresNotification,
-  getUserAction
-} from './types.js'
-import { Boom } from '@hapi/boom'
+  getUserAction,
+} from "./types.js"
+import { Boom } from "@hapi/boom"
 
-const logger = createComponentLogger('CONNECTION_EVENTS')
+const logger = createComponentLogger("CONNECTION_EVENTS")
 
 // Toggle for 515 complex flow - Set this directly here
-const ENABLE_515_FLOW = process.env.ENABLE_515_FLOW === 'true' // Default: false
+const ENABLE_515_FLOW = process.env.ENABLE_515_FLOW === "true" // Default: false
 
 /**
  * ConnectionEventHandler
@@ -29,10 +26,9 @@ const ENABLE_515_FLOW = process.env.ENABLE_515_FLOW === 'true' // Default: false
 export class ConnectionEventHandler {
   constructor(sessionManager) {
     this.sessionManager = sessionManager
-    this.reconnectionLocks = new Set()
-    
+
     logger.info(`🔧 Connection Handler initialized`)
-    logger.info(`📋 515 Flow Mode: ${ENABLE_515_FLOW ? 'ENABLED' : 'DISABLED'}`)
+    logger.info(`📋 515 Flow Mode: ${ENABLE_515_FLOW ? "ENABLED" : "DISABLED"}`)
   }
 
   // ==========================================
@@ -44,25 +40,30 @@ export class ConnectionEventHandler {
    */
   async _handleConnectionClose(sock, sessionId, lastDisconnect) {
     try {
-      // Prevent duplicate reconnection attempts
-      if (this.reconnectionLocks.has(sessionId)) {
-        logger.warn(`⚠️  Session ${sessionId} already has pending reconnection - skipping`)
-        return
+      const reconnectionKey = `reconnecting_${sessionId}`
+      if (this.sessionManager.storage) {
+        const isReconnecting = await this.sessionManager.storage.getFlag(reconnectionKey)
+        if (isReconnecting) {
+          logger.warn(`⚠️  Session ${sessionId} already has pending reconnection - skipping`)
+          return
+        }
+        // Set reconnection flag in storage
+        await this.sessionManager.storage.setFlag(reconnectionKey, true, 60000) // 60 second timeout
       }
 
       // Update session status
       await this.sessionManager.storage.updateSession(sessionId, {
         isConnected: false,
-        connectionStatus: 'disconnected'
+        connectionStatus: "disconnected",
       })
 
       // Extract disconnect reason
       const error = lastDisconnect?.error
       const statusCode = error instanceof Boom ? error.output?.statusCode : null
-      
+
       // Get configuration for this disconnect reason
       const config = getDisconnectConfig(statusCode)
-      
+
       logger.warn(`📴 Session ${sessionId} disconnected`)
       logger.warn(`   Status Code: ${statusCode}`)
       logger.warn(`   Message: ${config.message}`)
@@ -71,17 +72,17 @@ export class ConnectionEventHandler {
       // ============================================================
       // HANDLE RECONNECTABLE STATUS CODES (BEFORE VOLUNTARY CHECK)
       // ============================================================
-      
+
       // Special handling: 515/516 with optional complex flow
       if (supports515Flow(statusCode)) {
         return await this._handle515Flow(sessionId, statusCode, config)
       }
-      
+
       // Special handling: Bad Session (clear auth then reconnect)
       if (requiresAuthClear(statusCode)) {
         return await this._handleBadMac(sessionId)
       }
-      
+
       // Check if should clear voluntary disconnect flag
       if (shouldClearVoluntaryFlag(statusCode)) {
         this.sessionManager.voluntarilyDisconnected?.delete(sessionId)
@@ -90,9 +91,9 @@ export class ConnectionEventHandler {
       // ============================================================
       // CHECK VOLUNTARY DISCONNECT (AFTER RECONNECTABLE CODES)
       // ============================================================
-      
+
       const isVoluntaryDisconnect = this.sessionManager.voluntarilyDisconnected?.has(sessionId)
-      
+
       if (isVoluntaryDisconnect && !shouldClearVoluntaryFlag(statusCode)) {
         logger.info(`✋ Session ${sessionId} voluntarily disconnected - skipping cleanup`)
         return
@@ -101,26 +102,28 @@ export class ConnectionEventHandler {
       // ============================================================
       // HANDLE BASED ON CONFIGURATION
       // ============================================================
-      
+
       // Permanent disconnects
       if (config.isPermanent) {
         logger.info(`🛑 Session ${sessionId} - Permanent disconnect (${statusCode})`)
         return await this._handlePermanentDisconnect(sessionId, statusCode, config)
       }
-      
+
       // Reconnectable disconnects
       if (config.shouldReconnect) {
         logger.info(`🔄 Session ${sessionId} - Reconnectable disconnect (${statusCode})`)
         return await this._handleReconnectableDisconnect(sessionId, statusCode, config)
       }
-      
+
       // Unknown/No specific handling
       logger.warn(`❓ Session ${sessionId} - Unknown disconnect handling (${statusCode})`)
       await this.sessionManager.disconnectSession(sessionId, true)
-
     } catch (error) {
       logger.error(`❌ Connection close handler error for ${sessionId}:`, error)
-      this.reconnectionLocks.delete(sessionId)
+      const reconnectionKey = `reconnecting_${sessionId}`
+      if (this.sessionManager.storage) {
+        this.sessionManager.storage.setFlag(reconnectionKey, false)
+      }
     }
   }
 
@@ -133,17 +136,19 @@ export class ConnectionEventHandler {
    */
   async _handle515Flow(sessionId, statusCode, config) {
     logger.info(`🔄 Handling ${statusCode} for ${sessionId}`)
-    
+
     // Clear voluntary disconnect flag
     this.sessionManager.voluntarilyDisconnected?.delete(sessionId)
-    
-    // Lock to prevent duplicates
-    this.reconnectionLocks.add(sessionId)
-    
+
+    const reconnectionKey = `reconnecting_${sessionId}`
+    if (this.sessionManager.storage) {
+      await this.sessionManager.storage.setFlag(reconnectionKey, true, 60000) // 60 second timeout
+    }
+
     // Mark for complex flow if enabled
     if (ENABLE_515_FLOW) {
       logger.info(`[515 COMPLEX FLOW] Marking ${sessionId} for complex restart`)
-      
+
       if (!this.sessionManager.sessions515Restart) {
         this.sessionManager.sessions515Restart = new Set()
       }
@@ -151,16 +156,19 @@ export class ConnectionEventHandler {
     } else {
       logger.info(`[SIMPLE FLOW] ${sessionId} will reconnect normally`)
     }
-    
+
     // Schedule reconnection
     const delay = getReconnectDelay(statusCode)
     logger.info(`⏱️  Reconnecting ${sessionId} in ${delay}ms`)
-    
+
     setTimeout(() => {
       this._attemptReconnection(sessionId)
-        .catch(err => logger.error(`❌ Reconnection failed for ${sessionId}:`, err))
+        .catch((err) => logger.error(`❌ Reconnection failed for ${sessionId}:`, err))
         .finally(() => {
-          this.reconnectionLocks.delete(sessionId)
+          const reconnectionKey = `reconnecting_${sessionId}`
+          if (this.sessionManager.storage) {
+            this.sessionManager.storage.setFlag(reconnectionKey, false)
+          }
         })
     }, delay)
   }
@@ -174,27 +182,27 @@ export class ConnectionEventHandler {
    */
   async _handlePermanentDisconnect(sessionId, statusCode, config) {
     logger.info(`🛑 Handling permanent disconnect for ${sessionId}`)
-    
+
     // Route to specific handler based on status code
     switch (statusCode) {
       case DisconnectReason.LOGGED_OUT:
         await this._handleLoggedOut(sessionId)
         break
-        
+
       case DisconnectReason.FORBIDDEN:
         await this._handleForbidden(sessionId)
         break
-        
+
       case DisconnectReason.TIMED_OUT:
         await this._handleConnectionTimeout(sessionId)
         break
-        
+
       default:
         // Generic permanent disconnect
         if (requiresCleanup(statusCode)) {
           await this.sessionManager.performCompleteUserCleanup(sessionId)
         }
-        
+
         if (requiresNotification(statusCode)) {
           await this._sendDisconnectNotification(sessionId, config)
         }
@@ -213,24 +221,29 @@ export class ConnectionEventHandler {
     const session = await this.sessionManager.storage.getSession(sessionId)
     const attempts = session?.reconnectAttempts || 0
     const maxAttempts = getMaxAttempts(statusCode)
-    
+
     if (attempts >= maxAttempts) {
       logger.warn(`⚠️  Session ${sessionId} exceeded max reconnection attempts (${attempts}/${maxAttempts})`)
       await this.sessionManager.disconnectSession(sessionId, true)
       return
     }
-    
-    // Lock and schedule reconnection
-    this.reconnectionLocks.add(sessionId)
-    
+
+    const reconnectionKey = `reconnecting_${sessionId}`
+    if (this.sessionManager.storage) {
+      await this.sessionManager.storage.setFlag(reconnectionKey, true, 60000) // 60 second timeout
+    }
+
     const delay = getReconnectDelay(statusCode, attempts)
     logger.info(`🔄 Reconnecting ${sessionId} in ${delay}ms (attempt ${attempts + 1}/${maxAttempts})`)
-    
+
     setTimeout(() => {
       this._attemptReconnection(sessionId)
-        .catch(err => logger.error(`❌ Reconnection failed for ${sessionId}:`, err))
+        .catch((err) => logger.error(`❌ Reconnection failed for ${sessionId}:`, err))
         .finally(() => {
-          this.reconnectionLocks.delete(sessionId)
+          const reconnectionKey = `reconnecting_${sessionId}`
+          if (this.sessionManager.storage) {
+            this.sessionManager.storage.setFlag(reconnectionKey, false)
+          }
         })
     }, delay)
   }
@@ -245,23 +258,23 @@ export class ConnectionEventHandler {
   async _handleConnectionTimeout(sessionId) {
     try {
       logger.info(`⏱️  Handling connection timeout for ${sessionId}`)
-      
+
       const session = await this.sessionManager.storage.getSession(sessionId)
-      
+
       await this.sessionManager.performCompleteUserCleanup(sessionId)
-      
-      if (session?.source === 'telegram' && this.sessionManager.telegramBot) {
-        const userId = sessionId.replace('session_', '')
+
+      if (session?.source === "telegram" && this.sessionManager.telegramBot) {
+        const userId = sessionId.replace("session_", "")
         try {
           await this.sessionManager.telegramBot.sendMessage(
             userId,
             `⏱️ *Connection Timeout*\n\nYour WhatsApp connection attempt timed out.\n\n` +
-            `This usually means:\n` +
-            `• The pairing code wasn't entered in time\n` +
-            `• Network connection issues\n` +
-            `• WhatsApp servers are slow\n\n` +
-            `Use /connect to try again.`,
-            { parse_mode: 'Markdown' }
+              `This usually means:\n` +
+              `• The pairing code wasn't entered in time\n` +
+              `• Network connection issues\n` +
+              `• WhatsApp servers are slow\n\n` +
+              `Use /connect to try again.`,
+            { parse_mode: "Markdown" },
           )
         } catch (notifyError) {
           logger.error(`Failed to send timeout notification:`, notifyError)
@@ -269,7 +282,6 @@ export class ConnectionEventHandler {
       }
 
       logger.info(`✅ Connection timeout cleanup completed for ${sessionId}`)
-
     } catch (error) {
       logger.error(`❌ Connection timeout handler error for ${sessionId}:`, error)
     }
@@ -281,7 +293,7 @@ export class ConnectionEventHandler {
   async _handleBadMac(sessionId) {
     try {
       logger.info(`🔧 Handling bad MAC for ${sessionId} - clearing auth storage`)
-      
+
       const session = await this.sessionManager.storage.getSession(sessionId)
       if (!session) {
         logger.error(`❌ No session data found for ${sessionId}`)
@@ -292,11 +304,11 @@ export class ConnectionEventHandler {
       const sock = this.sessionManager.activeSockets?.get(sessionId)
       if (sock) {
         try {
-          if (sock.ev && typeof sock.ev.removeAllListeners === 'function') {
+          if (sock.ev && typeof sock.ev.removeAllListeners === "function") {
             sock.ev.removeAllListeners()
           }
           if (sock.ws && sock.ws.readyState === sock.ws.OPEN) {
-            sock.ws.close(1000, 'Bad MAC cleanup')
+            sock.ws.close(1000, "Bad MAC cleanup")
           }
         } catch (error) {
           logger.error(`Error cleaning up socket for ${sessionId}:`, error)
@@ -312,25 +324,32 @@ export class ConnectionEventHandler {
       // Update session status
       await this.sessionManager.storage.updateSession(sessionId, {
         isConnected: false,
-        connectionStatus: 'disconnected',
-        reconnectAttempts: 0
+        connectionStatus: "disconnected",
+        reconnectAttempts: 0,
       })
 
-      // Lock and attempt reconnection
-      this.reconnectionLocks.add(sessionId)
-      
+      const reconnectionKey = `reconnecting_${sessionId}`
+      if (this.sessionManager.storage) {
+        await this.sessionManager.storage.setFlag(reconnectionKey, true, 60000) // 60 second timeout
+      }
+
       logger.info(`🔄 Attempting reconnection for ${sessionId} after bad MAC cleanup`)
       setTimeout(() => {
         this._attemptReconnection(sessionId)
-          .catch(err => logger.error(`Reconnection after bad MAC failed:`, err))
+          .catch((err) => logger.error(`Reconnection after bad MAC failed:`, err))
           .finally(() => {
-            this.reconnectionLocks.delete(sessionId)
+            const reconnectionKey = `reconnecting_${sessionId}`
+            if (this.sessionManager.storage) {
+              this.sessionManager.storage.setFlag(reconnectionKey, false)
+            }
           })
       }, 2000)
-
     } catch (error) {
       logger.error(`❌ Bad MAC handler error for ${sessionId}:`, error)
-      this.reconnectionLocks.delete(sessionId)
+      const reconnectionKey = `reconnecting_${sessionId}`
+      if (this.sessionManager.storage) {
+        this.sessionManager.storage.setFlag(reconnectionKey, false)
+      }
       await this.sessionManager.performCompleteUserCleanup(sessionId)
     }
   }
@@ -341,30 +360,29 @@ export class ConnectionEventHandler {
   async _handleForbidden(sessionId) {
     try {
       logger.info(`🚫 Handling forbidden state for ${sessionId}`)
-      
+
       const session = await this.sessionManager.storage.getSession(sessionId)
-      
+
       await this.sessionManager.performCompleteUserCleanup(sessionId)
-      
-      if (session?.source === 'telegram' && this.sessionManager.telegramBot) {
-        const userId = sessionId.replace('session_', '')
+
+      if (session?.source === "telegram" && this.sessionManager.telegramBot) {
+        const userId = sessionId.replace("session_", "")
         try {
           await this.sessionManager.telegramBot.sendMessage(
             userId,
             `🚫 *WhatsApp Account Restricted*\n\n` +
-            `Your WhatsApp account ${session.phoneNumber || ''} has been banned or restricted.\n\n` +
-            `This usually happens due to:\n` +
-            `• Using unofficial WhatsApp versions\n` +
-            `• Violating WhatsApp Terms of Service\n` +
-            `• Suspicious activity detected\n\n` +
-            `Please contact WhatsApp support or wait for the restriction to be lifted.`,
-            { parse_mode: 'Markdown' }
+              `Your WhatsApp account ${session.phoneNumber || ""} has been banned or restricted.\n\n` +
+              `This usually happens due to:\n` +
+              `• Using unofficial WhatsApp versions\n` +
+              `• Violating WhatsApp Terms of Service\n` +
+              `• Suspicious activity detected\n\n` +
+              `Please contact WhatsApp support or wait for the restriction to be lifted.`,
+            { parse_mode: "Markdown" },
           )
         } catch (notifyError) {
           logger.error(`Failed to send forbidden notification:`, notifyError)
         }
       }
-
     } catch (error) {
       logger.error(`❌ Forbidden handler error for ${sessionId}:`, error)
     }
@@ -376,47 +394,45 @@ export class ConnectionEventHandler {
   async _handleLoggedOut(sessionId) {
     try {
       logger.info(`👋 Handling logged out state for ${sessionId}`)
-      
+
       const session = await this.sessionManager.storage.getSession(sessionId)
-      const isWebUser = session?.source === 'web'
-      
+      const isWebUser = session?.source === "web"
+
       if (isWebUser) {
         logger.info(`🌐 Web user ${sessionId} logged out - preserving PostgreSQL, deleting MongoDB`)
-        
+
         await this.sessionManager.connectionManager.cleanupAuthState(sessionId)
-        
+
         const sock = this.sessionManager.activeSockets.get(sessionId)
         if (sock) {
           await this.sessionManager._cleanupSocket(sessionId, sock)
         }
-        
+
         this.sessionManager.activeSockets.delete(sessionId)
         this.sessionManager.sessionState.delete(sessionId)
-        
+
         await this.sessionManager.storage.deleteSessionKeepUser(sessionId)
-        
+
         logger.info(`✅ Web user ${sessionId} - MongoDB deleted, PostgreSQL preserved`)
-        
       } else {
         logger.info(`📱 Telegram user ${sessionId} logged out - full cleanup`)
         await this.sessionManager.performCompleteUserCleanup(sessionId)
-        
+
         if (this.sessionManager.telegramBot) {
-          const telegramUserId = sessionId.replace('session_', '')
+          const telegramUserId = sessionId.replace("session_", "")
           try {
             await this.sessionManager.telegramBot.sendMessage(
               telegramUserId,
               `⚠️ *WhatsApp Disconnected*\n\n` +
-              `Your WhatsApp ${session?.phoneNumber || ''} has been logged out.\n\n` +
-              `Use /connect to reconnect.`,
-              { parse_mode: 'Markdown' }
+                `Your WhatsApp ${session?.phoneNumber || ""} has been logged out.\n\n` +
+                `Use /connect to reconnect.`,
+              { parse_mode: "Markdown" },
             )
           } catch (notifyError) {
             logger.error(`Failed to send logout notification:`, notifyError)
           }
         }
       }
-
     } catch (error) {
       logger.error(`❌ Logged out handler error for ${sessionId}:`, error)
     }
@@ -432,7 +448,7 @@ export class ConnectionEventHandler {
   async _attemptReconnection(sessionId) {
     try {
       const session = await this.sessionManager.storage.getSession(sessionId)
-      
+
       if (!session) {
         logger.error(`❌ No session data found for ${sessionId} - cannot reconnect`)
         return
@@ -442,7 +458,7 @@ export class ConnectionEventHandler {
       const newAttempts = (session.reconnectAttempts || 0) + 1
       await this.sessionManager.storage.updateSession(sessionId, {
         reconnectAttempts: newAttempts,
-        connectionStatus: 'connected'
+        connectionStatus: "connected",
       })
 
       logger.info(`🔄 Reconnection attempt ${newAttempts} for ${sessionId}`)
@@ -453,17 +469,16 @@ export class ConnectionEventHandler {
         session.phoneNumber,
         session.callbacks || {},
         true, // isReconnect
-        session.source || 'telegram',
-        false // Don't allow pairing on reconnect
+        session.source || "telegram",
+        false, // Don't allow pairing on reconnect
       )
-
     } catch (error) {
       logger.error(`❌ Reconnection failed for ${sessionId}:`, error)
-      
+
       // Schedule next attempt with exponential backoff
       const session = await this.sessionManager.storage.getSession(sessionId)
       const delay = Math.min(30000, 5000 * Math.pow(2, session?.reconnectAttempts || 0))
-      
+
       setTimeout(() => {
         this._attemptReconnection(sessionId).catch(() => {})
       }, delay)
@@ -480,21 +495,15 @@ export class ConnectionEventHandler {
   async _sendDisconnectNotification(sessionId, config) {
     try {
       const session = await this.sessionManager.storage.getSession(sessionId)
-      
-      if (session?.source === 'telegram' && this.sessionManager.telegramBot) {
-        const userId = sessionId.replace('session_', '')
+
+      if (session?.source === "telegram" && this.sessionManager.telegramBot) {
+        const userId = sessionId.replace("session_", "")
         const userAction = getUserAction(config.statusCode)
-        
-        const message = `⚠️ *WhatsApp Disconnected*\n\n` +
-          `${config.message}\n\n` +
-          (userAction ? `${userAction}` : '')
-        
+
+        const message = `⚠️ *WhatsApp Disconnected*\n\n` + `${config.message}\n\n` + (userAction ? `${userAction}` : "")
+
         try {
-          await this.sessionManager.telegramBot.sendMessage(
-            userId,
-            message,
-            { parse_mode: 'Markdown' }
-          )
+          await this.sessionManager.telegramBot.sendMessage(userId, message, { parse_mode: "Markdown" })
         } catch (notifyError) {
           logger.error(`Failed to send disconnect notification:`, notifyError)
         }
@@ -513,13 +522,13 @@ export class ConnectionEventHandler {
       if (this.sessionManager.connectionManager?.mongoClient) {
         try {
           const db = this.sessionManager.connectionManager.mongoClient.db()
-          const collection = db.collection('auth_baileys')
-          
+          const collection = db.collection("auth_baileys")
+
           const result = await collection.deleteMany({
             sessionId: sessionId,
-            key: { $ne: 'creds.json' }
+            key: { $ne: "creds.json" },
           })
-          
+
           logger.info(`🧹 Cleared ${result.deletedCount} auth items for ${sessionId} (kept creds)`)
         } catch (mongoError) {
           logger.warn(`Failed to clear MongoDB auth for ${sessionId}:`, mongoError)
@@ -530,22 +539,21 @@ export class ConnectionEventHandler {
       if (this.sessionManager.connectionManager?.fileManager) {
         try {
           const sessionPath = this.sessionManager.connectionManager.fileManager.getSessionPath(sessionId)
-          const fs = await import('fs').then(m => m.promises)
-          
+          const fs = await import("fs").then((m) => m.promises)
+
           const files = await fs.readdir(sessionPath).catch(() => [])
-          
+
           for (const file of files) {
-            if (file !== 'creds.json') {
+            if (file !== "creds.json") {
               await fs.unlink(`${sessionPath}/${file}`).catch(() => {})
             }
           }
-          
+
           logger.info(`🧹 Cleared file auth storage for ${sessionId} (kept creds.json)`)
         } catch (fileError) {
           logger.warn(`Failed to clear file auth for ${sessionId}:`, fileError)
         }
       }
-
     } catch (error) {
       logger.error(`Error clearing auth storage for ${sessionId}:`, error)
       throw error
@@ -558,7 +566,7 @@ export class ConnectionEventHandler {
 
   async handleCredsUpdate(sock, sessionId) {
     try {
-      await sock.sendPresenceUpdate('unavailable').catch(() => {})
+      await sock.sendPresenceUpdate("unavailable").catch(() => {})
       logger.debug(`🔑 Credentials updated for ${sessionId}`)
     } catch (error) {
       logger.error(`Creds update error for ${sessionId}:`, error)
@@ -576,19 +584,19 @@ export class ConnectionEventHandler {
   async handleContactsUpdate(sock, sessionId, updates) {
     try {
       logger.debug(`👥 ${updates.length} contact updates for ${sessionId}`)
-      
-      const { getContactManager } = await import('../contacts/index.js').catch(() => ({}))
-      
+
+      const { getContactManager } = await import("../contacts/index.js").catch(() => ({}))
+
       if (getContactManager) {
         const contactManager = getContactManager()
-        
+
         for (const update of updates) {
           try {
             await contactManager.updateContact(sessionId, {
               jid: update.id,
               name: update.name,
               notify: update.notify,
-              verifiedName: update.verifiedName
+              verifiedName: update.verifiedName,
             })
           } catch (error) {
             logger.error(`Failed to update contact ${update.id}:`, error)

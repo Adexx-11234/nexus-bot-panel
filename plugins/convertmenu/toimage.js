@@ -1,6 +1,7 @@
 import { createComponentLogger } from "../../utils/logger.js"
-import { webp2png } from "../../lib/converters/media-converter.js"
+import { webp2png, getTempFilePath, cleanupTempFile } from "../../lib/converters/media-converter.js"
 import { downloadMediaMessage } from "@whiskeysockets/baileys"
+import fs from "fs"
 
 const logger = createComponentLogger("TO-IMAGE")
 
@@ -20,34 +21,43 @@ export default {
     const quotedMessage = quotedMsg.message
     
     const isSticker = quotedMessage?.stickerMessage || quotedMsg.type === 'sticker'
-    const mime = quotedMsg.mimetype || ""
-    const isStickerMime = /webp/.test(mime) || mime.includes("image/webp")
     
-    if (!isSticker && !isStickerMime) {
-      logger.info("Not a sticker. Type:", quotedMsg.type, "Mimetype:", mime)
-      return m.reply(`❌ Reply to a sticker (not an image or video)` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`)
+    if (!isSticker) {
+      return m.reply(`❌ Reply to a sticker` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`)
     }
+
+    let tempFilePath = null
 
     try {
       m.reply(`⏳ Converting sticker to image...` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`)
 
-      const media = await downloadMediaMessage(m.quoted, "buffer", {}, { logger: console })
+      const media = await downloadMediaMessage(m.quoted, "buffer", {}, { 
+        logger: console,
+        reuploadRequest: sock.updateMediaMessage  
+      })
       
       if (!media || media.length === 0) {
         return m.reply(`❌ Failed to download sticker` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`)
       }
 
-      // Convert WebP to PNG using ffmpeg
       const pngBuffer = await webp2png(media)
       
+      // Save to temp
+      tempFilePath = getTempFilePath('toimage', '.png')
+      fs.writeFileSync(tempFilePath, pngBuffer)
+      
       await sock.sendMessage(m.chat, { 
-        image: pngBuffer,
-        caption: "✅ Converted to image"
+        image: fs.readFileSync(tempFilePath),
+        caption: "✅ Converted to image" + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
       }, { quoted: m })
       
     } catch (error) {
-      logger.error("Error converting to image:", error)
-      m.reply("❌ Failed to convert sticker to image: " + error.message)
+      logger.error("Error:", error.message)
+      m.reply("❌ Failed to convert: " + error.message + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`)
+    } finally {
+      if (tempFilePath) {
+        cleanupTempFile(tempFilePath)
+      }
     }
   }
 }

@@ -3,6 +3,7 @@
 
 import { AntiDeletedHandler } from "../whatsapp/index.js"
 import { UserQueries } from "../database/query.js"
+import { logger } from "../utils/logger.js"
 
 export default {
   name: "Auto Anti-Deleted",
@@ -15,16 +16,16 @@ export default {
     return { response: "This plugin runs automatically and doesn't have manual commands." }
   },
 
-async processMessage(sock, sessionId, m) {
+  async processMessage(sock, sessionId, m) {
     try {
-        const deletedProcessed = await AntiDeletedHandler.handleDeletedMessage(m, sock)
-        if (deletedProcessed) {
-          this.log(`Deleted message processed for session ${sessionId}`, "info")
-        }
-      } catch (deletedError) {
-        this.log(`Anti-deleted processing error: ${deletedError.message}`, "error")
+      const deletedProcessed = await AntiDeletedHandler.handleDeletedMessage(m, sock)
+      if (deletedProcessed) {
+        logger.info(`[AutoAntiDeleted] Deleted message processed for session ${sessionId}`)
       }
-},
+    } catch (deletedError) {
+      logger.error(`[AutoAntiDeleted] Anti-deleted processing error: ${deletedError.message}`)
+    }
+  },
 
   /**
    * Enhanced shouldProcess method with better filtering
@@ -64,10 +65,10 @@ async processMessage(sock, sessionId, m) {
     // Verify ViewOnceHandler is available
     try {
       if (typeof AntiDeletedHandler.handleDeletedMessage === "function") {
-        // ViewOnceHandler integration verified
+        logger.info("[AutoAntiDeleted] AntiDeletedHandler integration verified")
       }
     } catch (error) {
-      console.error("[AutoAntiViewOnce] ViewOnceHandler verification failed:", error.message)
+      logger.error(`[AutoAntiDeleted] AntiDeletedHandler verification failed: ${error.message}`)
     }
   },
 

@@ -72,63 +72,52 @@ export default {
           }
         }
         
-        // Helper function to download media
-        const downloadMedia = async (msg) => {
-          try {
-            const { downloadMediaMessage } = await import('@whiskeysockets/baileys')
-            return await downloadMediaMessage(msg, 'buffer', {})
-          } catch (error) {
-            logger.error("[HideTag] Error downloading media:", error.message)
-            throw error
-          }
-        }
         
         // Handle media messages
-        if (quotedMsg.message?.imageMessage) {
-          const media = await downloadMedia(quotedMsg)
-          await sock.sendMessage(groupJid, {
-            image: media,
-            caption: quotedMsg.message.imageMessage.caption || '\u200E',
-            mentions: mentions
-          })
-        } else if (quotedMsg.message?.videoMessage) {
-          const media = await downloadMedia(quotedMsg)
-          await sock.sendMessage(groupJid, {
-            video: media,
-            caption: quotedMsg.message.videoMessage.caption || '\u200E',
-            mentions: mentions
-          })
-        } else if (quotedMsg.message?.audioMessage) {
-          const media = await downloadMedia(quotedMsg)
-          await sock.sendMessage(groupJid, {
-            audio: media,
-            mimetype: quotedMsg.message.audioMessage.mimetype,
-            mentions: mentions
-          })
-        } else if (quotedMsg.message?.documentMessage) {
-          const media = await downloadMedia(quotedMsg)
-          await sock.sendMessage(groupJid, {
-            document: media,
-            mimetype: quotedMsg.message.documentMessage.mimetype,
-            fileName: quotedMsg.message.documentMessage.fileName,
-            caption: quotedMsg.message.documentMessage.caption || '\u200E',
-            mentions: mentions
-          })
-        } else if (quotedMsg.message?.stickerMessage) {
-          const media = await downloadMedia(quotedMsg)
-          await sock.sendMessage(groupJid, {
-            sticker: media,
-            mentions: mentions
-          })
-        } else {
-          // Text message - preserve original formatting
-          const quotedText = quotedMsg.text || quotedMsg.body || quotedMsg.message?.conversation || '\u200E'
-          await sock.sendMessage(groupJid, {
-            text: quotedText,
-            mentions: mentions
-          })
-        }
-        
+if (quotedMsg.message?.imageMessage) {
+  const media = await sock.downloadMedia(quotedMsg)
+  await sock.sendMessage(groupJid, {
+    image: media,
+    caption: quotedMsg.message.imageMessage.caption || '\u200E',
+    mentions: mentions
+  })
+} else if (quotedMsg.message?.videoMessage) {
+  const media = await sock.downloadMedia(quotedMsg)
+  await sock.sendMessage(groupJid, {
+    video: media,
+    caption: quotedMsg.message.videoMessage.caption || '\u200E',
+    mentions: mentions
+  })
+} else if (quotedMsg.message?.audioMessage) {
+  const media = await sock.downloadMedia(quotedMsg)
+  await sock.sendMessage(groupJid, {
+    audio: media,
+    mimetype: quotedMsg.message.audioMessage.mimetype,
+    mentions: mentions
+  })
+} else if (quotedMsg.message?.documentMessage) {
+  const media = await sock.downloadMedia(quotedMsg)
+  await sock.sendMessage(groupJid, {
+    document: media,
+    mimetype: quotedMsg.message.documentMessage.mimetype,
+    fileName: quotedMsg.message.documentMessage.fileName,
+    caption: quotedMsg.message.documentMessage.caption || '\u200E',
+    mentions: mentions
+  })
+} else if (quotedMsg.message?.stickerMessage) {
+  const media = await sock.downloadMedia(quotedMsg)
+  await sock.sendMessage(groupJid, {
+    sticker: media,
+    mentions: mentions
+  })
+} else {
+  // Text message - preserve original formatting
+  const quotedText = quotedMsg.text || quotedMsg.body || quotedMsg.message?.conversation || '\u200E'
+  await sock.sendMessage(groupJid, {
+    text: quotedText,
+    mentions: mentions
+  })
+}
         return { response: null, success: true }
       }
 

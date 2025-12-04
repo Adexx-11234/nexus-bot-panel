@@ -1,13 +1,13 @@
-import crypto from 'crypto'
-import { createComponentLogger } from '../../utils/logger.js'
-import { MongoDBStorage } from './mongodb.js'
-import { PostgreSQLStorage } from './postgres.js'
-import { FileManager } from './file.js'
+import crypto from "crypto"
+import { createComponentLogger } from "../../utils/logger.js"
+import { MongoDBStorage } from "./mongodb.js"
+import { PostgreSQLStorage } from "./postgres.js"
+import { FileManager } from "./file.js"
 
-const logger = createComponentLogger('SESSION_STORAGE')
+const logger = createComponentLogger("SESSION_STORAGE")
 
-const SESSION_CACHE_MAX_SIZE = 900
-const SESSION_CACHE_TTL = 120000
+const SESSION_CACHE_MAX_SIZE = 100 // Reduced from 900
+const SESSION_CACHE_TTL = 15000 // Reduced from 120000 to 15 seconds
 const WRITE_BUFFER_FLUSH_INTERVAL = 1000
 
 export class SessionStorage {
@@ -15,26 +15,28 @@ export class SessionStorage {
     this.mongoStorage = new MongoDBStorage()
     this.postgresStorage = new PostgreSQLStorage()
     this.fileManager = new FileManager()
-    
+
     this.sessionCache = new Map()
     this.writeBuffer = new Map()
-    
+
+    this.sessionFlags = new Map()
+
     this.encryptionKey = this._getEncryptionKey()
     this.healthCheckInterval = null
     this.orphanCleanupInterval = null
     this.cacheCleanupInterval = null
-    
+    this.flagCleanupInterval = null
+
     this._startHealthCheck()
     this._startOrphanCleanup()
     this._startAggressiveCacheCleanup()
-    
-    logger.info('Session storage coordinator initialized')
+    this._startFlagCleanup()
+
+    logger.info("Session storage coordinator initialized")
   }
 
   get isConnected() {
-    return this.mongoStorage.isConnected || 
-           this.postgresStorage.isConnected || 
-           this.fileManager !== null
+    return this.mongoStorage.isConnected || this.postgresStorage.isConnected || this.fileManager !== null
   }
 
   get isMongoConnected() {
@@ -60,7 +62,35 @@ export class SessionStorage {
   _startAggressiveCacheCleanup() {
     this.cacheCleanupInterval = setInterval(() => {
       this._cleanupStaleCache()
-    }, 30000)
+    }, 5000)
+  }
+
+  _startFlagCleanup() {
+    this.flagCleanupInterval = setInterval(() => {
+      const now = Date.now()
+      for (const [key, value] of this.sessionFlags.entries()) {
+        if (value.expiry && now > value.expiry) {
+          this.sessionFlags.delete(key)
+        }
+      }
+    }, 5000)
+  }
+
+  async setFlag(key, value, ttl = 60000) {
+    this.sessionFlags.set(key, {
+      value,
+      expiry: Date.now() + ttl,
+    })
+  }
+
+  async getFlag(key) {
+    const flag = this.sessionFlags.get(key)
+    if (!flag) return false
+    if (flag.expiry && Date.now() > flag.expiry) {
+      this.sessionFlags.delete(key)
+      return false
+    }
+    return flag.value
   }
 
   _cleanupStaleCache() {
@@ -69,16 +99,15 @@ export class SessionStorage {
 
     try {
       for (const [key, value] of this.sessionCache.entries()) {
-        if (value.lastCached && (now - value.lastCached > SESSION_CACHE_TTL)) {
+        if (value.lastCached && now - value.lastCached > SESSION_CACHE_TTL) {
           this.sessionCache.delete(key)
           removed++
         }
       }
 
       if (this.sessionCache.size > SESSION_CACHE_MAX_SIZE) {
-        const entries = Array.from(this.sessionCache.entries())
-          .sort((a, b) => a[1].lastCached - b[1].lastCached)
-        
+        const entries = Array.from(this.sessionCache.entries()).sort((a, b) => a[1].lastCached - b[1].lastCached)
+
         const toRemove = entries.slice(0, this.sessionCache.size - SESSION_CACHE_MAX_SIZE)
         toRemove.forEach(([key]) => {
           this.sessionCache.delete(key)
@@ -87,11 +116,12 @@ export class SessionStorage {
       }
 
       if (removed > 0) {
-        logger.debug(`Cleaned ${removed} stale cache entries (size: ${this.sessionCache.size}/${SESSION_CACHE_MAX_SIZE})`)
+        logger.debug(
+          `Cleaned ${removed} stale cache entries (size: ${this.sessionCache.size}/${SESSION_CACHE_MAX_SIZE})`,
+        )
       }
-
     } catch (error) {
-      logger.error('Cache cleanup error (entries preserved):', error.message)
+      logger.error("Cache cleanup error (entries preserved):", error.message)
     }
   }
 
@@ -115,20 +145,20 @@ export class SessionStorage {
 
       if (saved) {
         if (this.sessionCache.size >= SESSION_CACHE_MAX_SIZE) {
-          const oldestKey = Array.from(this.sessionCache.entries())
-            .sort((a, b) => a[1].lastCached - b[1].lastCached)[0][0]
+          const oldestKey = Array.from(this.sessionCache.entries()).sort(
+            (a, b) => a[1].lastCached - b[1].lastCached,
+          )[0][0]
           this.sessionCache.delete(oldestKey)
         }
 
         this.sessionCache.set(sessionId, {
           ...sessionData,
           credentials,
-          lastCached: Date.now()
+          lastCached: Date.now(),
         })
       }
 
       return saved
-
     } catch (error) {
       logger.error(`Error saving session ${sessionId}:`, error)
       return false
@@ -138,7 +168,7 @@ export class SessionStorage {
   async getSession(sessionId) {
     try {
       const cached = this.sessionCache.get(sessionId)
-      if (cached && (Date.now() - cached.lastCached) < SESSION_CACHE_TTL) {
+      if (cached && Date.now() - cached.lastCached < SESSION_CACHE_TTL) {
         return this._formatSessionData(cached)
       }
 
@@ -158,21 +188,21 @@ export class SessionStorage {
 
       if (sessionData) {
         if (this.sessionCache.size >= SESSION_CACHE_MAX_SIZE) {
-          const oldestKey = Array.from(this.sessionCache.entries())
-            .sort((a, b) => a[1].lastCached - b[1].lastCached)[0][0]
+          const oldestKey = Array.from(this.sessionCache.entries()).sort(
+            (a, b) => a[1].lastCached - b[1].lastCached,
+          )[0][0]
           this.sessionCache.delete(oldestKey)
         }
 
         this.sessionCache.set(sessionId, {
           ...sessionData,
-          lastCached: Date.now()
+          lastCached: Date.now(),
         })
         return this._formatSessionData(sessionData)
       }
 
       this.sessionCache.delete(sessionId)
       return null
-
     } catch (error) {
       logger.error(`Error retrieving session ${sessionId}:`, error)
       return null
@@ -186,16 +216,16 @@ export class SessionStorage {
   async updateSessionImmediate(sessionId, updates) {
     try {
       logger.info(`🚀 IMMEDIATE update for ${sessionId}:`, updates)
-      
+
       // Clear any pending buffered update
       this._clearWriteBuffer(sessionId)
-      
+
       // Add timestamp
       updates.updatedAt = new Date()
 
       // Update both databases immediately
       let updated = false
-      
+
       if (this.mongoStorage.isConnected) {
         updated = await this.mongoStorage.updateSession(sessionId, updates)
         if (updated) {
@@ -224,7 +254,6 @@ export class SessionStorage {
       }
 
       return updated
-
     } catch (error) {
       logger.error(`Error in immediate update for ${sessionId}:`, error)
       return false
@@ -247,7 +276,7 @@ export class SessionStorage {
       } else {
         this.writeBuffer.set(bufferId, {
           data: { ...updates },
-          timeout: null
+          timeout: null,
         })
       }
 
@@ -279,7 +308,6 @@ export class SessionStorage {
           }
 
           this.writeBuffer.delete(bufferId)
-
         } catch (error) {
           logger.error(`Error in buffered update for ${sessionId}:`, error)
           this.writeBuffer.delete(bufferId)
@@ -288,7 +316,6 @@ export class SessionStorage {
 
       this.writeBuffer.get(bufferId).timeout = timeoutId
       return true
-
     } catch (error) {
       logger.error(`Error buffering update for ${sessionId}:`, error)
       return false
@@ -306,7 +333,7 @@ export class SessionStorage {
         postgresUpdated: false,
         postgresDeleted: false,
         fileDeleted: false,
-        hadWebAuth: false
+        hadWebAuth: false,
       }
 
       if (this.mongoStorage.isConnected) {
@@ -324,10 +351,10 @@ export class SessionStorage {
       }
 
       logger.info(`Logout cleanup for ${sessionId}:`, results)
-      
-      return results.authBaileysDeleted || results.mongoSessionDeleted || 
-             results.postgresUpdated || results.postgresDeleted
 
+      return (
+        results.authBaileysDeleted || results.mongoSessionDeleted || results.postgresUpdated || results.postgresDeleted
+      )
     } catch (error) {
       logger.error(`Error in deleteSessionKeepUser for ${sessionId}:`, error)
       return false
@@ -353,7 +380,6 @@ export class SessionStorage {
       await this.fileManager.cleanupSessionFiles(sessionId)
 
       return deleted
-
     } catch (error) {
       logger.error(`Error deleting session ${sessionId}:`, error)
       return false
@@ -379,11 +405,10 @@ export class SessionStorage {
       deletePromises.push(this.fileManager.cleanupSessionFiles(sessionId))
 
       const results = await Promise.allSettled(deletePromises)
-      const success = results.some(r => r.status === 'fulfilled' && r.value)
+      const success = results.some((r) => r.status === "fulfilled" && r.value)
 
       logger.info(`Complete deletion for ${sessionId}: ${success}`)
       return success
-
     } catch (error) {
       logger.error(`Error completely deleting session ${sessionId}:`, error)
       return false
@@ -392,30 +417,30 @@ export class SessionStorage {
 
   async cleanupOrphanedSessions() {
     if (!this.mongoStorage.isConnected) {
-      logger.warn('MongoDB not connected - skipping orphan cleanup')
+      logger.warn("MongoDB not connected - skipping orphan cleanup")
       return { cleaned: 0, errors: 0 }
     }
 
     try {
-      logger.info('Starting orphaned sessions cleanup...')
+      logger.info("Starting orphaned sessions cleanup...")
 
       const allSessions = await this.mongoStorage.sessions.find({}).toArray()
-      
+
       if (allSessions.length === 0) {
         return { cleaned: 0, errors: 0 }
       }
 
-      const authCollection = this.mongoStorage.db.collection('auth_baileys')
+      const authCollection = this.mongoStorage.db.collection("auth_baileys")
       let cleanedCount = 0
       let errorCount = 0
 
       for (const session of allSessions) {
         try {
           const sessionId = session.sessionId
-          
+
           const credsExists = await authCollection.findOne({
             sessionId: sessionId,
-            filename: 'creds.json'
+            filename: "creds.json",
           })
 
           if (!credsExists) {
@@ -424,20 +449,19 @@ export class SessionStorage {
             if (this.mongoStorage.isConnected) {
               await this.mongoStorage.deleteSession(sessionId)
             }
-            
+
             await this.fileManager.cleanupSessionFiles(sessionId)
-            
+
             if (this.postgresStorage.isConnected) {
-              const source = session.source || 'telegram'
+              const source = session.source || "telegram"
               await this.postgresStorage.cleanupOrphanedSession(sessionId, source)
             }
 
             this.sessionCache.delete(sessionId)
             this._clearWriteBuffer(sessionId)
-            
+
             cleanedCount++
           }
-
         } catch (error) {
           logger.error(`Error cleaning orphaned session ${session.sessionId}:`, error.message)
           errorCount++
@@ -446,9 +470,8 @@ export class SessionStorage {
 
       logger.info(`Orphaned cleanup: ${cleanedCount} cleaned, ${errorCount} errors`)
       return { cleaned: cleanedCount, errors: errorCount }
-
     } catch (error) {
-      logger.error('Orphaned sessions cleanup failed:', error)
+      logger.error("Orphaned sessions cleanup failed:", error)
       return { cleaned: 0, errors: 1 }
     }
   }
@@ -465,10 +488,9 @@ export class SessionStorage {
         sessions = await this.fileManager.getAllSessions()
       }
 
-      return sessions.map(session => this._formatSessionData(session))
-
+      return sessions.map((session) => this._formatSessionData(session))
     } catch (error) {
-      logger.error('Error retrieving all sessions:', error)
+      logger.error("Error retrieving all sessions:", error)
       return []
     }
   }
@@ -483,10 +505,9 @@ export class SessionStorage {
         sessions = await this.postgresStorage.getUndetectedWebSessions()
       }
 
-      return sessions.map(session => this._formatSessionData(session))
-
+      return sessions.map((session) => this._formatSessionData(session))
     } catch (error) {
-      logger.error('Error getting undetected web sessions:', error)
+      logger.error("Error getting undetected web sessions:", error)
       return []
     }
   }
@@ -495,7 +516,7 @@ export class SessionStorage {
     try {
       const updateData = {
         detected,
-        detectedAt: detected ? new Date() : null
+        detectedAt: detected ? new Date() : null,
       }
 
       let updated = false
@@ -510,7 +531,6 @@ export class SessionStorage {
       }
 
       return updated
-
     } catch (error) {
       logger.error(`Error marking ${sessionId} as detected:`, error)
       return false
@@ -526,15 +546,15 @@ export class SessionStorage {
       telegramId: sessionData.telegramId || sessionData.userId,
       phoneNumber: sessionData.phoneNumber,
       isConnected: Boolean(sessionData.isConnected),
-      connectionStatus: sessionData.connectionStatus || 'disconnected',
+      connectionStatus: sessionData.connectionStatus || "disconnected",
       reconnectAttempts: sessionData.reconnectAttempts || 0,
-      source: sessionData.source || 'telegram',
+      source: sessionData.source || "telegram",
       detected: sessionData.detected !== false,
       detectedAt: sessionData.detectedAt,
       credentials: sessionData.credentials || null,
       authState: sessionData.authState || null,
       createdAt: sessionData.createdAt,
-      updatedAt: sessionData.updatedAt
+      updatedAt: sessionData.updatedAt,
     }
   }
 
@@ -551,17 +571,17 @@ export class SessionStorage {
   }
 
   _getEncryptionKey() {
-    const key = process.env.SESSION_ENCRYPTION_KEY || 'default-key-change-in-production'
-    return crypto.createHash('sha256').update(key).digest()
+    const key = process.env.SESSION_ENCRYPTION_KEY || "default-key-change-in-production"
+    return crypto.createHash("sha256").update(key).digest()
   }
 
   _startHealthCheck() {
     this.healthCheckInterval = setInterval(async () => {
       if (this.mongoStorage.isConnected) {
         try {
-          await this.mongoStorage.client.db('admin').command({ ping: 1 })
+          await this.mongoStorage.client.db("admin").command({ ping: 1 })
         } catch (error) {
-          logger.warn('MongoDB health check failed')
+          logger.warn("MongoDB health check failed")
           this.mongoStorage.isConnected = false
         }
       }
@@ -569,10 +589,10 @@ export class SessionStorage {
       if (this.postgresStorage.isConnected) {
         try {
           const client = await this.postgresStorage.pool.connect()
-          await client.query('SELECT 1')
+          await client.query("SELECT 1")
           client.release()
         } catch (error) {
-          logger.warn('PostgreSQL health check failed')
+          logger.warn("PostgreSQL health check failed")
           this.postgresStorage.isConnected = false
         }
       }
@@ -581,14 +601,14 @@ export class SessionStorage {
 
   _startOrphanCleanup() {
     this.orphanCleanupInterval = setInterval(async () => {
-      await this.cleanupOrphanedSessions().catch(error => {
-        logger.error('Periodic orphan cleanup error:', error)
+      await this.cleanupOrphanedSessions().catch((error) => {
+        logger.error("Periodic orphan cleanup error:", error)
       })
     }, 1800000)
 
     setTimeout(async () => {
-      await this.cleanupOrphanedSessions().catch(error => {
-        logger.error('Initial orphan cleanup error:', error)
+      await this.cleanupOrphanedSessions().catch((error) => {
+        logger.error("Initial orphan cleanup error:", error)
       })
     }, 120000)
   }
@@ -601,7 +621,7 @@ export class SessionStorage {
       overall: this.isConnected,
       cacheSize: this.sessionCache.size,
       cacheMaxSize: SESSION_CACHE_MAX_SIZE,
-      bufferSize: this.writeBuffer.size
+      bufferSize: this.writeBuffer.size,
     }
   }
 
@@ -617,7 +637,7 @@ export class SessionStorage {
         clearTimeout(bufferData.timeout)
       }
 
-      const sessionId = bufferId.replace('_update', '')
+      const sessionId = bufferId.replace("_update", "")
 
       const flushPromise = (async () => {
         try {
@@ -648,7 +668,7 @@ export class SessionStorage {
 
   async close() {
     try {
-      logger.info('Closing session storage...')
+      logger.info("Closing session storage...")
 
       if (this.healthCheckInterval) {
         clearInterval(this.healthCheckInterval)
@@ -662,18 +682,18 @@ export class SessionStorage {
         clearInterval(this.cacheCleanupInterval)
       }
 
+      if (this.flagCleanupInterval) {
+        clearInterval(this.flagCleanupInterval)
+      }
+
       await this.flushWriteBuffers()
       this.sessionCache.clear()
 
-      await Promise.allSettled([
-        this.mongoStorage.close(),
-        this.postgresStorage.close()
-      ])
+      await Promise.allSettled([this.mongoStorage.close(), this.postgresStorage.close()])
 
-      logger.info('Session storage closed')
-
+      logger.info("Session storage closed")
     } catch (error) {
-      logger.error('Storage close error:', error)
+      logger.error("Storage close error:", error)
     }
   }
 
@@ -683,19 +703,23 @@ export class SessionStorage {
         mongodb: this.mongoStorage.isConnected,
         postgresql: this.postgresStorage.isConnected,
         fileManager: this.fileManager !== null,
-        overall: this.isConnected
+        overall: this.isConnected,
       },
       cache: {
         size: this.sessionCache.size,
         maxSize: SESSION_CACHE_MAX_SIZE,
         ttl: SESSION_CACHE_TTL,
-        entries: Array.from(this.sessionCache.keys()).slice(0, 10)
+        entries: Array.from(this.sessionCache.keys()).slice(0, 10),
       },
       writeBuffer: {
         size: this.writeBuffer.size,
-        entries: Array.from(this.writeBuffer.keys()).slice(0, 10)
+        entries: Array.from(this.writeBuffer.keys()).slice(0, 10),
       },
-      fileManager: this.fileManager.getStats()
+      sessionFlags: {
+        size: this.sessionFlags.size,
+        entries: Array.from(this.sessionFlags.keys()).slice(0, 10),
+      },
+      fileManager: this.fileManager.getStats(),
     }
   }
 }

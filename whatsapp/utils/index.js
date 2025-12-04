@@ -23,6 +23,10 @@ export {
   handleStatusMessage
 } from './status-handler.js'
 
+export {
+  invalidateSessionLookupCache
+} from './session-lookup.js'
+
 // Export VIPHelper - named export
 export { VIPHelper } from './vip-helper.js'
 

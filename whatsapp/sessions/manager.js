@@ -1,19 +1,18 @@
-import { createComponentLogger } from '../../utils/logger.js'
-import { SessionState } from './state.js'
-import { WebSessionDetector } from './detector.js'
-import { SessionEventHandlers } from './handlers.js'
+import { createComponentLogger } from "../../utils/logger.js"
+import { WebSessionDetector } from "./detector.js"
+import { SessionEventHandlers } from "./handlers.js"
 
-const logger = createComponentLogger('SESSION_MANAGER')
+const logger = createComponentLogger("SESSION_MANAGER")
 
 // 515 Flow Toggle
-const ENABLE_515_FLOW = process.env.ENABLE_515_FLOW === 'true'
+const ENABLE_515_FLOW = process.env.ENABLE_515_FLOW === "true"
 
 /**
  * SessionManager - Main orchestrator for WhatsApp sessions
  * Manages session lifecycle, connections, and state
  */
 export class SessionManager {
-  constructor(telegramBot = null, sessionDir = './sessions') {
+  constructor(telegramBot = null, sessionDir = "./sessions") {
     // Core dependencies
     this.telegramBot = telegramBot
     this.sessionDir = sessionDir
@@ -24,17 +23,15 @@ export class SessionManager {
     this.fileManager = null
     this.eventDispatcher = null
 
-    // Session tracking
-    this.activeSockets = new Map()
-    this.sessionState = new SessionState()
+    // Session tracking - only volatile flags, not state data
     this.webSessionDetector = null
 
     // Session flags
     this.initializingSessions = new Set()
     this.voluntarilyDisconnected = new Set()
     this.detectedWebSessions = new Set()
-    
-    // 515 Flow tracking (only if enabled)
+
+    // 515 Flow tracking (only if enabled) - KEPT as requested
     if (ENABLE_515_FLOW) {
       this.sessions515Restart = new Set()
       this.completed515Restart = new Set()
@@ -49,8 +46,8 @@ export class SessionManager {
     // Event handlers helper
     this.sessionEventHandlers = new SessionEventHandlers(this)
 
-    logger.info('Session manager created')
-    logger.info(`515 Flow: ${ENABLE_515_FLOW ? 'ENABLED' : 'DISABLED'}`)
+    logger.info("Session manager created")
+    logger.info(`515 Flow: ${ENABLE_515_FLOW ? "ENABLED" : "DISABLED"}`)
   }
 
   /**
@@ -58,7 +55,7 @@ export class SessionManager {
    */
   async initialize() {
     try {
-      logger.info('Initializing session manager...')
+      logger.info("Initializing session manager...")
 
       // Initialize storage
       await this._initializeStorage()
@@ -69,11 +66,10 @@ export class SessionManager {
       // Wait for MongoDB connection
       await this._waitForMongoDB()
 
-      logger.info('Session manager initialization complete')
+      logger.info("Session manager initialization complete")
       return true
-
     } catch (error) {
-      logger.error('Session manager initialization failed:', error)
+      logger.error("Session manager initialization failed:", error)
       throw error
     }
   }
@@ -83,9 +79,9 @@ export class SessionManager {
    * @private
    */
   async _initializeStorage() {
-    const { SessionStorage } = await import('../storage/index.js')
+    const { SessionStorage } = await import("../storage/index.js")
     this.storage = new SessionStorage()
-    logger.info('Storage initialized')
+    logger.info("Storage initialized")
   }
 
   /**
@@ -93,17 +89,14 @@ export class SessionManager {
    * @private
    */
   async _initializeConnectionManager() {
-    const { ConnectionManager } = await import('../core/index.js')
-    const { FileManager } = await import('../storage/index.js')
+    const { ConnectionManager } = await import("../core/index.js")
+    const { FileManager } = await import("../storage/index.js")
 
     this.fileManager = new FileManager(this.sessionDir)
     this.connectionManager = new ConnectionManager()
-    this.connectionManager.initialize(
-      this.fileManager,
-      this.storage.isMongoConnected ? this.storage.client : null
-    )
+    this.connectionManager.initialize(this.fileManager, this.storage.isMongoConnected ? this.storage.client : null)
 
-    logger.info('Connection manager initialized')
+    logger.info("Connection manager initialized")
   }
 
   /**
@@ -112,17 +105,17 @@ export class SessionManager {
    */
   async _waitForMongoDB(maxWaitTime = 10000) {
     const startTime = Date.now()
-    
+
     while (Date.now() - startTime < maxWaitTime) {
       if (this.storage.isMongoConnected && this.storage.sessions) {
         // Update connection manager with mongo client
         this.connectionManager.mongoClient = this.storage.client
         return true
       }
-      await new Promise(resolve => setTimeout(resolve, 500))
+      await new Promise((resolve) => setTimeout(resolve, 500))
     }
 
-    logger.warn('MongoDB not ready after waiting')
+    logger.warn("MongoDB not ready after waiting")
     return false
   }
 
@@ -142,7 +135,7 @@ export class SessionManager {
       if (existingSessions.length === 0) {
         this.isInitialized = true
         this._enablePostInitializationFeatures()
-        logger.info('No existing sessions to initialize')
+        logger.info("No existing sessions to initialize")
         return { initialized: 0, total: 0 }
       }
 
@@ -155,18 +148,20 @@ export class SessionManager {
       for (let i = 0; i < sessionsToProcess.length; i += this.concurrencyLimit) {
         const batch = sessionsToProcess.slice(i, i + this.concurrencyLimit)
 
-        await Promise.all(batch.map(async (sessionData) => {
-          try {
-            const success = await this._initializeSession(sessionData)
-            if (success) initializedCount++
-          } catch (error) {
-            logger.error(`Failed to initialize session ${sessionData.sessionId}:`, error)
-          }
-        }))
+        await Promise.all(
+          batch.map(async (sessionData) => {
+            try {
+              const success = await this._initializeSession(sessionData)
+              if (success) initializedCount++
+            } catch (error) {
+              logger.error(`Failed to initialize session ${sessionData.sessionId}:`, error)
+            }
+          }),
+        )
 
         // Brief pause between batches
         if (i + this.concurrencyLimit < sessionsToProcess.length) {
-          await new Promise(resolve => setTimeout(resolve, 500))
+          await new Promise((resolve) => setTimeout(resolve, 500))
         }
       }
 
@@ -176,9 +171,8 @@ export class SessionManager {
       logger.info(`Initialized ${initializedCount}/${sessionsToProcess.length} sessions`)
 
       return { initialized: initializedCount, total: sessionsToProcess.length }
-
     } catch (error) {
-      logger.error('Failed to initialize existing sessions:', error)
+      logger.error("Failed to initialize existing sessions:", error)
       return { initialized: 0, total: 0 }
     }
   }
@@ -194,11 +188,9 @@ export class SessionManager {
 
     try {
       // Check auth availability
-      const authAvailability = await this.connectionManager.checkAuthAvailability(
-        sessionData.sessionId
-      )
+      const authAvailability = await this.connectionManager.checkAuthAvailability(sessionData.sessionId)
 
-      if (authAvailability.preferred === 'none') {
+      if (authAvailability.preferred === "none") {
         await this._cleanupFailedInitialization(sessionData.sessionId)
         return false
       }
@@ -209,8 +201,8 @@ export class SessionManager {
         sessionData.phoneNumber,
         {},
         false,
-        sessionData.source || 'telegram',
-        false // Don't allow pairing during initialization
+        sessionData.source || "telegram",
+        false, // Don't allow pairing during initialization
       )
 
       if (!sock) {
@@ -219,7 +211,6 @@ export class SessionManager {
       }
 
       return true
-
     } catch (error) {
       logger.error(`Session initialization failed for ${sessionData.sessionId}:`, error)
       await this._cleanupFailedInitialization(sessionData.sessionId)
@@ -227,40 +218,38 @@ export class SessionManager {
     }
   }
 
-/**
- * Get active sessions from database - use coordinator, not MongoDB directly
- * @private
- */
-async _getActiveSessionsFromDatabase() {
-  try {
-    // CRITICAL: Use coordinator, which handles fallback automatically
-    const sessions = await this.storage.getAllSessions()
-    
-    // Filter for active sessions
-    const activeSessions = sessions.filter(session => {
-      return session.sessionId && (
-        session.phoneNumber ||
-        session.isConnected ||
-        ['connected', 'connecting'].includes(session.connectionStatus)
-      )
-    })
+  /**
+   * Get active sessions from database - use coordinator, not MongoDB directly
+   * @private
+   */
+  async _getActiveSessionsFromDatabase() {
+    try {
+      // CRITICAL: Use coordinator, which handles fallback automatically
+      const sessions = await this.storage.getAllSessions()
 
-    return activeSessions.map(session => ({
-      sessionId: session.sessionId,
-      userId: session.telegramId || session.userId,
-      telegramId: session.telegramId || session.userId,
-      phoneNumber: session.phoneNumber,
-      isConnected: session.isConnected !== undefined ? session.isConnected : false,
-      connectionStatus: session.connectionStatus || 'disconnected',
-      source: session.source || 'telegram',
-      detected: session.detected !== false
-    }))
+      // Filter for active sessions
+      const activeSessions = sessions.filter((session) => {
+        return (
+          session.sessionId &&
+          (session.phoneNumber || session.isConnected || ["connected", "connecting"].includes(session.connectionStatus))
+        )
+      })
 
-  } catch (error) {
-    logger.error('Failed to get active sessions from database:', error)
-    return []
+      return activeSessions.map((session) => ({
+        sessionId: session.sessionId,
+        userId: session.telegramId || session.userId,
+        telegramId: session.telegramId || session.userId,
+        phoneNumber: session.phoneNumber,
+        isConnected: session.isConnected !== undefined ? session.isConnected : false,
+        connectionStatus: session.connectionStatus || "disconnected",
+        source: session.source || "telegram",
+        detected: session.detected !== false,
+      }))
+    } catch (error) {
+      logger.error("Failed to get active sessions from database:", error)
+      return []
+    }
   }
-}
 
   /**
    * Enable features after initialization
@@ -279,15 +268,16 @@ async _getActiveSessionsFromDatabase() {
   enableEventHandlers() {
     this.eventHandlersEnabled = true
 
-    for (const [sessionId, sock] of this.activeSockets) {
-      if (sock.user && sock.readyState === sock.ws?.OPEN && !sock.eventHandlersSetup) {
-        this._setupEventHandlers(sock, sessionId).catch(error => {
-          logger.error(`Failed to setup handlers for ${sessionId}:`, error)
-        })
-      }
-    }
+    // Fetch active sessions from storage when needed
+    // for (const [sessionId, sock] of this.activeSockets) {
+    //   if (sock.user && sock.readyState === sock.ws?.OPEN && !sock.eventHandlersSetup) {
+    //     this._setupEventHandlers(sock, sessionId).catch((error) => {
+    //       logger.error(`Failed to setup handlers for ${sessionId}:`, error)
+    //     })
+    //   }
+    // }
 
-    logger.info('Event handlers enabled')
+    logger.info("Event handlers enabled")
   }
 
   /**
@@ -304,7 +294,7 @@ async _getActiveSessionsFromDatabase() {
         return
       }
 
-      const { EventDispatcher } = await import('../events/index.js')
+      const { EventDispatcher } = await import("../events/index.js")
 
       if (!this.eventDispatcher) {
         this.eventDispatcher = new EventDispatcher(this)
@@ -312,14 +302,13 @@ async _getActiveSessionsFromDatabase() {
 
       this.eventDispatcher.setupEventHandlers(sock, sessionId)
       sock.eventHandlersSetup = true
-      
+
       // Flush buffer after setup
       if (sock.ev.isBuffering && sock.ev.isBuffering()) {
         sock.ev.flush()
       }
 
       logger.info(`Event handlers set up for ${sessionId}`)
-
     } catch (error) {
       logger.error(`Failed to setup event handlers for ${sessionId}:`, error)
     }
@@ -337,7 +326,7 @@ async _getActiveSessionsFromDatabase() {
     this.webSessionDetector = new WebSessionDetector(this.storage, this)
     this.webSessionDetector.start()
 
-    logger.info('Web session detection started')
+    logger.info("Web session detection started")
   }
 
   /**
@@ -357,11 +346,11 @@ async _getActiveSessionsFromDatabase() {
     phoneNumber = null,
     callbacks = {},
     isReconnect = false,
-    source = 'telegram',
-    allowPairing = true
+    source = "telegram",
+    allowPairing = true,
   ) {
     const userIdStr = String(userId)
-    const sessionId = userIdStr.startsWith('session_') ? userIdStr : `session_${userIdStr}`
+    const sessionId = userIdStr.startsWith("session_") ? userIdStr : `session_${userIdStr}`
 
     try {
       // Prevent duplicate session creation
@@ -374,7 +363,7 @@ async _getActiveSessionsFromDatabase() {
       if (this.activeSockets.has(sessionId) && !isReconnect) {
         const existingSocket = this.activeSockets.get(sessionId)
         const isConnected = existingSocket?.user && existingSocket?.readyState === existingSocket?.ws?.OPEN
-        
+
         if (isConnected) {
           logger.info(`Session ${sessionId} already exists and is connected`)
           return existingSocket
@@ -399,48 +388,25 @@ async _getActiveSessionsFromDatabase() {
         // Check if there's stale auth that needs cleanup
         const existingSocket = this.activeSockets.has(sessionId)
         const authAvailability = await this.connectionManager.checkAuthAvailability(sessionId)
-        
+
         // Only cleanup if there's BOTH old auth AND no active socket (stale session)
-        if (authAvailability.preferred !== 'none' && !existingSocket) {
+        if (authAvailability.preferred !== "none" && !existingSocket) {
           logger.info(`Cleaning up stale auth for new pairing: ${sessionId}`)
           await this.performCompleteUserCleanup(sessionId)
-          await new Promise(resolve => setTimeout(resolve, 1000))
+          await new Promise((resolve) => setTimeout(resolve, 1000))
         }
       }
 
       // Create socket connection
-      const sock = await this.connectionManager.createConnection(
-        sessionId,
-        phoneNumber,
-        callbacks,
-        allowPairing
-      )
+      const sock = await this.connectionManager.createConnection(sessionId, phoneNumber, callbacks, allowPairing)
 
       if (!sock) {
-        throw new Error('Failed to create socket connection')
+        throw new Error("Failed to create socket connection")
       }
 
       // Store socket and state
       this.activeSockets.set(sessionId, sock)
       sock.connectionCallbacks = callbacks
-        
-      this.sessionState.set(sessionId, {
-        userId: userIdStr,
-        phoneNumber,
-        source,
-        isConnected: true,
-        connectionStatus: 'connected',
-        callbacks: callbacks
-      })
-
-      // Setup connection event handlers (connection.update, creds.update)
-      this.sessionEventHandlers.setupConnectionHandler(sock, sessionId, callbacks)
-      this.sessionEventHandlers.setupCredsHandler(sock, sessionId)
-      
-      // Setup message/event handlers immediately (not waiting for connection to open)
-      if (!sock.eventHandlersSetup) {
-        await this._setupEventHandlers(sock, sessionId)
-      }
 
       // Save to database - CRITICAL FIX
       await this.storage.saveSession(sessionId, {
@@ -448,15 +414,14 @@ async _getActiveSessionsFromDatabase() {
         telegramId: userIdStr,
         phoneNumber,
         isConnected: true,
-        connectionStatus: 'connected',
+        connectionStatus: "connected",
         reconnectAttempts: 0,
         source: source,
-        detected: source === 'web' ? false : true
+        detected: source === "web" ? false : true,
       })
 
       logger.info(`Session ${sessionId} created successfully`)
       return sock
-
     } catch (error) {
       logger.error(`Failed to create session ${sessionId}:`, error)
       throw error
@@ -487,15 +452,14 @@ async _getActiveSessionsFromDatabase() {
           onError: () => {
             this.detectedWebSessions.delete(sessionId)
             this.storage.markSessionAsDetected(sessionId, false).catch(() => {})
-          }
+          },
         },
         false,
-        'web',
-        true
+        "web",
+        true,
       )
 
       return !!sock
-
     } catch (error) {
       logger.error(`Failed to create web session ${sessionId}:`, error)
       this.detectedWebSessions.delete(sessionId)
@@ -512,7 +476,7 @@ async _getActiveSessionsFromDatabase() {
       logger.info(`Disconnecting session ${sessionId} (force: ${forceCleanup})`)
 
       const sessionData = await this.storage.getSession(sessionId)
-      const isWebUser = sessionData?.source === 'web'
+      const isWebUser = sessionData?.source === "web"
 
       // Full cleanup if forced
       if (forceCleanup) {
@@ -532,13 +496,12 @@ async _getActiveSessionsFromDatabase() {
 
       // Remove from tracking
       this.activeSockets.delete(sessionId)
-      this.sessionState.delete(sessionId)
 
       // Update database
       if (isWebUser) {
         await this.storage.updateSession(sessionId, {
           isConnected: false,
-          connectionStatus: 'disconnected'
+          connectionStatus: "disconnected",
         })
       } else {
         await this.storage.deleteSession(sessionId)
@@ -546,7 +509,6 @@ async _getActiveSessionsFromDatabase() {
 
       logger.info(`Session ${sessionId} disconnected`)
       return true
-
     } catch (error) {
       logger.error(`Failed to disconnect session ${sessionId}:`, error)
       return false
@@ -557,41 +519,40 @@ async _getActiveSessionsFromDatabase() {
    * Cleanup socket
    * @private
    */
-async _cleanupSocket(sessionId, sock) {
-  try {
-    // ✅ Cleanup session store first
-    if (sock._storeCleanup) {
-      sock._storeCleanup()
+  async _cleanupSocket(sessionId, sock) {
+    try {
+      // ✅ Cleanup session store first
+      if (sock._storeCleanup) {
+        sock._storeCleanup()
+      }
+
+      // Delete store from config - FIXED IMPORT PATH
+      const { deleteSessionStore } = await import("../core/index.js") // ✅ This is CORRECT
+      deleteSessionStore(sessionId)
+
+      // Remove event listeners
+      if (sock.ev && typeof sock.ev.removeAllListeners === "function") {
+        sock.ev.removeAllListeners()
+      }
+
+      // Close WebSocket
+      if (sock.ws && sock.ws.readyState === sock.ws.OPEN) {
+        sock.ws.close(1000, "Cleanup")
+      }
+
+      // Clear socket properties
+      sock.user = null
+      sock.eventHandlersSetup = false
+      sock.connectionCallbacks = null
+      sock._sessionStore = null // ✅ This is CORRECT
+
+      logger.debug(`Socket cleaned up for ${sessionId}`)
+      return true
+    } catch (error) {
+      logger.error(`Failed to cleanup socket for ${sessionId}:`, error)
+      return false
     }
-    
-    // Delete store from config - FIXED IMPORT PATH
-    const { deleteSessionStore } = await import('../core/index.js')  // ✅ This is CORRECT
-    deleteSessionStore(sessionId)
-    
-    // Remove event listeners
-    if (sock.ev && typeof sock.ev.removeAllListeners === 'function') {
-      sock.ev.removeAllListeners()
-    }
-
-    // Close WebSocket
-    if (sock.ws && sock.ws.readyState === sock.ws.OPEN) {
-      sock.ws.close(1000, 'Cleanup')
-    }
-
-    // Clear socket properties
-    sock.user = null
-    sock.eventHandlersSetup = false
-    sock.connectionCallbacks = null
-    sock._sessionStore = null  // ✅ This is CORRECT
-
-    logger.debug(`Socket cleaned up for ${sessionId}`)
-    return true
-
-  } catch (error) {
-    logger.error(`Failed to cleanup socket for ${sessionId}:`, error)
-    return false
   }
-}
 
   /**
    * Perform complete user cleanup (logout)
@@ -603,7 +564,7 @@ async _cleanupSocket(sessionId, sock) {
       logger.info(`Performing complete cleanup for ${sessionId}`)
 
       const sessionData = await this.storage.getSession(sessionId)
-      const isWebUser = sessionData?.source === 'web'
+      const isWebUser = sessionData?.source === "web"
 
       // Cleanup socket
       const sock = this.activeSockets.get(sessionId)
@@ -613,7 +574,6 @@ async _cleanupSocket(sessionId, sock) {
 
       // Clear in-memory structures
       this.activeSockets.delete(sessionId)
-      this.sessionState.delete(sessionId)
       this.initializingSessions.delete(sessionId)
       this.voluntarilyDisconnected.add(sessionId)
       this.detectedWebSessions.delete(sessionId)
@@ -635,7 +595,6 @@ async _cleanupSocket(sessionId, sock) {
 
       logger.info(`Complete cleanup for ${sessionId}:`, results)
       return results
-
     } catch (error) {
       logger.error(`Complete cleanup failed for ${sessionId}:`, error)
       return results
@@ -654,16 +613,14 @@ async _cleanupSocket(sessionId, sock) {
       }
 
       this.activeSockets.delete(sessionId)
-      this.sessionState.delete(sessionId)
       this.initializingSessions.delete(sessionId)
-      this.detectedWebSessions.delete(sessionId)
       this.voluntarilyDisconnected.delete(sessionId)
+      this.detectedWebSessions.delete(sessionId)
 
       await this.storage.completelyDeleteSession(sessionId)
       await this.connectionManager.cleanupAuthState(sessionId)
 
       logger.debug(`Failed initialization cleaned up for ${sessionId}`)
-
     } catch (error) {
       logger.error(`Failed to cleanup failed initialization for ${sessionId}:`, error)
     }
@@ -676,11 +633,10 @@ async _cleanupSocket(sessionId, sock) {
   async _cleanupExistingSession(sessionId) {
     try {
       const existingSession = await this.storage.getSession(sessionId)
-      
+
       if (existingSession && !existingSession.isConnected) {
         await this.disconnectSession(sessionId)
       }
-
     } catch (error) {
       logger.error(`Failed to cleanup existing session ${sessionId}:`, error)
     }
@@ -690,7 +646,14 @@ async _cleanupSocket(sessionId, sock) {
    * Get session socket
    */
   getSession(sessionId) {
-    return this.activeSockets.get(sessionId)
+    const sock = this.activeSockets.get(sessionId)
+
+    if (!sock && sessionId) {
+      const { invalidateSessionLookupCache } = require("../utils/index.js")
+      invalidateSessionLookupCache(sessionId)
+    }
+
+    return sock
   }
 
   /**
@@ -699,18 +662,13 @@ async _cleanupSocket(sessionId, sock) {
   async getSessionByWhatsAppJid(jid) {
     if (!jid) return null
 
-    const phoneNumber = jid.split('@')[0].split(':')[0]
-
-    for (const [sessionId, sock] of this.activeSockets) {
-      if (sock?.user?.id) {
-        const sessionPhone = sock.user.id.split('@')[0]
-        if (sessionPhone === phoneNumber) {
-          return { sock, sessionId }
-        }
-      }
+    try {
+      const { getSessionByRemoteJid } = await import("../utils/session-lookup.js")
+      return await getSessionByRemoteJid(jid, this)
+    } catch (error) {
+      logger.error(`Error in getSessionByWhatsAppJid:`, error)
+      return null
     }
-
-    return null
   }
 
   /**
@@ -743,12 +701,12 @@ async _cleanupSocket(sessionId, sock) {
   async getSessionInfo(sessionId) {
     const session = await this.storage.getSession(sessionId)
     const hasSocket = this.activeSockets.has(sessionId)
-    const stateInfo = this.sessionState.get(sessionId)
+    // const stateInfo = this.sessionState.get(sessionId)
 
     return {
       ...session,
       hasSocket,
-      stateInfo
+      // stateInfo,
     }
   }
 
@@ -783,7 +741,7 @@ async _cleanupSocket(sessionId, sock) {
       initializingSessions: this.initializingSessions.size,
       eventHandlersEnabled: this.eventHandlersEnabled,
       webDetectionActive: this.webSessionDetector?.isRunning() || false,
-      enable515Flow: ENABLE_515_FLOW
+      enable515Flow: ENABLE_515_FLOW,
     }
   }
 
@@ -793,9 +751,9 @@ async _cleanupSocket(sessionId, sock) {
   async getStats() {
     try {
       const allSessions = await this.storage.getAllSessions()
-      const connectedSessions = allSessions.filter(s => s.isConnected)
-      const telegramSessions = allSessions.filter(s => s.source === 'telegram' || !s.source)
-      const webSessions = allSessions.filter(s => s.source === 'web')
+      const connectedSessions = allSessions.filter((s) => s.isConnected)
+      const telegramSessions = allSessions.filter((s) => s.source === "telegram" || !s.source)
+      const webSessions = allSessions.filter((s) => s.source === "web")
 
       return {
         totalSessions: allSessions.length,
@@ -808,18 +766,17 @@ async _cleanupSocket(sessionId, sock) {
         maxSessions: this.maxSessions,
         isInitialized: this.isInitialized,
         enable515Flow: ENABLE_515_FLOW,
-        storage: this.storage?.isConnected ? 'Connected' : 'Disconnected',
-        webDetection: this.webSessionDetector?.isRunning() ? 'Active' : 'Inactive',
+        storage: this.storage?.isConnected ? "Connected" : "Disconnected",
+        webDetection: this.webSessionDetector?.isRunning() ? "Active" : "Inactive",
         mongoConnected: this.storage?.isMongoConnected || false,
         postgresConnected: this.storage?.isPostgresConnected || false,
-        stateStats: this.sessionState.getStats()
+        // stateStats: this.sessionState.getStats(),
       }
-
     } catch (error) {
-      logger.error('Failed to get stats:', error)
+      logger.error("Failed to get stats:", error)
       return {
-        error: 'Failed to retrieve statistics',
-        activeSockets: this.activeSockets.size
+        error: "Failed to retrieve statistics",
+        activeSockets: this.activeSockets.size,
       }
     }
   }
@@ -829,7 +786,7 @@ async _cleanupSocket(sessionId, sock) {
    */
   async shutdown() {
     try {
-      logger.info('Shutting down session manager...')
+      logger.info("Shutting down session manager...")
 
       // Stop web session detection
       this.stopWebSessionDetection()
@@ -852,10 +809,9 @@ async _cleanupSocket(sessionId, sock) {
         await this.connectionManager.cleanup()
       }
 
-      logger.info('Session manager shutdown complete')
-
+      logger.info("Session manager shutdown complete")
     } catch (error) {
-      logger.error('Shutdown error:', error)
+      logger.error("Shutdown error:", error)
     }
   }
 
@@ -864,10 +820,10 @@ async _cleanupSocket(sessionId, sock) {
    */
   async performMaintenance() {
     try {
-      logger.debug('Performing session manager maintenance')
+      logger.debug("Performing session manager maintenance")
 
       // Cleanup stale session states
-      this.sessionState.cleanupStale()
+      // this.sessionState.cleanupStale()
 
       // Flush storage write buffers
       if (this.storage?.flushWriteBuffers) {
@@ -878,9 +834,8 @@ async _cleanupSocket(sessionId, sock) {
       if (this.fileManager) {
         await this.fileManager.cleanupOrphanedSessions(this.storage)
       }
-
     } catch (error) {
-      logger.error('Maintenance error:', error)
+      logger.error("Maintenance error:", error)
     }
   }
 
@@ -901,9 +856,9 @@ async _cleanupSocket(sessionId, sock) {
   /**
    * Get session state instance
    */
-  getSessionState() {
-    return this.sessionState
-  }
+  // getSessionState() {
+  //   return this.sessionState
+  // }
 
   /**
    * Get event dispatcher instance
@@ -919,7 +874,7 @@ let sessionManagerInstance = null
 /**
  * Initialize session manager singleton
  */
-export function initializeSessionManager(telegramBot, sessionDir = './sessions') {
+export function initializeSessionManager(telegramBot, sessionDir = "./sessions") {
   if (!sessionManagerInstance) {
     sessionManagerInstance = new SessionManager(telegramBot, sessionDir)
   }
@@ -931,7 +886,7 @@ export function initializeSessionManager(telegramBot, sessionDir = './sessions')
  */
 export function getSessionManager() {
   if (!sessionManagerInstance) {
-    sessionManagerInstance = new SessionManager(null, './sessions')
+    sessionManagerInstance = new SessionManager(null, "./sessions")
   }
   return sessionManagerInstance
 }

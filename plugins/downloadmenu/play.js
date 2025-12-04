@@ -5,7 +5,7 @@ import fs from 'fs';
 
 export default {
   name: "play",
-  commands: ["play"],
+  commands: ["play", "song"],
   description: "Search and play YouTube videos",
   category: "download",
   usage: "• .play <song name> - Search and download audio",

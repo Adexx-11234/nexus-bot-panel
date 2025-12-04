@@ -7,7 +7,27 @@ import { logger } from "../utils/logger.js"
 class QueryManager {
   constructor() {
     this.cache = new Map()
-    this.cacheTimeout = 5 * 60 * 1000 // 5 minutes
+    this.cacheTimeout = 15 * 1000 // 15 seconds
+    this.queryQueue = []
+    this.isProcessing = false
+    this.maxQueueSize = 100
+    this.cleanupInterval = 5 * 1000 // Cleanup every 5 seconds
+    this.initCleanup()
+  }
+
+  initCleanup() {
+    setInterval(() => {
+      this.cleanExpiredCache()
+    }, this.cleanupInterval)
+  }
+
+  cleanExpiredCache() {
+    const now = Date.now()
+    for (const [key, value] of this.cache.entries()) {
+      if (now - value.timestamp > this.cacheTimeout) {
+        this.cache.delete(key)
+      }
+    }
   }
 
   async execute(query, params = []) {
@@ -31,15 +51,38 @@ class QueryManager {
     }
 
     const result = await this.execute(query, params)
-    this.cache.set(cacheKey, { data: result, timestamp: Date.now() })
+
+    this.cache.set(cacheKey, {
+      data: result,
+      timestamp: Date.now(),
+      ttl: ttl,
+    })
+
     return result
   }
 
-  clearCache(key = null) {
+  invalidateCache(key) {
     if (key) {
       this.cache.delete(key)
-    } else {
-      this.cache.clear()
+    }
+  }
+
+  invalidateCachePattern(pattern) {
+    for (const key of this.cache.keys()) {
+      if (key.includes(pattern)) {
+        this.cache.delete(key)
+      }
+    }
+  }
+
+  clearCache() {
+    this.cache.clear()
+  }
+
+  getCacheStats() {
+    return {
+      size: this.cache.size,
+      maxTimeout: this.cacheTimeout,
     }
   }
 }
@@ -63,7 +106,7 @@ export const GroupQueries = {
            name = COALESCE($2, groups.name),
            updated_at = CURRENT_TIMESTAMP
          RETURNING id`,
-        [groupJid, groupName]
+        [groupJid, groupName],
       )
       return result.rows[0]
     } catch (error) {
@@ -103,7 +146,7 @@ export const GroupQueries = {
              is_bot_admin = COALESCE($5, is_bot_admin),
              updated_at = CURRENT_TIMESTAMP
          WHERE jid = $1`,
-        [groupJid, name, description, participantsCount, isBotAdmin]
+        [groupJid, name, description, participantsCount, isBotAdmin],
       )
       queryManager.clearCache(`group_settings_${groupJid}`)
     } catch (error) {
@@ -122,19 +165,19 @@ export const GroupQueries = {
                 autowelcome_enabled, autokick_enabled, welcome_enabled, goodbye_enabled,
                 telegram_id, scheduled_close_time, scheduled_open_time, is_closed
          FROM groups WHERE jid = $1`,
-        [groupJid]
+        [groupJid],
       )
-      
+
       if (result.rows.length === 0) {
         await this.ensureGroupExists(groupJid)
         return {
           grouponly_enabled: false,
           public_mode: true,
           antilink_enabled: false,
-          is_bot_admin: false
+          is_bot_admin: false,
         }
       }
-      
+
       return result.rows[0]
     } catch (error) {
       logger.error(`[GroupQueries] Error getting group settings: ${error.message}`)
@@ -142,7 +185,7 @@ export const GroupQueries = {
         grouponly_enabled: false,
         public_mode: true,
         antilink_enabled: false,
-        is_bot_admin: false
+        is_bot_admin: false,
       }
     }
   },
@@ -150,22 +193,40 @@ export const GroupQueries = {
   async updateGroupSettings(groupJid, settings) {
     try {
       await this.ensureGroupExists(groupJid)
-      
+
       const allowedFields = [
-        'grouponly_enabled', 'public_mode', 'antilink_enabled', 
-        'is_bot_admin', 'name', 'description', 'anticall_enabled',
-        'antiimage_enabled', 'antivideo_enabled', 'antiaudio_enabled',
-        'antidocument_enabled', 'antisticker_enabled', 'antigroupmention_enabled',
-        'antidelete_enabled', 'antiviewonce_enabled', 'antibot_enabled',
-        'antispam_enabled', 'antiraid_enabled', 'autowelcome_enabled',
-        'autokick_enabled', 'welcome_enabled', 'goodbye_enabled',
-        'telegram_id', 'scheduled_close_time', 'scheduled_open_time', 'is_closed'
+        "grouponly_enabled",
+        "public_mode",
+        "antilink_enabled",
+        "is_bot_admin",
+        "name",
+        "description",
+        "anticall_enabled",
+        "antiimage_enabled",
+        "antivideo_enabled",
+        "antiaudio_enabled",
+        "antidocument_enabled",
+        "antisticker_enabled",
+        "antigroupmention_enabled",
+        "antidelete_enabled",
+        "antiviewonce_enabled",
+        "antibot_enabled",
+        "antispam_enabled",
+        "antiraid_enabled",
+        "autowelcome_enabled",
+        "autokick_enabled",
+        "welcome_enabled",
+        "goodbye_enabled",
+        "telegram_id",
+        "scheduled_close_time",
+        "scheduled_open_time",
+        "is_closed",
       ]
-      
+
       const updates = []
       const values = [groupJid]
       let paramIndex = 2
-      
+
       for (const [key, value] of Object.entries(settings)) {
         if (allowedFields.includes(key)) {
           updates.push(`${key} = $${paramIndex}`)
@@ -173,14 +234,14 @@ export const GroupQueries = {
           paramIndex++
         }
       }
-      
+
       if (updates.length === 0) {
-        throw new Error('No valid fields to update')
+        throw new Error("No valid fields to update")
       }
-      
+
       updates.push(`updated_at = CURRENT_TIMESTAMP`)
-      
-      const query = `UPDATE groups SET ${updates.join(', ')} WHERE jid = $1 RETURNING *`
+
+      const query = `UPDATE groups SET ${updates.join(", ")} WHERE jid = $1 RETURNING *`
       const result = await queryManager.execute(query, values)
       queryManager.clearCache(`group_settings_${groupJid}`)
       return result.rows[0]
@@ -199,7 +260,7 @@ export const GroupQueries = {
            ON CONFLICT (jid)
            DO UPDATE SET updated_at = CURRENT_TIMESTAMP
            RETURNING *`,
-          [groupJid]
+          [groupJid],
         )
         return result.rows[0]
       }
@@ -233,7 +294,7 @@ export const GroupQueries = {
          SET scheduled_close_time = $1, auto_schedule_enabled = true, updated_at = CURRENT_TIMESTAMP 
          WHERE jid = $2
          RETURNING scheduled_close_time, auto_schedule_enabled`,
-        [time, groupJid]
+        [time, groupJid],
       )
       queryManager.clearCache(`group_schedule_${groupJid}`)
       return result.rows[0]
@@ -250,7 +311,7 @@ export const GroupQueries = {
          SET scheduled_open_time = $1, auto_schedule_enabled = true, updated_at = CURRENT_TIMESTAMP 
          WHERE jid = $2
          RETURNING scheduled_open_time, auto_schedule_enabled`,
-        [time, groupJid]
+        [time, groupJid],
       )
       queryManager.clearCache(`group_schedule_${groupJid}`)
       return result.rows[0]
@@ -260,17 +321,17 @@ export const GroupQueries = {
     }
   },
 
-  async removeScheduledTimes(groupJid, type = 'both') {
+  async removeScheduledTimes(groupJid, type = "both") {
     try {
       let query
-      if (type === 'close') {
+      if (type === "close") {
         query = `UPDATE groups SET scheduled_close_time = NULL WHERE jid = $1`
-      } else if (type === 'open') {
+      } else if (type === "open") {
         query = `UPDATE groups SET scheduled_open_time = NULL WHERE jid = $1`
       } else {
         query = `UPDATE groups SET scheduled_close_time = NULL, scheduled_open_time = NULL, auto_schedule_enabled = false WHERE jid = $1`
       }
-      
+
       await queryManager.execute(query, [groupJid])
       queryManager.clearCache(`group_schedule_${groupJid}`)
       return true
@@ -286,7 +347,7 @@ export const GroupQueries = {
         `SELECT jid, scheduled_close_time, scheduled_open_time, is_closed, timezone
          FROM groups 
          WHERE auto_schedule_enabled = true 
-           AND (scheduled_close_time IS NOT NULL OR scheduled_open_time IS NOT NULL)`
+           AND (scheduled_close_time IS NOT NULL OR scheduled_open_time IS NOT NULL)`,
       )
       return result.rows
     } catch (error) {
@@ -300,7 +361,7 @@ export const GroupQueries = {
       const result = await queryManager.execute(
         `SELECT scheduled_close_time, scheduled_open_time, auto_schedule_enabled, is_closed, timezone
          FROM groups WHERE jid = $1`,
-        [groupJid]
+        [groupJid],
       )
       return result.rows[0] || null
     } catch (error) {
@@ -317,7 +378,7 @@ export const GroupQueries = {
          ON CONFLICT (jid)
          DO UPDATE SET grouponly_enabled = $2, updated_at = CURRENT_TIMESTAMP
          RETURNING grouponly_enabled`,
-        [groupJid, enabled]
+        [groupJid, enabled],
       )
       queryManager.clearCache(`group_settings_${groupJid}`)
       return result.rows[0]?.grouponly_enabled || false
@@ -333,7 +394,7 @@ export const GroupQueries = {
     try {
       await queryManager.execute(
         `INSERT INTO groups (jid, updated_at) VALUES ($1, CURRENT_TIMESTAMP) ON CONFLICT (jid) DO NOTHING`,
-        [groupJid]
+        [groupJid],
       )
 
       const result = await queryManager.execute(`SELECT grouponly_enabled FROM groups WHERE jid = $1`, [groupJid])
@@ -363,7 +424,7 @@ export const GroupQueries = {
          ON CONFLICT (jid)
          DO UPDATE SET ${columnName} = $2, updated_at = CURRENT_TIMESTAMP
          RETURNING ${columnName}`,
-        [groupJid, enabled]
+        [groupJid, enabled],
       )
       queryManager.clearCache(`group_settings_${groupJid}`)
       return result.rows[0]?.[columnName] || false
@@ -380,7 +441,7 @@ export const GroupQueries = {
     try {
       await queryManager.execute(
         `INSERT INTO groups (jid, updated_at) VALUES ($1, CURRENT_TIMESTAMP) ON CONFLICT (jid) DO NOTHING`,
-        [groupJid]
+        [groupJid],
       )
 
       const result = await queryManager.execute(`SELECT ${columnName} FROM groups WHERE jid = $1`, [groupJid])
@@ -401,7 +462,7 @@ export const GroupQueries = {
                 autowelcome_enabled, autokick_enabled, welcome_enabled, goodbye_enabled,
                 grouponly_enabled, public_mode
          FROM groups WHERE jid = $1`,
-        [groupJid]
+        [groupJid],
       )
 
       if (result.rows.length === 0) return {}
@@ -429,7 +490,7 @@ export const GroupQueries = {
          VALUES ($1, $2, $3, NOW()) 
          ON CONFLICT (group_jid, user_jid) 
          DO UPDATE SET promoted_at = NOW(), promoted_by = $3`,
-        [groupJid, userJid, promotedBy]
+        [groupJid, userJid, promotedBy],
       )
     } catch (error) {
       logger.error(`[GroupQueries] Error logging admin promotion: ${error.message}`)
@@ -442,7 +503,7 @@ export const GroupQueries = {
         `SELECT promoted_at FROM admin_promotions 
          WHERE group_jid = $1 AND user_jid = $2 
          ORDER BY promoted_at DESC LIMIT 1`,
-        [groupJid, userJid]
+        [groupJid, userJid],
       )
       return result.rows.length > 0 ? result.rows[0].promoted_at : null
     } catch (error) {
@@ -456,12 +517,68 @@ export const GroupQueries = {
       await queryManager.execute(
         `INSERT INTO group_member_additions (group_jid, added_user_jid, added_by_jid) 
          VALUES ($1, $2, $3)`,
-        [groupJid, addedUserJid, addedByJid]
+        [groupJid, addedUserJid, addedByJid],
       )
     } catch (error) {
       logger.error(`[GroupQueries] Error logging member addition: ${error.message}`)
     }
-  }
+  },
+
+  async setTagLimit(groupJid, limit) {
+    try {
+      const result = await queryManager.execute(
+        `INSERT INTO groups (jid, tag_limit, updated_at)
+         VALUES ($1, $2, CURRENT_TIMESTAMP)
+         ON CONFLICT (jid)
+         DO UPDATE SET tag_limit = $2, updated_at = CURRENT_TIMESTAMP
+         RETURNING tag_limit`,
+        [groupJid, limit],
+      )
+      queryManager.invalidateCache(`group_settings_${groupJid}`)
+      return result.rows[0]?.tag_limit || limit
+    } catch (error) {
+      logger.error(`[GroupQueries] Error setting tag limit: ${error.message}`)
+      throw error
+    }
+  },
+
+  async getTagLimit(groupJid) {
+    try {
+      const result = await queryManager.execute(`SELECT tag_limit FROM groups WHERE jid = $1`, [groupJid])
+      return result.rows[0]?.tag_limit || 5
+    } catch (error) {
+      logger.error(`[GroupQueries] Error getting tag limit: ${error.message}`)
+      return 5
+    }
+  },
+
+  async setGroupClosed(groupJid, isClosed) {
+    try {
+      const result = await queryManager.execute(
+        `INSERT INTO groups (jid, is_closed, updated_at)
+         VALUES ($1, $2, CURRENT_TIMESTAMP)
+         ON CONFLICT (jid)
+         DO UPDATE SET is_closed = $2, updated_at = CURRENT_TIMESTAMP
+         RETURNING is_closed`,
+        [groupJid, isClosed],
+      )
+      queryManager.invalidateCache(`group_settings_${groupJid}`)
+      return result.rows[0]?.is_closed || isClosed
+    } catch (error) {
+      logger.error(`[GroupQueries] Error setting group closed: ${error.message}`)
+      throw error
+    }
+  },
+
+  async getGroupClosed(groupJid) {
+    try {
+      const result = await queryManager.execute(`SELECT is_closed FROM groups WHERE jid = $1`, [groupJid])
+      return result.rows[0]?.is_closed || false
+    } catch (error) {
+      logger.error(`[GroupQueries] Error getting group closed status: ${error.message}`)
+      return false
+    }
+  },
 }
 
 // ==========================================
@@ -473,16 +590,16 @@ export const VIPQueries = {
     try {
       const result = await queryManager.execute(
         `SELECT vip_level, is_default_vip FROM whatsapp_users WHERE telegram_id = $1`,
-        [telegramId]
+        [telegramId],
       )
-      
+
       if (result.rows.length === 0) return { isVIP: false, level: 0, isDefault: false }
-      
+
       const user = result.rows[0]
       return {
         isVIP: user.vip_level > 0 || user.is_default_vip,
         level: user.vip_level || 0,
-        isDefault: user.is_default_vip || false
+        isDefault: user.is_default_vip || false,
       }
     } catch (error) {
       logger.error(`[VIPQueries] Error checking VIP status: ${error.message}`)
@@ -495,7 +612,7 @@ export const VIPQueries = {
       const result = await queryManager.execute(
         `SELECT telegram_id, first_name, phone_number, is_connected, connection_status 
          FROM users WHERE telegram_id = $1 LIMIT 1`,
-        [telegramId]
+        [telegramId],
       )
       return result.rows[0] || null
     } catch (error) {
@@ -513,7 +630,7 @@ export const VIPQueries = {
          SET jid = COALESCE(EXCLUDED.jid, whatsapp_users.jid), 
              phone = COALESCE(EXCLUDED.phone, whatsapp_users.phone),
              updated_at = CURRENT_TIMESTAMP`,
-        [telegramId, jid, phone]
+        [telegramId, jid, phone],
       )
       return true
     } catch (error) {
@@ -530,7 +647,7 @@ export const VIPQueries = {
          ON CONFLICT (telegram_id)
          DO UPDATE SET vip_level = $2, updated_at = CURRENT_TIMESTAMP
          RETURNING telegram_id, vip_level`,
-        [telegramId, level]
+        [telegramId, level],
       )
       return result.rows[0]
     } catch (error) {
@@ -543,7 +660,7 @@ export const VIPQueries = {
     try {
       await queryManager.execute(
         `UPDATE whatsapp_users SET vip_level = 0, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $1`,
-        [telegramId]
+        [telegramId],
       )
       return true
     } catch (error) {
@@ -554,13 +671,12 @@ export const VIPQueries = {
 
   async setDefaultVIP(telegramId, isDefaultVIP = true, sessionManager = null) {
     try {
-      if (!telegramId) throw new Error('telegram_id is required')
+      if (!telegramId) throw new Error("telegram_id is required")
 
       let jid = null
-      const existingUser = await queryManager.execute(
-        'SELECT jid FROM whatsapp_users WHERE telegram_id = $1',
-        [telegramId]
-      )
+      const existingUser = await queryManager.execute("SELECT jid FROM whatsapp_users WHERE telegram_id = $1", [
+        telegramId,
+      ])
 
       if (existingUser.rows.length > 0) {
         jid = existingUser.rows[0].jid
@@ -571,7 +687,7 @@ export const VIPQueries = {
           jid = sock.user.id
         }
       }
-      
+
       if (!jid) {
         jid = `${telegramId}@s.whatsapp.net`
       }
@@ -586,7 +702,7 @@ export const VIPQueries = {
            vip_level = 99,
            updated_at = CURRENT_TIMESTAMP
          RETURNING *`,
-        [telegramId, jid, isDefaultVIP]
+        [telegramId, jid, isDefaultVIP],
       )
       return result.rows[0]
     } catch (error) {
@@ -597,13 +713,13 @@ export const VIPQueries = {
 
   async getUserByPhone(phone) {
     try {
-      const cleanPhone = phone.replace(/[@\s\-+]/g, '')
+      const cleanPhone = phone.replace(/[@\s\-+]/g, "")
       const result = await queryManager.execute(
         `SELECT telegram_id, first_name, phone_number, is_connected, connection_status 
          FROM users 
          WHERE phone_number LIKE $1 
          ORDER BY updated_at DESC LIMIT 1`,
-        [`%${cleanPhone}%`]
+        [`%${cleanPhone}%`],
       )
       return result.rows[0] || null
     } catch (error) {
@@ -617,26 +733,26 @@ export const VIPQueries = {
       const existing = await queryManager.execute(
         `SELECT vip_telegram_id FROM vip_owned_users 
          WHERE owned_telegram_id = $1 AND is_active = true`,
-        [targetTelegramId]
+        [targetTelegramId],
       )
-      
+
       if (existing.rows.length > 0) {
-        return { success: false, error: 'Already claimed by another VIP', ownedBy: existing.rows[0].vip_telegram_id }
+        return { success: false, error: "Already claimed by another VIP", ownedBy: existing.rows[0].vip_telegram_id }
       }
-      
+
       const result = await queryManager.execute(
         `INSERT INTO vip_owned_users (vip_telegram_id, owned_telegram_id, owned_phone, owned_jid)
          VALUES ($1, $2, $3, $4) RETURNING id`,
-        [vipTelegramId, targetTelegramId, targetPhone, targetJid]
+        [vipTelegramId, targetTelegramId, targetPhone, targetJid],
       )
-      
+
       await queryManager.execute(
         `UPDATE whatsapp_users 
          SET owned_by_telegram_id = $1, claimed_at = CURRENT_TIMESTAMP 
          WHERE telegram_id = $2`,
-        [vipTelegramId, targetTelegramId]
+        [vipTelegramId, targetTelegramId],
       )
-      
+
       return { success: true, id: result.rows[0].id }
     } catch (error) {
       logger.error(`[VIPQueries] Error claiming user: ${error.message}`)
@@ -647,7 +763,7 @@ export const VIPQueries = {
   async unclaimUser(targetTelegramId, vipTelegramId = null) {
     try {
       let query, params
-      
+
       if (vipTelegramId) {
         query = `UPDATE vip_owned_users SET is_active = false WHERE owned_telegram_id = $1 AND vip_telegram_id = $2`
         params = [targetTelegramId, vipTelegramId]
@@ -655,12 +771,11 @@ export const VIPQueries = {
         query = `UPDATE vip_owned_users SET is_active = false WHERE owned_telegram_id = $1`
         params = [targetTelegramId]
       }
-      
+
       await queryManager.execute(query, params)
-      await queryManager.execute(
-        `UPDATE whatsapp_users SET owned_by_telegram_id = NULL WHERE telegram_id = $1`,
-        [targetTelegramId]
-      )
+      await queryManager.execute(`UPDATE whatsapp_users SET owned_by_telegram_id = NULL WHERE telegram_id = $1`, [
+        targetTelegramId,
+      ])
       return true
     } catch (error) {
       logger.error(`[VIPQueries] Error unclaiming user: ${error.message}`)
@@ -673,7 +788,7 @@ export const VIPQueries = {
       const result = await queryManager.execute(
         `SELECT id FROM vip_owned_users 
          WHERE vip_telegram_id = $1 AND owned_telegram_id = $2 AND is_active = true`,
-        [vipTelegramId, targetTelegramId]
+        [vipTelegramId, targetTelegramId],
       )
       return result.rows.length > 0
     } catch (error) {
@@ -690,7 +805,7 @@ export const VIPQueries = {
          LEFT JOIN whatsapp_users wu ON vou.owned_telegram_id = wu.telegram_id
          WHERE vou.vip_telegram_id = $1 AND vou.is_active = true
          ORDER BY vou.claimed_at DESC`,
-        [vipTelegramId]
+        [vipTelegramId],
       )
       return result.rows
     } catch (error) {
@@ -701,21 +816,20 @@ export const VIPQueries = {
 
   async reassignUser(targetTelegramId, newVipTelegramId) {
     try {
-      await queryManager.execute(
-        `UPDATE vip_owned_users SET is_active = false WHERE owned_telegram_id = $1`,
-        [targetTelegramId]
-      )
-      
+      await queryManager.execute(`UPDATE vip_owned_users SET is_active = false WHERE owned_telegram_id = $1`, [
+        targetTelegramId,
+      ])
+
       await queryManager.execute(
         `INSERT INTO vip_owned_users (vip_telegram_id, owned_telegram_id, claimed_at)
          VALUES ($1, $2, CURRENT_TIMESTAMP)`,
-        [newVipTelegramId, targetTelegramId]
+        [newVipTelegramId, targetTelegramId],
       )
-      
-      await queryManager.execute(
-        `UPDATE whatsapp_users SET owned_by_telegram_id = $1 WHERE telegram_id = $2`,
-        [newVipTelegramId, targetTelegramId]
-      )
+
+      await queryManager.execute(`UPDATE whatsapp_users SET owned_by_telegram_id = $1 WHERE telegram_id = $2`, [
+        newVipTelegramId,
+        targetTelegramId,
+      ])
       return true
     } catch (error) {
       logger.error(`[VIPQueries] Error reassigning user: ${error.message}`)
@@ -728,15 +842,15 @@ export const VIPQueries = {
       await queryManager.execute(
         `INSERT INTO vip_activity_log (vip_telegram_id, action_type, target_user_telegram_id, target_group_jid, details)
          VALUES ($1, $2, $3, $4, $5)`,
-        [vipTelegramId, actionType, targetUserTelegramId, targetGroupJid, JSON.stringify(details)]
+        [vipTelegramId, actionType, targetUserTelegramId, targetGroupJid, JSON.stringify(details)],
       )
-      
-      if (actionType === 'takeover' && targetUserTelegramId) {
+
+      if (actionType === "takeover" && targetUserTelegramId) {
         await queryManager.execute(
           `UPDATE vip_owned_users 
            SET last_used_at = CURRENT_TIMESTAMP, takeovers_count = takeovers_count + 1
            WHERE vip_telegram_id = $1 AND owned_telegram_id = $2`,
-          [vipTelegramId, targetUserTelegramId]
+          [vipTelegramId, targetUserTelegramId],
         )
       }
     } catch (error) {
@@ -753,7 +867,7 @@ export const VIPQueries = {
          LEFT JOIN vip_owned_users vou ON wu.telegram_id = vou.vip_telegram_id AND vou.is_active = true
          WHERE wu.vip_level > 0 OR wu.is_default_vip = true
          GROUP BY wu.telegram_id
-         ORDER BY wu.vip_level DESC, wu.telegram_id`
+         ORDER BY wu.vip_level DESC, wu.telegram_id`,
       )
       return result.rows
     } catch (error) {
@@ -764,30 +878,27 @@ export const VIPQueries = {
 
   async getVIPDetails(vipTelegramId) {
     try {
-      const vipInfo = await queryManager.execute(
-        `SELECT * FROM whatsapp_users WHERE telegram_id = $1`,
-        [vipTelegramId]
-      )
-      
+      const vipInfo = await queryManager.execute(`SELECT * FROM whatsapp_users WHERE telegram_id = $1`, [vipTelegramId])
+
       const ownedUsers = await this.getOwnedUsers(vipTelegramId)
-      
+
       const recentActivity = await queryManager.execute(
         `SELECT * FROM vip_activity_log 
          WHERE vip_telegram_id = $1 
          ORDER BY created_at DESC LIMIT 10`,
-        [vipTelegramId]
+        [vipTelegramId],
       )
-      
+
       return {
         vip: vipInfo.rows[0],
         ownedUsers,
-        recentActivity: recentActivity.rows
+        recentActivity: recentActivity.rows,
       }
     } catch (error) {
       logger.error(`[VIPQueries] Error getting VIP details: ${error.message}`)
       return null
     }
-  }
+  },
 }
 
 // ==========================================
@@ -807,7 +918,7 @@ export const WarningQueries = {
            last_warning_at = CURRENT_TIMESTAMP,
            updated_at = CURRENT_TIMESTAMP
          RETURNING warning_count`,
-        [userJid, groupJid, warningType, reason]
+        [userJid, groupJid, warningType, reason],
       )
       return result.rows[0]?.warning_count || 1
     } catch (error) {
@@ -841,7 +952,7 @@ export const WarningQueries = {
       const result = await queryManager.execute(
         `SELECT warning_count FROM warnings
          WHERE group_jid = $1 AND user_jid = $2 AND warning_type = $3`,
-        [groupJid, userJid, warningType]
+        [groupJid, userJid, warningType],
       )
       return result.rows[0]?.warning_count || 0
     } catch (error) {
@@ -881,10 +992,10 @@ export const WarningQueries = {
       const result = await queryManager.execute(query, params)
 
       return {
-        totalUsers: parseInt(result.rows[0]?.total_users) || 0,
-        totalWarnings: parseInt(result.rows[0]?.total_warnings) || 0,
-        avgWarnings: parseFloat(result.rows[0]?.avg_warnings) || 0,
-        maxWarnings: parseInt(result.rows[0]?.max_warnings) || 0
+        totalUsers: Number.parseInt(result.rows[0]?.total_users) || 0,
+        totalWarnings: Number.parseInt(result.rows[0]?.total_warnings) || 0,
+        avgWarnings: Number.parseFloat(result.rows[0]?.avg_warnings) || 0,
+        maxWarnings: Number.parseInt(result.rows[0]?.max_warnings) || 0,
       }
     } catch (error) {
       logger.error(`[WarningQueries] Error getting warning stats: ${error.message}`)
@@ -920,7 +1031,7 @@ export const WarningQueries = {
       logger.error(`[WarningQueries] Error getting warning list: ${error.message}`)
       return []
     }
-  }
+  },
 }
 
 // ==========================================
@@ -928,7 +1039,16 @@ export const WarningQueries = {
 // ==========================================
 
 export const ViolationQueries = {
-  async logViolation(groupJid, userJid, violationType, messageContent, detectedContent, actionTaken, warningNumber, messageId) {
+  async logViolation(
+    groupJid,
+    userJid,
+    violationType,
+    messageContent,
+    detectedContent,
+    actionTaken,
+    warningNumber,
+    messageId,
+  ) {
     try {
       await queryManager.execute(
         `INSERT INTO violations (
@@ -945,8 +1065,8 @@ export const ViolationQueries = {
           JSON.stringify(detectedContent || {}),
           actionTaken,
           warningNumber,
-          messageId
-        ]
+          messageId,
+        ],
       )
     } catch (error) {
       logger.error(`[ViolationQueries] Error logging violation: ${error.message}`)
@@ -991,7 +1111,7 @@ export const ViolationQueries = {
       logger.error(`[ViolationQueries] Error getting violation stats: ${error.message}`)
       return []
     }
-  }
+  },
 }
 
 // ==========================================
@@ -1001,8 +1121,21 @@ export const ViolationQueries = {
 export const MessageQueries = {
   async storeMessage(messageData) {
     try {
-      const { id, fromJid, senderJid, timestamp, content, media, mediaType, sessionId, userId, isViewOnce, fromMe, pushName } = messageData
-      
+      const {
+        id,
+        fromJid,
+        senderJid,
+        timestamp,
+        content,
+        media,
+        mediaType,
+        sessionId,
+        userId,
+        isViewOnce,
+        fromMe,
+        pushName,
+      } = messageData
+
       const updateResult = await queryManager.execute(
         `UPDATE messages 
          SET content = COALESCE($1, content),
@@ -1012,13 +1145,13 @@ export const MessageQueries = {
              is_deleted = false
          WHERE id = $5 AND session_id = $6
          RETURNING id`,
-        [content, media, mediaType, pushName, id, sessionId]
+        [content, media, mediaType, pushName, id, sessionId],
       )
-      
+
       if (updateResult.rows.length > 0) {
         return updateResult.rows[0].id
       }
-      
+
       const insertResult = await queryManager.execute(
         `INSERT INTO messages (
           id, from_jid, sender_jid, timestamp, content, media, 
@@ -1026,7 +1159,7 @@ export const MessageQueries = {
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
         RETURNING id`,
-        [id, fromJid, senderJid, timestamp, content, media, mediaType, sessionId, userId, isViewOnce, fromMe, pushName]
+        [id, fromJid, senderJid, timestamp, content, media, mediaType, sessionId, userId, isViewOnce, fromMe, pushName],
       )
       return insertResult.rows[0]?.id
     } catch (error) {
@@ -1034,14 +1167,14 @@ export const MessageQueries = {
       throw error
     }
   },
-    
+
   async getRecentMessages(chatJid, sessionId, limit = 50) {
     try {
       const result = await queryManager.execute(
         `SELECT * FROM messages
          WHERE from_jid = $1 AND session_id = $2 AND is_deleted = false
          ORDER BY timestamp DESC LIMIT $3`,
-        [chatJid, sessionId, limit]
+        [chatJid, sessionId, limit],
       )
       return result.rows
     } catch (error) {
@@ -1056,7 +1189,7 @@ export const MessageQueries = {
         `UPDATE messages 
          SET is_deleted = true, deleted_at = CURRENT_TIMESTAMP
          WHERE id = $1 AND session_id = $2`,
-        [messageId, sessionId]
+        [messageId, sessionId],
       )
     } catch (error) {
       logger.error(`[MessageQueries] Error marking message deleted: ${error.message}`)
@@ -1070,7 +1203,7 @@ export const MessageQueries = {
          WHERE from_jid = $1 AND session_id = $2 
            AND content ILIKE $3 AND is_deleted = false
          ORDER BY timestamp DESC LIMIT $4`,
-        [chatJid, sessionId, `%${searchTerm}%`, limit]
+        [chatJid, sessionId, `%${searchTerm}%`, limit],
       )
       return result.rows
     } catch (error) {
@@ -1096,7 +1229,7 @@ export const MessageQueries = {
       queryText += " ORDER BY timestamp DESC LIMIT 1"
 
       const result = await queryManager.execute(queryText, params)
-      
+
       if (result.rows.length === 0) return null
 
       const row = result.rows[0]
@@ -1112,8 +1245,8 @@ export const MessageQueries = {
         userId: row.user_id,
         isViewOnce: Boolean(row.is_view_once),
         fromMe: Boolean(row.from_me),
-        pushName: row.push_name || 'Unknown',
-        createdAt: row.created_at
+        pushName: row.push_name || "Unknown",
+        createdAt: row.created_at,
       }
     } catch (error) {
       logger.error(`[MessageQueries] Error finding message by ID: ${error.message}`)
@@ -1141,28 +1274,28 @@ export const MessageQueries = {
 
   normalizeTimestamp(timestamp) {
     if (!timestamp) return Math.floor(Date.now() / 1000)
-    
-    if (typeof timestamp === 'string') {
-      const parsed = parseInt(timestamp)
+
+    if (typeof timestamp === "string") {
+      const parsed = Number.parseInt(timestamp)
       return isNaN(parsed) ? Math.floor(Date.now() / 1000) : parsed
     }
-    
-    if (typeof timestamp === 'number') {
+
+    if (typeof timestamp === "number") {
       return timestamp > 1e12 ? Math.floor(timestamp / 1000) : timestamp
     }
-    
+
     return Math.floor(Date.now() / 1000)
   },
 
   safeJsonParse(jsonString) {
     if (!jsonString) return null
-    
+
     try {
-      return typeof jsonString === 'string' ? JSON.parse(jsonString) : jsonString
+      return typeof jsonString === "string" ? JSON.parse(jsonString) : jsonString
     } catch (error) {
       return null
     }
-  }
+  },
 }
 
 // ==========================================
@@ -1175,14 +1308,14 @@ export const AnalyticsQueries = {
       const columns = Object.keys(updates)
       const values = Object.values(updates)
       const placeholders = columns.map((_, i) => `${i + 3}`).join(", ")
-      const updateSet = columns.map((col, i) => `${col} = ${col} + ${i + 3}`).join(", ")
+      const updateSet = columns.map((col, i) => `${col} = ${col} + $${i + 3}`).join(", ")
 
       await queryManager.execute(
         `INSERT INTO group_analytics (group_jid, date, ${columns.join(", ")})
          VALUES ($1, $2, ${placeholders})
          ON CONFLICT (group_jid, date)
          DO UPDATE SET ${updateSet}`,
-        [groupJid, new Date().toISOString().split("T")[0], ...values]
+        [groupJid, new Date().toISOString().split("T")[0], ...values],
       )
     } catch (error) {
       logger.error(`[AnalyticsQueries] Error updating analytics: ${error.message}`)
@@ -1195,14 +1328,14 @@ export const AnalyticsQueries = {
         `SELECT * FROM group_analytics
          WHERE group_jid = $1 AND date > CURRENT_DATE - INTERVAL '${days} days'
          ORDER BY date DESC`,
-        [groupJid]
+        [groupJid],
       )
       return result.rows
     } catch (error) {
       logger.error(`[AnalyticsQueries] Error getting analytics: ${error.message}`)
       return []
     }
-  }
+  },
 }
 
 // ==========================================
@@ -1212,10 +1345,7 @@ export const AnalyticsQueries = {
 export const UserQueries = {
   async getUserByTelegramId(telegramId) {
     try {
-      const result = await queryManager.execute(
-        `SELECT * FROM users WHERE telegram_id = $1`,
-        [telegramId]
-      )
+      const result = await queryManager.execute(`SELECT * FROM users WHERE telegram_id = $1`, [telegramId])
       return result.rows[0] || null
     } catch (error) {
       logger.error(`[UserQueries] Error getting user by telegram_id: ${error.message}`)
@@ -1227,12 +1357,9 @@ export const UserQueries = {
     try {
       const sessionIdMatch = sessionId.match(/session_(-?\d+)/)
       if (!sessionIdMatch) return null
-      
-      const telegramId = parseInt(sessionIdMatch[1])
-      const result = await queryManager.execute(
-        `SELECT * FROM users WHERE telegram_id = $1`,
-        [telegramId]
-      )
+
+      const telegramId = Number.parseInt(sessionIdMatch[1])
+      const result = await queryManager.execute(`SELECT * FROM users WHERE telegram_id = $1`, [telegramId])
       return result.rows[0] || null
     } catch (error) {
       logger.error(`[UserQueries] Error getting user by session_id: ${error.message}`)
@@ -1242,7 +1369,7 @@ export const UserQueries = {
 
   async setBotMode(telegramId, mode) {
     try {
-      if (!telegramId) throw new Error('telegram_id is required')
+      if (!telegramId) throw new Error("telegram_id is required")
 
       const result = await queryManager.execute(
         `INSERT INTO whatsapp_users (telegram_id, bot_mode, created_at, updated_at)
@@ -1250,11 +1377,11 @@ export const UserQueries = {
          ON CONFLICT (telegram_id)
          DO UPDATE SET bot_mode = EXCLUDED.bot_mode, updated_at = CURRENT_TIMESTAMP
          RETURNING bot_mode`,
-        [telegramId, mode]
+        [telegramId, mode],
       )
-      
+
       queryManager.clearCache(`bot_mode_${telegramId}`)
-      return result.rows[0]?.bot_mode || 'public'
+      return result.rows[0]?.bot_mode || "public"
     } catch (error) {
       logger.error(`[UserQueries] Error setting bot mode: ${error.message}`)
       throw error
@@ -1263,14 +1390,13 @@ export const UserQueries = {
 
   async getBotMode(telegramId) {
     try {
-      const result = await queryManager.execute(
-        `SELECT bot_mode FROM whatsapp_users WHERE telegram_id = $1`,
-        [telegramId]
-      )
-      return { mode: result.rows[0]?.bot_mode || 'public' }
+      const result = await queryManager.execute(`SELECT bot_mode FROM whatsapp_users WHERE telegram_id = $1`, [
+        telegramId,
+      ])
+      return { mode: result.rows[0]?.bot_mode || "public" }
     } catch (error) {
       logger.error(`[UserQueries] Error getting bot mode: ${error.message}`)
-      return { mode: 'public' }
+      return { mode: "public" }
     }
   },
 
@@ -1284,7 +1410,7 @@ export const UserQueries = {
            phone_number = COALESCE($2, users.phone_number),
            updated_at = CURRENT_TIMESTAMP
          RETURNING *`,
-        [telegramId, phoneNumber]
+        [telegramId, phoneNumber],
       )
       return result.rows[0]
     } catch (error) {
@@ -1313,8 +1439,8 @@ export const UserQueries = {
           userData.first_name || null,
           userData.last_name || null,
           userData.phone_number || null,
-          userData.is_active
-        ]
+          userData.is_active,
+        ],
       )
       return result.rows[0]
     } catch (error) {
@@ -1335,38 +1461,37 @@ export const UserQueries = {
 
   async getUserSettings(telegramId) {
     try {
-      const result = await queryManager.execute(
-        `SELECT custom_prefix FROM whatsapp_users WHERE telegram_id = $1`,
-        [telegramId]
-      )
-      
+      const result = await queryManager.execute(`SELECT custom_prefix FROM whatsapp_users WHERE telegram_id = $1`, [
+        telegramId,
+      ])
+
       if (result.rows.length === 0) {
-        return { custom_prefix: '.' }
+        return { custom_prefix: "." }
       }
-      
+
       return result.rows[0]
     } catch (error) {
       logger.error(`[UserQueries] Error getting user settings: ${error.message}`)
-      return { custom_prefix: '.' }
+      return { custom_prefix: "." }
     }
   },
 
   async updateUserPrefix(telegramId, prefix) {
     try {
-      if (!telegramId) throw new Error('telegram_id is required')
-      if (prefix && prefix.length > 10) throw new Error('Prefix cannot be longer than 10 characters')
-      
-      const normalizedPrefix = prefix === 'none' ? '' : prefix
-      
+      if (!telegramId) throw new Error("telegram_id is required")
+      if (prefix && prefix.length > 10) throw new Error("Prefix cannot be longer than 10 characters")
+
+      const normalizedPrefix = prefix === "none" ? "" : prefix
+
       const result = await queryManager.execute(
         `INSERT INTO whatsapp_users (telegram_id, custom_prefix, created_at, updated_at)
          VALUES ($1, $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
          ON CONFLICT (telegram_id)
          DO UPDATE SET custom_prefix = EXCLUDED.custom_prefix, updated_at = CURRENT_TIMESTAMP
          RETURNING custom_prefix`,
-        [telegramId, normalizedPrefix]
+        [telegramId, normalizedPrefix],
       )
-      
+
       queryManager.clearCache(`user_settings_${telegramId}`)
       return result.rows[0]?.custom_prefix
     } catch (error) {
@@ -1377,7 +1502,7 @@ export const UserQueries = {
 
   async upsertSettings(telegramId, userJid = null, settings = {}) {
     try {
-      if (!telegramId) throw new Error('telegram_id is required')
+      if (!telegramId) throw new Error("telegram_id is required")
 
       if (userJid) settings.jid = userJid
 
@@ -1388,7 +1513,7 @@ export const UserQueries = {
            ON CONFLICT (telegram_id)
            DO UPDATE SET updated_at = CURRENT_TIMESTAMP
            RETURNING *`,
-          [telegramId]
+          [telegramId],
         )
         return result.rows[0]
       }
@@ -1396,7 +1521,7 @@ export const UserQueries = {
       const columns = Object.keys(settings)
       const values = Object.values(settings)
       const placeholders = columns.map((_, i) => `${i + 2}`).join(", ")
-      const updateSet = columns.map(col => `${col} = COALESCE(EXCLUDED.${col}, whatsapp_users.${col})`).join(", ")
+      const updateSet = columns.map((col) => `${col} = COALESCE(EXCLUDED.${col}, whatsapp_users.${col})`).join(", ")
 
       const query = `
         INSERT INTO whatsapp_users (telegram_id, ${columns.join(", ")}, created_at, updated_at)
@@ -1417,7 +1542,7 @@ export const UserQueries = {
 
   async setAntiViewOnce(userJid, enabled, telegramId = null) {
     try {
-      if (!telegramId) throw new Error('telegram_id is required')
+      if (!telegramId) throw new Error("telegram_id is required")
 
       const normalizedJid = userJid ? userJid.replace(/:\d+@/, "@") : null
 
@@ -1430,7 +1555,7 @@ export const UserQueries = {
            antiviewonce_enabled = EXCLUDED.antiviewonce_enabled,
            updated_at = CURRENT_TIMESTAMP
          RETURNING antiviewonce_enabled`,
-        [telegramId, normalizedJid, enabled]
+        [telegramId, normalizedJid, enabled],
       )
 
       queryManager.clearCache(`user_settings_${telegramId}`)
@@ -1471,12 +1596,12 @@ export const UserQueries = {
          FROM whatsapp_users wu
          WHERE wu.antiviewonce_enabled = true 
          AND wu.jid IS NOT NULL 
-         AND wu.telegram_id IS NOT NULL`
+         AND wu.telegram_id IS NOT NULL`,
       )
-      
+
       const validUsers = result.rows
-        .map(row => ({ jid: row.jid, telegram_id: row.telegram_id }))
-        .filter(user => user.jid && user.jid.includes("@"))
+        .map((row) => ({ jid: row.jid, telegram_id: row.telegram_id }))
+        .filter((user) => user.jid && user.jid.includes("@"))
 
       return validUsers
     } catch (error) {
@@ -1492,12 +1617,12 @@ export const UserQueries = {
          FROM whatsapp_users wu
          WHERE wu.antideleted_enabled = true 
          AND wu.jid IS NOT NULL 
-         AND wu.telegram_id IS NOT NULL`
+         AND wu.telegram_id IS NOT NULL`,
       )
-      
+
       const validUsers = result.rows
-        .map(row => ({ jid: row.jid, telegram_id: row.telegram_id }))
-        .filter(user => user.jid && user.jid.includes("@"))
+        .map((row) => ({ jid: row.jid, telegram_id: row.telegram_id }))
+        .filter((user) => user.jid && user.jid.includes("@"))
 
       return validUsers
     } catch (error) {
@@ -1511,7 +1636,7 @@ export const UserQueries = {
       const result = await queryManager.execute(
         `SELECT antideleted_enabled FROM whatsapp_users 
          WHERE telegram_id = $1`,
-        [telegramId]
+        [telegramId],
       )
 
       if (result.rows.length > 0) {
@@ -1526,7 +1651,7 @@ export const UserQueries = {
 
   async setAntiDeleted(jid, enabled, telegramId) {
     try {
-      if (!telegramId) throw new Error('telegram_id is required')
+      if (!telegramId) throw new Error("telegram_id is required")
 
       await queryManager.execute(
         `INSERT INTO whatsapp_users (telegram_id, jid, antideleted_enabled, created_at, updated_at)
@@ -1536,7 +1661,7 @@ export const UserQueries = {
            jid = COALESCE(EXCLUDED.jid, whatsapp_users.jid),
            antideleted_enabled = EXCLUDED.antideleted_enabled,
            updated_at = CURRENT_TIMESTAMP`,
-        [telegramId, jid, enabled]
+        [telegramId, jid, enabled],
       )
       return true
     } catch (error) {
@@ -1550,7 +1675,7 @@ export const UserQueries = {
       const result = await queryManager.execute(
         `SELECT jid, telegram_id, antideleted_enabled, antiviewonce_enabled
          FROM whatsapp_users WHERE telegram_id = $1 LIMIT 1`,
-        [telegramId]
+        [telegramId],
       )
 
       if (result.rows.length > 0) {
@@ -1558,7 +1683,7 @@ export const UserQueries = {
           jid: result.rows[0].jid,
           telegram_id: result.rows[0].telegram_id,
           antideleted_enabled: Boolean(result.rows[0].antideleted_enabled),
-          antiviewonce_enabled: Boolean(result.rows[0].antiviewonce_enabled)
+          antiviewonce_enabled: Boolean(result.rows[0].antiviewonce_enabled),
         }
       }
       return null
@@ -1580,7 +1705,7 @@ export const UserQueries = {
            name = COALESCE($2, whatsapp_users.name),
            updated_at = CURRENT_TIMESTAMP
          RETURNING id`,
-        [userJid, userName]
+        [userJid, userName],
       )
       return result.rows[0]
     } catch (error) {
@@ -1591,7 +1716,7 @@ export const UserQueries = {
 
   async setAutoOnline(telegramId, enabled) {
     try {
-      if (!telegramId) throw new Error('telegram_id is required')
+      if (!telegramId) throw new Error("telegram_id is required")
 
       const result = await queryManager.execute(
         `INSERT INTO whatsapp_users (telegram_id, auto_online, created_at, updated_at)
@@ -1599,9 +1724,9 @@ export const UserQueries = {
          ON CONFLICT (telegram_id)
          DO UPDATE SET auto_online = EXCLUDED.auto_online, updated_at = CURRENT_TIMESTAMP
          RETURNING auto_online`,
-        [telegramId, enabled]
+        [telegramId, enabled],
       )
-      
+
       queryManager.clearCache(`presence_${telegramId}`)
       return result.rows[0]?.auto_online || false
     } catch (error) {
@@ -1612,7 +1737,7 @@ export const UserQueries = {
 
   async setAutoTyping(telegramId, enabled) {
     try {
-      if (!telegramId) throw new Error('telegram_id is required')
+      if (!telegramId) throw new Error("telegram_id is required")
 
       const result = await queryManager.execute(
         `INSERT INTO whatsapp_users (telegram_id, auto_typing, created_at, updated_at)
@@ -1620,9 +1745,9 @@ export const UserQueries = {
          ON CONFLICT (telegram_id)
          DO UPDATE SET auto_typing = EXCLUDED.auto_typing, updated_at = CURRENT_TIMESTAMP
          RETURNING auto_typing`,
-        [telegramId, enabled]
+        [telegramId, enabled],
       )
-      
+
       queryManager.clearCache(`presence_${telegramId}`)
       return result.rows[0]?.auto_typing || false
     } catch (error) {
@@ -1633,7 +1758,7 @@ export const UserQueries = {
 
   async setAutoRecording(telegramId, enabled) {
     try {
-      if (!telegramId) throw new Error('telegram_id is required')
+      if (!telegramId) throw new Error("telegram_id is required")
 
       const result = await queryManager.execute(
         `INSERT INTO whatsapp_users (telegram_id, auto_recording, created_at, updated_at)
@@ -1641,9 +1766,9 @@ export const UserQueries = {
          ON CONFLICT (telegram_id)
          DO UPDATE SET auto_recording = EXCLUDED.auto_recording, updated_at = CURRENT_TIMESTAMP
          RETURNING auto_recording`,
-        [telegramId, enabled]
+        [telegramId, enabled],
       )
-      
+
       queryManager.clearCache(`presence_${telegramId}`)
       return result.rows[0]?.auto_recording || false
     } catch (error) {
@@ -1654,7 +1779,7 @@ export const UserQueries = {
 
   async setAutoStatusView(telegramId, enabled) {
     try {
-      if (!telegramId) throw new Error('telegram_id is required')
+      if (!telegramId) throw new Error("telegram_id is required")
 
       const result = await queryManager.execute(
         `INSERT INTO whatsapp_users (telegram_id, auto_status_view, created_at, updated_at)
@@ -1662,9 +1787,9 @@ export const UserQueries = {
          ON CONFLICT (telegram_id)
          DO UPDATE SET auto_status_view = EXCLUDED.auto_status_view, updated_at = CURRENT_TIMESTAMP
          RETURNING auto_status_view`,
-        [telegramId, enabled]
+        [telegramId, enabled],
       )
-      
+
       queryManager.clearCache(`presence_${telegramId}`)
       return result.rows[0]?.auto_status_view || false
     } catch (error) {
@@ -1675,7 +1800,7 @@ export const UserQueries = {
 
   async setAutoStatusLike(telegramId, enabled) {
     try {
-      if (!telegramId) throw new Error('telegram_id is required')
+      if (!telegramId) throw new Error("telegram_id is required")
 
       const result = await queryManager.execute(
         `INSERT INTO whatsapp_users (telegram_id, auto_status_like, created_at, updated_at)
@@ -1683,9 +1808,9 @@ export const UserQueries = {
          ON CONFLICT (telegram_id)
          DO UPDATE SET auto_status_like = EXCLUDED.auto_status_like, updated_at = CURRENT_TIMESTAMP
          RETURNING auto_status_like`,
-        [telegramId, enabled]
+        [telegramId, enabled],
       )
-      
+
       queryManager.clearCache(`presence_${telegramId}`)
       return result.rows[0]?.auto_status_like || false
     } catch (error) {
@@ -1699,23 +1824,23 @@ export const UserQueries = {
       const cacheKey = `presence_${telegramId}`
       const cached = queryManager.cache.get(cacheKey)
       if (cached) return cached.data
-      
+
       const result = await queryManager.execute(
         `SELECT auto_online, auto_typing, auto_recording, 
                 auto_status_view, auto_status_like, default_presence
          FROM whatsapp_users WHERE telegram_id = $1`,
-        [telegramId]
+        [telegramId],
       )
-      
+
       const settings = result.rows[0] || {
         auto_online: false,
         auto_typing: false,
         auto_recording: false,
         auto_status_view: false,
         auto_status_like: false,
-        default_presence: 'unavailable'
+        default_presence: "unavailable",
       }
-      
+
       queryManager.cache.set(cacheKey, { data: settings, timestamp: Date.now() })
       return settings
     } catch (error) {
@@ -1726,10 +1851,10 @@ export const UserQueries = {
         auto_recording: false,
         auto_status_view: false,
         auto_status_like: false,
-        default_presence: 'unavailable'
+        default_presence: "unavailable",
       }
     }
-  }
+  },
 }
 
 // ==========================================
@@ -1749,20 +1874,12 @@ export const Utils = {
 
   async getDatabaseStats() {
     const stats = {}
-    const tables = [
-      "users",
-      "messages",
-      "groups",
-      "warnings",
-      "settings",
-      "group_analytics",
-      "whatsapp_users"
-    ]
+    const tables = ["users", "messages", "groups", "warnings", "settings", "group_analytics", "whatsapp_users"]
 
     for (const table of tables) {
       try {
         const result = await queryManager.execute(`SELECT COUNT(*) as count FROM ${table}`)
-        stats[table] = parseInt(result.rows[0].count)
+        stats[table] = Number.parseInt(result.rows[0].count)
       } catch (error) {
         stats[table] = 0
       }
@@ -1799,7 +1916,7 @@ export const Utils = {
       `)
 
       logger.info("[Utils] Unique constraints found:")
-      result.rows.forEach(row => {
+      result.rows.forEach((row) => {
         logger.info(`  ${row.table_name}: ${row.constraint_name}`)
       })
 
@@ -1808,7 +1925,7 @@ export const Utils = {
       logger.error(`[Utils] Error verifying constraints: ${error.message}`)
       return []
     }
-  }
+  },
 }
 
 export default queryManager

@@ -4,44 +4,47 @@ import { logger } from "../utils/logger.js"
 import pino from "pino"
 
 // ==================== BAILEYS SILENT LOGGER ====================
-const baileysLogger = pino({ 
-  level: process.env.BAILEYS_LOG_LEVEL || 'silent'
+const baileysLogger = pino({
+  level: process.env.BAILEYS_LOG_LEVEL || "silent",
 })
 // ==================== END BAILEYS SILENT LOGGER ====================
 
-// Smart group cache with invalidation on updates
-const groupCache = new NodeCache({ 
-  stdTTL: 1800,      // 30 minutes default
-  checkperiod: 300,  // Check every 5 minutes
-  useClones: false   // Performance optimization
+const groupCache = new NodeCache({
+  stdTTL: 30,
+  checkperiod: 10,
+  useClones: true,
 })
 
-// ✅ CRITICAL: Store instances per session
+const requestQueue = []
+let isProcessingQueue = false
+const RATE_LIMIT_DELAY = 500 // ms between requests to same endpoint
+
 const sessionStores = new Map()
+const sessionLastActivity = new Map()
+
+const SESSION_CLEANUP_INTERVAL = 5 * 60 * 1000
+const SESSION_INACTIVITY_TIMEOUT = 30 * 60 * 1000 // 30 minutes
 
 // ✅ Default getMessage function
 const defaultGetMessage = async (key) => {
   return undefined
 }
 
-
 export const baileysConfig = {
-  logger: pino({ level: "silent" }),
+  logger: baileysLogger,
   printQRInTerminal: false,
   msgRetryCounterMap: {},
-    browser: Browsers.windows('safari'),
+  browser: Browsers.windows("safari"),
   retryRequestDelayMs: 250,
   markOnlineOnConnect: false,
-  getMessage: defaultGetMessage,  // Default fallback
-    version: [2, 3000, 1025190524],
+  getMessage: defaultGetMessage,
+  version: [2, 3000, 1025190524],
   emitOwnEvents: true,
+  syncFullHistory: true,
+  fireInitQueries: true,
+  maxMsgRetryCount: 40,
   patchMessageBeforeSending: (message) => {
-    const requiresPatch = !!(
-      message.buttonsMessage || 
-      message.templateMessage ||
-      message.listMessage
-    )
-    
+    const requiresPatch = !!(message.buttonsMessage || message.templateMessage || message.listMessage)
     if (requiresPatch) {
       message = {
         viewOnceMessage: {
@@ -55,42 +58,72 @@ export const baileysConfig = {
         },
       }
     }
-    
     return message
   },
   appStateSyncInitialTimeoutMs: 10000,
-  generateHighQualityLinkPreview: true
+  generateHighQualityLinkPreview: true,
 }
 
 export const eventTypes = [
   "messages.upsert",
-  "groups.update", 
+  "groups.update",
   "group-participants.update",
   "messages.update",
   "contacts.update",
   "call",
 ]
 
-// ==================== STORE MANAGEMENT ====================
+// ==================== RATE LIMITING ====================
+
+async function processRequestQueue() {
+  if (isProcessingQueue || requestQueue.length === 0) return
+
+  isProcessingQueue = true
+
+  while (requestQueue.length > 0) {
+    const { fn, resolve, reject } = requestQueue.shift()
+    try {
+      const result = await fn()
+      resolve(result)
+    } catch (error) {
+      reject(error)
+    }
+
+    if (requestQueue.length > 0) {
+      await new Promise((resolve) => setTimeout(resolve, RATE_LIMIT_DELAY))
+    }
+  }
+
+  isProcessingQueue = false
+}
+
+export function queueRequest(fn) {
+  return new Promise((resolve, reject) => {
+    requestQueue.push({ fn, resolve, reject })
+    processRequestQueue()
+  })
+}
+
+// ==================== SESSION STORE MANAGEMENT ====================
 
 /**
  * Create in-memory store for a session
  */
 export function createSessionStore(sessionId) {
-  // Return existing store if already created
   if (sessionStores.has(sessionId)) {
+    sessionLastActivity.set(sessionId, Date.now())
     return sessionStores.get(sessionId)
   }
-  
-  const store = makeInMemoryStore({ 
-    logger: baileysLogger 
+
+  const store = makeInMemoryStore({
+    logger: baileysLogger,
   })
-  
-  // Store it for later retrieval
+
   sessionStores.set(sessionId, store)
-  
+  sessionLastActivity.set(sessionId, Date.now())
+
   logger.debug(`[Store] Created in-memory store for ${sessionId}`)
-  
+
   return store
 }
 
@@ -98,6 +131,9 @@ export function createSessionStore(sessionId) {
  * Get existing store for a session
  */
 export function getSessionStore(sessionId) {
+  if (sessionStores.has(sessionId)) {
+    sessionLastActivity.set(sessionId, Date.now())
+  }
   return sessionStores.get(sessionId)
 }
 
@@ -107,10 +143,39 @@ export function getSessionStore(sessionId) {
 export function deleteSessionStore(sessionId) {
   if (sessionStores.has(sessionId)) {
     sessionStores.delete(sessionId)
+    sessionLastActivity.delete(sessionId)
     logger.debug(`[Store] Deleted store for ${sessionId}`)
     return true
   }
   return false
+}
+
+export function startSessionCleanup() {
+  setInterval(() => {
+    const now = Date.now()
+    let cleanedCount = 0
+
+    for (const [sessionId, lastActivity] of sessionLastActivity.entries()) {
+      if (now - lastActivity > SESSION_INACTIVITY_TIMEOUT) {
+        deleteSessionStore(sessionId)
+        cleanedCount++
+      }
+    }
+
+    if (cleanedCount > 0) {
+      logger.info(`[Store] Cleaned up ${cleanedCount} abandoned sessions`)
+    }
+  }, SESSION_CLEANUP_INTERVAL)
+
+  logger.info("[Store] Session cleanup interval started")
+}
+
+export function getSessionStoreStats() {
+  return {
+    activeStores: sessionStores.size,
+    queuedRequests: requestQueue.length,
+    isProcessingQueue,
+  }
 }
 
 /**
@@ -119,13 +184,12 @@ export function deleteSessionStore(sessionId) {
 export function bindStoreToSocket(sock, sessionId) {
   try {
     const store = getSessionStore(sessionId)
-    
+
     if (!store) {
       logger.warn(`[Store] No store found for ${sessionId}, creating new one`)
       const newStore = createSessionStore(sessionId)
       newStore.bind(sock.ev)
-      
-      // Set getMessage function
+
       sock.getMessage = async (key) => {
         if (newStore) {
           const msg = await newStore.loadMessage(key.remoteJid, key.id)
@@ -133,14 +197,12 @@ export function bindStoreToSocket(sock, sessionId) {
         }
         return undefined
       }
-      
+
       return newStore
     }
-    
-    // Bind store to socket events
+
     store.bind(sock.ev)
-    
-    // ✅ CRITICAL: Set getMessage function with store access
+
     sock.getMessage = async (key) => {
       if (store) {
         const msg = await store.loadMessage(key.remoteJid, key.id)
@@ -148,10 +210,9 @@ export function bindStoreToSocket(sock, sessionId) {
       }
       return undefined
     }
-    
+
     logger.info(`[Store] Bound store to socket for ${sessionId}`)
     return store
-    
   } catch (error) {
     logger.error(`[Store] Error binding store for ${sessionId}:`, error.message)
     return null
@@ -168,30 +229,24 @@ export function createBaileysSocket(authState, sessionId, getMessage = null) {
     const sock = makeWASocket({
       ...baileysConfig,
       auth: authState,
-      // ✅ CRITICAL: Use provided getMessage or fallback to default
-      getMessage: getMessage || defaultGetMessage
+      getMessage: getMessage || defaultGetMessage,
     })
-    
-    // Setup default socket properties
+
     setupSocketDefaults(sock)
-    
-    // ✅ CRITICAL FIX: Override sendMessage to always include ephemeralExpiration
-    // This prevents "old WhatsApp version" warning for ALL messages
+
     const originalSendMessage = sock.sendMessage.bind(sock)
     sock.sendMessage = async (jid, content, options = {}) => {
-      // Always add ephemeralExpiration if not present
-      // 0 = persistent message (never expires)
-      if (!options.ephemeralExpiration) {
-        options.ephemeralExpiration = 0
-      }
-      
-      return await originalSendMessage(jid, content, options)
+      return await queueRequest(async () => {
+        if (!options.ephemeralExpiration) {
+          options.ephemeralExpiration = 0
+        }
+        return await originalSendMessage(jid, content, options)
+      })
     }
-    
+
     return sock
-    
   } catch (error) {
-    logger.error('Failed to create Baileys socket:', error)
+    logger.error("Failed to create Baileys socket:", error)
     throw error
   }
 }
@@ -201,20 +256,17 @@ export function createBaileysSocket(authState, sessionId, getMessage = null) {
  */
 export function setupSocketDefaults(sock) {
   try {
-    // Set max listeners to prevent memory leak warnings
-    if (sock.ev && typeof sock.ev.setMaxListeners === 'function') {
+    if (sock.ev && typeof sock.ev.setMaxListeners === "function") {
       sock.ev.setMaxListeners(900)
     }
 
-    // Add session tracking properties
     sock.sessionId = null
     sock.eventHandlersSetup = false
     sock.connectionCallbacks = null
 
-    logger.debug('Socket defaults configured')
-
+    logger.debug("Socket defaults configured")
   } catch (error) {
-    logger.error('Failed to setup socket defaults:', error)
+    logger.error("Failed to setup socket defaults:", error)
   }
 }
 
@@ -225,30 +277,29 @@ export function getBaileysConfig() {
   return { ...baileysConfig }
 }
 
-
 // ==================== CACHE FUNCTIONS ====================
 
 /**
- * Get group metadata with smart caching
+ * Get group metadata with smart caching and rate-limiting
  */
 export const getGroupMetadata = async (sock, jid, forceRefresh = false) => {
   try {
     const cacheKey = `group_${jid}`
-    
+
     if (forceRefresh) {
       groupCache.del(cacheKey)
     }
-    
+
     let metadata = groupCache.get(cacheKey)
-    
+
     if (!metadata) {
-      metadata = await sock.groupMetadata(jid)
-      groupCache.set(cacheKey, metadata, 900)
+      metadata = await queueRequest(() => sock.groupMetadata(jid))
+      groupCache.set(cacheKey, metadata, 30)
       logger.debug(`[Cache] Fetched and cached group metadata: ${jid}`)
     } else {
       logger.debug(`[Cache] Retrieved group metadata from cache: ${jid}`)
     }
-    
+
     return metadata
   } catch (error) {
     logger.error(`[Baileys] Error fetching group metadata for ${jid}:`, error.message)
@@ -263,14 +314,14 @@ export const updateCacheFromEvent = (groupJid, updateData) => {
   try {
     const cacheKey = `group_${groupJid}`
     const existing = groupCache.get(cacheKey)
-    
+
     if (existing) {
       const updated = { ...existing, ...updateData }
-      groupCache.set(cacheKey, updated, 900)
+      groupCache.set(cacheKey, updated, 30)
       logger.debug(`[Cache] Proactively updated cache for ${groupJid}`)
       return true
     }
-    
+
     return false
   } catch (error) {
     logger.error(`[Cache] Error updating cache from event:`, error.message)
@@ -285,37 +336,37 @@ export const updateParticipantsInCache = async (sock, groupJid, participantUpdat
   try {
     const cacheKey = `group_${groupJid}`
     let metadata = groupCache.get(cacheKey)
-    
+
     const { participants: affectedUsers, action } = participantUpdate
-    
+
     if (!metadata) {
-      if (action === 'add' || action === 'remove') {
-        metadata = await sock.groupMetadata(groupJid)
-        groupCache.set(cacheKey, metadata, 900)
+      if (action === "add" || action === "remove") {
+        metadata = await queueRequest(() => sock.groupMetadata(groupJid))
+        groupCache.set(cacheKey, metadata, 30)
         logger.debug(`[Cache] Fetched metadata for participants update: ${groupJid}`)
         return
       }
       return
     }
-    
+
     switch (action) {
-      case 'add': {
-        const fresh = await sock.groupMetadata(groupJid)
+      case "add": {
+        const fresh = await queueRequest(() => sock.groupMetadata(groupJid))
         metadata.participants = fresh.participants
         break
       }
-      
-      case 'remove': {
+
+      case "remove": {
         metadata.participants = metadata.participants.filter(
-          p => !affectedUsers.includes(p.id) && !affectedUsers.includes(p.jid)
+          (p) => !affectedUsers.includes(p.id) && !affectedUsers.includes(p.jid),
         )
         break
       }
-      
-      case 'promote':
-      case 'demote': {
-        const newRole = action === 'promote' ? 'admin' : null
-        metadata.participants = metadata.participants.map(p => {
+
+      case "promote":
+      case "demote": {
+        const newRole = action === "promote" ? "admin" : null
+        metadata.participants = metadata.participants.map((p) => {
           if (affectedUsers.includes(p.id) || affectedUsers.includes(p.jid)) {
             return { ...p, admin: newRole }
           }
@@ -323,24 +374,23 @@ export const updateParticipantsInCache = async (sock, groupJid, participantUpdat
         })
         break
       }
-      
+
       default:
         logger.warn(`[Cache] Unknown participant action: ${action}`)
     }
-    
-    groupCache.set(cacheKey, metadata, 900)
+
+    groupCache.set(cacheKey, metadata, 30)
     logger.debug(`[Cache] Updated participants cache for ${groupJid} (${action})`)
-    
   } catch (error) {
     logger.error(`[Cache] Error updating participants in cache:`, error.message)
-    invalidateGroupCache(groupJid, 'update_error')
+    invalidateGroupCache(groupJid, "update_error")
   }
 }
 
 /**
  * Invalidate group cache entry
  */
-export const invalidateGroupCache = (groupJid, reason = 'update') => {
+export const invalidateGroupCache = (groupJid, reason = "update") => {
   const cacheKey = `group_${groupJid}`
   if (groupCache.has(cacheKey)) {
     groupCache.del(cacheKey)
@@ -355,7 +405,7 @@ export const invalidateGroupCache = (groupJid, reason = 'update') => {
  */
 export const refreshGroupMetadata = async (sock, jid) => {
   try {
-    invalidateGroupCache(jid, 'forced_refresh')
+    invalidateGroupCache(jid, "forced_refresh")
     return await getGroupMetadata(sock, jid)
   } catch (error) {
     logger.error(`[Baileys] Error refreshing group metadata: ${error.message}`)
@@ -365,12 +415,9 @@ export const refreshGroupMetadata = async (sock, jid) => {
 
 // ==================== ADMIN FUNCTIONS ====================
 
-/**
- * Normalize WhatsApp JID to standard format
- */
 const normalizeJid = (jid) => {
   if (!jid) return null
-  return jid.split('@')[0] + '@s.whatsapp.net'
+  return jid.split("@")[0] + "@s.whatsapp.net"
 }
 
 /**
@@ -380,15 +427,14 @@ export const isUserGroupAdmin = async (sock, groupJid, userJid) => {
   try {
     const metadata = await getGroupMetadata(sock, groupJid)
     const normalizedUserJid = normalizeJid(userJid)
-    
+
     if (!normalizedUserJid || !metadata.participants) {
       return false
     }
-    
-    return metadata.participants.some(participant => {
+
+    return metadata.participants.some((participant) => {
       const normalizedParticipantJid = normalizeJid(participant.jid)
-      return normalizedParticipantJid === normalizedUserJid && 
-             ['admin', 'superadmin'].includes(participant.admin)
+      return normalizedParticipantJid === normalizedUserJid && ["admin", "superadmin"].includes(participant.admin)
     })
   } catch (error) {
     logger.error(`[Baileys] Error checking admin status:`, error.message)
@@ -402,10 +448,10 @@ export const isUserGroupAdmin = async (sock, groupJid, userJid) => {
 export const isBotGroupAdmin = async (sock, groupJid) => {
   try {
     if (!sock.user?.id) {
-      logger.warn('[Baileys] Bot user ID not available')
+      logger.warn("[Baileys] Bot user ID not available")
       return false
     }
-    
+
     const botJid = normalizeJid(sock.user.id)
     return await isUserGroupAdmin(sock, groupJid, botJid)
   } catch (error) {
@@ -421,97 +467,83 @@ export const isBotGroupAdmin = async (sock, groupJid) => {
  */
 export const setupCacheInvalidation = (sock) => {
   try {
-    sock.ev.on('group-participants.update', async (update) => {
+    sock.ev.on("group-participants.update", async (update) => {
       const { id, participants, action } = update
       logger.debug(`[Event] Group participants ${action}: ${id}`)
       await updateParticipantsInCache(sock, id, update)
     })
-    
-    sock.ev.on('groups.update', (updates) => {
-      updates.forEach(update => {
+
+    sock.ev.on("groups.update", (updates) => {
+      updates.forEach((update) => {
         if (update.id) {
           logger.debug(`[Event] Group update: ${update.id}`)
           if (Object.keys(update).length > 1) {
             updateCacheFromEvent(update.id, update)
           } else {
-            invalidateGroupCache(update.id, 'group_update')
+            invalidateGroupCache(update.id, "group_update")
           }
         }
       })
     })
-    
-    logger.info('[Cache] Setup group cache invalidation listeners')
+
+    logger.info("[Cache] Setup group cache invalidation listeners")
   } catch (error) {
-    logger.error('[Cache] Error setting up cache invalidation:', error.message)
+    logger.error("[Cache] Error setting up cache invalidation:", error.message)
   }
 }
 
 // ==================== CACHE MANAGEMENT ====================
 
-/**
- * Manually update group cache
- */
 export const updateGroupCache = (jid, metadata) => {
   try {
     const cacheKey = `group_${jid}`
-    groupCache.set(cacheKey, metadata, 900)
+    groupCache.set(cacheKey, metadata, 30)
     logger.debug(`[Cache] Manually updated group cache for ${jid}`)
     return true
   } catch (error) {
-    logger.error('[Cache] Error updating group cache:', error.message)
+    logger.error("[Cache] Error updating group cache:", error.message)
     return false
   }
 }
 
-/**
- * Get cached group data
- */
 export const getGroupCache = (jid) => {
   const cacheKey = `group_${jid}`
   return groupCache.get(cacheKey)
 }
 
-/**
- * Clear specific group cache
- */
 export const clearGroupCache = (jid) => {
-  return invalidateGroupCache(jid, 'manual_clear')
+  return invalidateGroupCache(jid, "manual_clear")
 }
 
-/**
- * Clear all group cache entries
- */
 export const clearAllGroupCache = () => {
   try {
-    const keys = groupCache.keys().filter(key => key.startsWith('group_'))
-    keys.forEach(key => groupCache.del(key))
+    const keys = groupCache.keys().filter((key) => key.startsWith("group_"))
+    keys.forEach((key) => groupCache.del(key))
     logger.info(`[Cache] Cleared ${keys.length} group cache entries`)
     return keys.length
   } catch (error) {
-    logger.error('[Cache] Error clearing all cache:', error.message)
+    logger.error("[Cache] Error clearing all cache:", error.message)
     return 0
   }
 }
 
-/**
- * Get cache statistics
- */
 export const getCacheStats = () => {
   try {
     const stats = groupCache.getStats()
-    const groupKeys = groupCache.keys().filter(key => key.startsWith('group_'))
-    
+    const groupKeys = groupCache.keys().filter((key) => key.startsWith("group_"))
+
     return {
       keys: stats.keys,
       hits: stats.hits,
       misses: stats.misses,
-      hitRate: stats.hits > 0 ? (stats.hits / (stats.hits + stats.misses) * 100).toFixed(2) + '%' : '0%',
+      hitRate: stats.hits > 0 ? ((stats.hits / (stats.hits + stats.misses)) * 100).toFixed(2) + "%" : "0%",
       groups: groupKeys.length,
       groupKeys: groupKeys,
-      activeStores: sessionStores.size
+      activeStores: sessionStores.size,
+      queuedRequests: requestQueue.length,
     }
   } catch (error) {
-    logger.error('[Cache] Error getting cache stats:', error.message)
+    logger.error("[Cache] Error getting cache stats:", error.message)
     return null
   }
 }
