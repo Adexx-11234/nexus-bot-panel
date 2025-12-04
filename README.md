@@ -1,80 +1,242 @@
-<div align="center">
+<p align="center">
+  <a href="https://github.com/Adexx-11234/nexus-bot-panel">
+    <img alt="Nexus Bot" height="300" src="./Defaults/images/menu.png">
+  </a>
+</p>
 
-# 🌐 Nexus Bot Panel
+<h1 align="center">NEXUS BOT</h1>
+<h3 align="center">Multi-Device WhatsApp Bot with Telegram & Web Integration</h3>
 
-### *Next-Generation WhatsApp & Telegram Automation Platform*
-
-[![Node.js](https://img.shields.io/badge/Node.js-20.x+-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Supabase-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://supabase.com/)
-[![MongoDB](https://img.shields.io/badge/MongoDB-Atlas-47A248?style=for-the-badge&logo=mongodb&logoColor=white)](https://www.mongodb.com/)
-[![WhatsApp](https://img.shields.io/badge/WhatsApp-Baileys-25D366?style=for-the-badge&logo=whatsapp&logoColor=white)](https://github.com/WhiskeySockets/Baileys)
-[![Telegram](https://img.shields.io/badge/Telegram-Bot_API-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://core.telegram.org/bots/api)
-[![Next.js](https://img.shields.io/badge/Next.js-14-000000?style=for-the-badge&logo=next.js&logoColor=white)](https://nextjs.org/)
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
-
-**Enterprise-grade multi-platform bot framework with 80+ commands, AI integration, real-time game engines, and advanced media processing.**
-
-[🚀 Quick Start](#-quick-start) • [📖 Documentation](#-documentation) • [✨ Features](#-features) • [🔌 Plugins](#-plugin-ecosystem) • [🤝 Contribute](#-contributing)
-
-![GitHub stars](https://img.shields.io/github/stars/Adexx-11234/nexus-bot-panel?style=social)
-![GitHub forks](https://img.shields.io/github/forks/Adexx-11234/nexus-bot-panel?style=social)
-![GitHub issues](https://img.shields.io/github/issues/Adexx-11234/nexus-bot-panel)
-![GitHub last commit](https://img.shields.io/github/last-commit/Adexx-11234/nexus-bot-panel)
-
-</div>
+<p align="center">
+  <em>A powerful multi-session WhatsApp bot platform with Telegram control interface and web dashboard</em>
+</p>
 
 ---
 
-## 📋 Table of Contents
+<p align="center">
+  <a href="https://github.com/Adexx-11234/nexus-bot-panel">
+    <img title="Author" src="https://img.shields.io/badge/Author-NEXUS TECH-purple?style=for-the-badge&logo=github">
+  </a>
+  <a href="https://whatsapp.com/channel/YOUR_CHANNEL">
+    <img title="WhatsApp Channel" src="https://img.shields.io/badge/CHANNEL-25D366?style=for-the-badge&logo=whatsapp&logoColor=white">
+  </a>
+  <a href="https://t.me/YOUR_BOT">
+    <img title="Telegram Bot" src="https://img.shields.io/badge/TELEGRAM BOT-0088cc?style=for-the-badge&logo=telegram&logoColor=white">
+  </a>
+</p>
 
-- [🎯 Overview](#-overview)
-- [✨ Key Features](#-key-features)
-- [🚀 Quick Start](#-quick-start)
-- [📁 Project Architecture](#-project-architecture)
-- [🔌 Plugin Ecosystem](#-plugin-ecosystem)
-- [🗄️ Database Architecture](#️-database-architecture)
-- [🌐 API Reference](#-api-reference)
-- [🎮 Game System](#-game-system)
-- [🤖 AI Integration](#-ai-integration)
-- [📚 Documentation](#-documentation)
-- [🛠️ Development](#️-development)
-- [🚢 Deployment](#-deployment)
-- [🤝 Contributing](#-contributing)
+<p align="center">
+  <a href="https://github.com/Adexx-11234/nexus-bot-panel/stargazers">
+    <img title="Stars" src="https://img.shields.io/github/stars/Adexx-11234/nexus-bot-panel?style=social">
+  </a>
+  <a href="https://github.com/Adexx-11234/nexus-bot-panel/network/members">
+    <img title="Forks" src="https://img.shields.io/github/forks/Adexx-11234/nexus-bot-panel?style=social">
+  </a>
+  <a href="https://github.com/Adexx-11234/nexus-bot-panel/watchers">
+    <img title="Watching" src="https://img.shields.io/github/watchers/Adexx-11234/nexus-bot-panel?label=Watchers&style=social">
+  </a>
+  <a href="https://github.com/Adexx-11234?tab=followers">
+    <img title="Followers" src="https://img.shields.io/github/followers/Adexx-11234?label=Followers&style=social">
+  </a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Node.js-18+-339933?style=flat-square&logo=node.js&logoColor=white">
+  <img src="https://img.shields.io/badge/PostgreSQL-14+-4169E1?style=flat-square&logo=postgresql&logoColor=white">
+  <img src="https://img.shields.io/badge/MongoDB-6+-47A248?style=flat-square&logo=mongodb&logoColor=white">
+  <img src="https://img.shields.io/badge/License-Private-red?style=flat-square">
+  <img src="https://img.shields.io/badge/WhatsApp-Multi--Device-25D366?style=flat-square&logo=whatsapp&logoColor=white">
+</p>
 
 ---
 
-## 🎯 Overview
+## GET YOUR SESSION
 
-**Nexus Bot Panel** is a production-ready, enterprise-scale automation platform that seamlessly bridges WhatsApp and Telegram into a unified command ecosystem. Built with modern web technologies and scalable architecture.
+<p align="center">
+  <a href="YOUR_WEB_SESSION_URL">
+    <img title="Get Session via Web" src="https://img.shields.io/badge/GET SESSION (WEB)-purple?style=for-the-badge&logo=google-chrome&logoColor=white" width="220" height="40">
+  </a>
+  &nbsp;&nbsp;
+  <a href="https://t.me/YOUR_BOT">
+    <img title="Get Session via Telegram" src="https://img.shields.io/badge/GET SESSION (TELEGRAM)-0088cc?style=for-the-badge&logo=telegram&logoColor=white" width="250" height="40">
+  </a>
+</p>
+
+---
+
+## DEPLOYMENT OPTIONS
+
+| Platform | Deploy |
+|:--------:|:------:|
+| **Heroku** | [![Deploy on Heroku](https://img.shields.io/badge/Deploy-Heroku-430098?style=for-the-badge&logo=heroku&logoColor=white)](https://dashboard.heroku.com/new?template=https://github.com/Adexx-11234/nexus-bot-panel) |
+| **Render** | [![Deploy on Render](https://img.shields.io/badge/Deploy-Render-46E3B7?style=for-the-badge&logo=render&logoColor=white)](https://render.com/deploy?repo=https://github.com/Adexx-11234/nexus-bot-panel) |
+| **Koyeb** | [![Deploy on Koyeb](https://img.shields.io/badge/Deploy-Koyeb-121212?style=for-the-badge&logo=koyeb&logoColor=white)](https://app.koyeb.com/deploy?type=git&repository=github.com/Adexx-11234/nexus-bot-panel) |
+| **Railway** | [![Deploy on Railway](https://img.shields.io/badge/Deploy-Railway-0B0D0E?style=for-the-badge&logo=railway&logoColor=white)](https://railway.app/new/template?template=https://github.com/Adexx-11234/nexus-bot-panel) |
+| **Replit** | [![Run on Replit](https://img.shields.io/badge/Run-Replit-F26207?style=for-the-badge&logo=replit&logoColor=white)](https://replit.com/github/Adexx-11234/nexus-bot-panel) |
+
+---
+
+## TABLE OF CONTENTS
+
+- [Architecture](#-architecture)
+- [Session Creation](#-session-creation)
+- [Features](#-features)
+- [Database Architecture](#-database-architecture)
+- [Environment Variables](#-environment-variables)
+- [Plugin System](#-plugin-system)
+- [Folder Structure](#-folder-structure)
+- [API Endpoints](#-api-endpoints)
+- [Installation](#-installation)
+- [Contributing](#-contributing)
+
+---
+
+## ARCHITECTURE
+
+\`\`\`
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           NEXUS BOT PLATFORM                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐         │
+│   │    TELEGRAM      │  │       WEB        │  │    WHATSAPP      │         │
+│   │      BOT         │  │   INTERFACE      │  │    SESSIONS      │         │
+│   │                  │  │                  │  │                  │         │
+│   │  • /start        │  │  • Register      │  │  • Multi-Device  │         │
+│   │  • /session      │  │  • Login         │  │  • Pairing Code  │         │
+│   │  • Pairing Code  │  │  • Dashboard     │  │  • Auto-Reconnect│         │
+│   └────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘         │
+│            │                     │                     │                    │
+│            └─────────────────────┼─────────────────────┘                    │
+│                                  │                                          │
+│                     ┌────────────▼────────────┐                             │
+│                     │    SESSION MANAGER      │                             │
+│                     │  (Singleton Pattern)    │                             │
+│                     │                         │                             │
+│                     │  • Multi-Session        │                             │
+│                     │  • State Management     │                             │
+│                     │  • Auto-Reconnection    │                             │
+│                     └────────────┬────────────┘                             │
+│                                  │                                          │
+│            ┌─────────────────────┼─────────────────────┐                    │
+│            │                     │                     │                    │
+│   ┌────────▼────────┐   ┌────────▼────────┐   ┌────────▼────────┐          │
+│   │    MONGODB      │   │   POSTGRESQL    │   │     PLUGIN      │          │
+│   │                 │   │                 │   │     SYSTEM      │          │
+│   │  • Auth State   │   │  • Users        │   │                 │          │
+│   │  • Pre-Keys     │   │  • Groups       │   │  • 130+ Plugins │          │
+│   │  • Identity     │   │  • Messages     │   │  • Hot-Reload   │          │
+│   │  • App Sync     │   │  • VIP Data     │   │  • Categories   │          │
+│   └─────────────────┘   └─────────────────┘   └─────────────────┘          │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+\`\`\`
+
+---
+
+## SESSION CREATION
+
+Users can create WhatsApp sessions through **two methods**:
+
+### Method 1: Via Telegram Bot
+
+\`\`\`
+┌────────────────────────────────────────────────────────────┐
+│  1. Send /start to the Telegram bot                        │
+│                         ↓                                  │
+│  2. Click "Connect WhatsApp" button                        │
+│                         ↓                                  │
+│  3. Enter phone number (with country code: +234...)        │
+│                         ↓                                  │
+│  4. Receive 8-digit pairing code from bot                  │
+│                         ↓                                  │
+│  5. Open WhatsApp → Settings → Linked Devices              │
+│     → Link a Device → Link with Phone Number               │
+│                         ↓                                  │
+│  6. Enter pairing code in WhatsApp                         │
+│                         ↓                                  │
+│  7. Session created! Stored as session_{telegram_id}       │
+└────────────────────────────────────────────────────────────┘
+\`\`\`
+
+### Method 2: Via Web Dashboard
+
+\`\`\`
+┌────────────────────────────────────────────────────────────┐
+│  1. Visit web dashboard: http://your-domain:3000           │
+│                         ↓                                  │
+│  2. Register/Login with phone number & password            │
+│                         ↓                                  │
+│  3. Click "Create New Session" from dashboard              │
+│                         ↓                                  │
+│  4. Receive pairing code on screen                         │
+│                         ↓                                  │
+│  5. Enter code in WhatsApp (same as Telegram method)       │
+│                         ↓                                  │
+│  6. Session created! Stored as session_{web_user_id}       │
+└────────────────────────────────────────────────────────────┘
+\`\`\`
+
+---
+
+## FEATURES
 
 <table>
 <tr>
 <td width="50%">
 
-### 🎯 What Makes Nexus Different?
-
-- 🔄 **Unified Platform** - Single codebase, dual platform support
-- ⚡ **Lightning Fast** - Optimized connection pooling & caching
-- 🧩 **80+ Commands** - Comprehensive feature set out-of-the-box
-- 🎨 **Modern UI** - Next.js 14 web dashboard with real-time updates
-- 🔐 **Enterprise Security** - Role-based access, VIP system, multi-owner
-- 📊 **Production Ready** - Supabase PostgreSQL + MongoDB Atlas
-- 🚀 **Auto-Scaling** - Handles thousands of concurrent users
-- 🛠️ **Developer Friendly** - Hot-reload, extensive docs, clean code
+### Bot Core Features
+| Feature | Description |
+|:--------|:------------|
+| Multi-Device | Full WhatsApp Multi-Device support |
+| Multi-Session | Handle multiple WhatsApp accounts |
+| Auto-Reconnect | Automatic reconnection on disconnect |
+| Session Persistence | Sessions stored in MongoDB |
+| Hot-Reload Plugins | Update plugins without restart |
+| Custom Prefix | Per-user command prefix |
+| Bot Modes | Public or Self mode |
 
 </td>
 <td width="50%">
 
-### 💡 Perfect For
+### Group Management
+| Feature | Description |
+|:--------|:------------|
+| Anti-Link | Delete messages with links |
+| Anti-Spam | Detect repeated messages |
+| Anti-Bot | Prevent bots from joining |
+| Anti-Promote | Reverse unauthorized promotions |
+| Anti-Demote | Reverse unauthorized demotions |
+| Anti-Delete | Log deleted messages |
+| Anti-ViewOnce | Save view-once media |
+| Scheduled Open/Close | Auto open/close groups |
 
-- 📱 Community Management
-- 🤖 Customer Support Automation
-- 🎮 Interactive Gaming Bots
-- 🎬 Media Processing Services
-- 🤝 Group Administration
-- 📊 Data Collection & Analytics
-- 🎯 Marketing Automation
-- 💬 AI-Powered Chatbots
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+### Media & Downloads
+| Feature | Description |
+|:--------|:------------|
+| YouTube | Download videos & audio |
+| TikTok | Download without watermark |
+| Instagram | Reels, posts, stories |
+| Spotify | Download tracks |
+| Stickers | Create from image/video |
+| Converters | Audio, video, document |
+
+</td>
+<td width="50%">
+
+### VIP System
+| Feature | Description |
+|:--------|:------------|
+| VIP Levels | 0 (normal) to 99 (admin) |
+| Group Takeover | Control owned users' groups |
+| Multi-Account | Manage multiple sessions |
+| VIP Commands | Exclusive features |
+| Activity Logging | Track VIP actions |
 
 </td>
 </tr>
@@ -82,651 +244,394 @@
 
 ---
 
-## ✨ Key Features
+## DATABASE ARCHITECTURE
 
-<div align="center">
+### PostgreSQL (Primary Database)
 
-| 🌐 Platform | 🎮 Games | 🤖 AI | 🎬 Media | 👥 Groups | 👑 Admin |
-|:-----------:|:--------:|:-----:|:--------:|:---------:|:--------:|
-| WhatsApp ✅ | 8 Games | 10+ Models | 15 Platforms | 40+ Tools | Multi-Owner |
-| Telegram ✅ | Real-time | GPT-4, Claude | Converter | Auto-Mod | VIP System |
-| Unified API | Multiplayer | Gemini, Llama | Compress | Anti-Spam | Permissions |
+| Table | Description |
+|:------|:------------|
+| `users` | Telegram users and web users |
+| `web_users_auth` | Password hashes for web authentication |
+| `whatsapp_users` | User settings, bot mode, prefix, anti-features |
+| `groups` | Group settings and anti-features configuration |
+| `messages` | Message history (auto-cleanup at 10k rows) |
+| `warnings` | User warnings in groups |
+| `violations` | Recorded anti-feature violations |
+| `spam_tracking` | Real-time spam detection (auto-cleanup 2hrs) |
+| `vip_owned_users` | VIP ownership relationships |
+| `vip_activity_log` | VIP action history |
 
-</div>
+### MongoDB (Session Authentication)
 
-### 🔥 Core Capabilities
-
-<table>
-<tr>
-<td width="50%">
-
-#### 🌐 **Multi-Platform Mastery**
-- WhatsApp Web (Baileys)
-- Telegram Bot API
-- Cross-platform commands
-- Unified session management
-- Auto-reconnection
-- Message persistence
-- Real-time sync
-
-#### 🧩 **Plugin Architecture**
-- 80+ pre-built commands
-- Hot-reload capability
-- Category organization
-- Custom middleware
-- Command aliases
-- Permission layers
-- Error boundaries
-
-#### 🎬 **Media Processing Suite**
-- YouTube, Instagram, TikTok
-- Facebook, Twitter, Spotify
-- Pinterest, SoundCloud
-- Sticker ↔ Image ↔ Video
-- Audio conversion & compression
-- FFmpeg integration
-- Quality optimization
-
-</td>
-<td width="50%">
-
-#### 🤖 **AI Ecosystem**
-- GPT-4o & GPT-4o Mini
-- Claude Sonnet
-- Gemini 1.5 Pro & Flash
-- Llama 3.3-70B
-- Meta AI
-- Copilot (Think Mode)
-- Bible AI, Gita AI, Muslim AI
-- Flux & Magic Studio (Images)
-
-#### 👥 **Group Management**
-- Role-based permissions
-- Auto-moderation (spam, links)
-- Warning system (3-strike)
-- Member approval workflow
-- Welcome/Goodbye messages
-- Anti-delete & anti-viewonce
-- Tag system (all, admins, online)
-
-#### 🔐 **Security & Access**
-- Multi-owner system
-- VIP membership tiers
-- Admin verification
-- Rate limiting
-- Session encryption
-- Database security
-- API authentication
-
-</td>
-</tr>
-</table>
+| Collection | Description |
+|:-----------|:------------|
+| `sessions` | WhatsApp Baileys authentication state |
+| `pre_keys` | Pre-keys for encryption |
+| `identity_keys` | Identity keys |
+| `app_state_sync` | App state synchronization data |
 
 ---
 
-## 🚀 Quick Start
+## ENVIRONMENT VARIABLES
 
-### Prerequisites
-
-```bash
-✅ Node.js >= 18.x (20.x recommended)
-✅ PostgreSQL (Supabase account)
-✅ MongoDB (Atlas account)
-✅ FFmpeg (for media processing)
-✅ Git
-```
-
-### Installation
-
-```bash
-# 1️⃣ Clone the repository
-git clone https://github.com/Adexx-11234/nexus-bot-panel.git
-cd nexus-bot-panel
-
-# 2️⃣ Install dependencies
-npm install
-
-# 3️⃣ Configure environment (see below)
-cp .env.example .env
-# Edit .env with your credentials
-
-# 4️⃣ Run database migrations
-npm run migrate
-
-# 5️⃣ Start the bot
-npm start
-
-# 🔧 For development with hot-reload
-npm run dev
-```
-
-### Environment Setup
-
-Create a `.env` file in the root directory:
-
-```env
-# ==================== DATABASE ====================
-# PostgreSQL (Supabase) - Primary data storage
-DATABASE_URL=postgresql://postgres.xxxxx:password@aws-1-eu-north-1.pooler.supabase.com:6543/postgres
-
-# MongoDB (Atlas) - Session & cache storage
-MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/?retryWrites=true&w=majority
-
-# ==================== SERVER ====================
+\`\`\`env
+# ═══════════════════════════════════════════════════════════
+# SERVER CONFIGURATION
+# ═══════════════════════════════════════════════════════════
 PORT=3000
 NODE_ENV=development
-CACHE_TTL=3600
-SESSION_TIMEOUT=86400000
 
-# ==================== WHATSAPP ====================
-WA_SESSION_TIMEOUT=300000
-WA_RECONNECT_INTERVAL=5000
-WHATSAPP_CHANNEL_JID=120363422827915475@newsletter
-BAILEYS_LOG_LEVEL=silent
+# ═══════════════════════════════════════════════════════════
+# DATABASE CONFIGURATION
+# ═══════════════════════════════════════════════════════════
+DATABASE_URL=postgresql://user:password@host:5432/database
+MONGODB_URI=mongodb://localhost:27017/whatsapp_bot
+
+# ═══════════════════════════════════════════════════════════
+# TELEGRAM BOT
+# ═══════════════════════════════════════════════════════════
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+DEFAULT_ADMIN_ID=your_telegram_user_id
+ADMIN_PASSWORD=your_admin_password
+
+# ═══════════════════════════════════════════════════════════
+# WEB INTERFACE
+# ═══════════════════════════════════════════════════════════
+JWT_SECRET=your-jwt-secret-key
+
+# ═══════════════════════════════════════════════════════════
+# WHATSAPP SETTINGS
+# ═══════════════════════════════════════════════════════════
+WHATSAPP_CHANNEL_JID=your_channel_jid
+SESSION_ENCRYPTION_KEY=your-encryption-key
+ENABLE_515_FLOW=false
+
+# ═══════════════════════════════════════════════════════════
+# OPTIONAL SETTINGS
+# ═══════════════════════════════════════════════════════════
 SUPPRESS_LIBRARY_LOGS=true
-ENABLE_515_FLOW=true
-
-# ==================== TELEGRAM ====================
-TELEGRAM_BOT_TOKEN=your_bot_token_from_botfather
-DEFAULT_ADMIN_ID=your_telegram_id
-
-# ==================== LOGGING ====================
-LOG_FILE=logs/app.log
-LOG_LEVEL=info
-
-# ==================== ADMIN ====================
-ADMIN_PASSWORD=admin123
-
-# ==================== AI KEYS (Optional) ====================
-# GEMINI_API_KEY=your_key
-# OPENAI_API_KEY=your_key
-# ANTHROPIC_API_KEY=your_key
-```
-
-> ⚠️ **Security Warning:** Never commit your `.env` file! Add it to `.gitignore` immediately.
-
-### 🎉 Verify Installation
-
-```bash
-# Health check
-curl http://localhost:3000/health
-
-# Detailed status
-curl http://localhost:3000/api/status
-```
+PLUGIN_AUTO_RELOAD=true
+BAILEYS_LOG_LEVEL=silent
+MONITORING_TELEGRAM_ID=your_telegram_id
+\`\`\`
 
 ---
 
-## 📁 Project Architecture
-
-### Directory Structure
-
-```
-📦 nexus-bot-panel/
-│
-├── 🚀 index.js                      # Application Entry Point
-├── 📋 package.json                  # Dependencies & Scripts
-├── 🔐 .env                          # Environment Config
-│
-├── 📂 app/                          # Next.js Web Dashboard
-│   ├── layout.tsx
-│   ├── page.tsx
-│   └── api/
-│
-├── 📂 components/                   # React Components
-│   ├── ui/                          # shadcn/ui Components
-│   └── theme-provider.tsx
-│
-├── 📂 database/                     # Database Layer
-│   ├── connection.js
-│   ├── db.js
-│   ├── query.js
-│   └── migrations/
-│       ├── 001_init.sql
-│       ├── 002_complete_schema.sql
-│       └── run-migrations.js
-│
-├── 📂 lib/                          # Core Libraries
-│   ├── ai/                          # AI Integration
-│   ├── converters/                  # Media Conversion
-│   ├── downloaders/                 # Platform Downloaders
-│   ├── game managers/               # Game Engines
-│   └── utils.ts
-│
-├── 📂 plugins/                      # Plugin System
-│   ├── mainmenu/                    # Core Commands (8)
-│   ├── groupmenu/                   # Group Admin (40+)
-│   ├── downloadmenu/                # Downloads (15)
-│   ├── convertmenu/                 # Conversions (10)
-│   ├── gamemenu/                    # Games (8)
-│   ├── aimenu/                      # AI Features
-│   ├── ownermenu/                   # Owner Tools (15)
-│   └── bugmenu/                     # System Utils (5)
-│
-├── 📂 whatsapp/                     # WhatsApp Module
-│   ├── index.js
-│   ├── session-manager.js
-│   └── command-handler.js
-│
-├── 📂 telegram/                     # Telegram Module
-│   ├── index.js
-│   └── connection-handler.js
-│
-├── 📂 middleware/                   # Middleware
-│   └── admin-check.js
-│
-├── 📂 utils/                        # Utilities
-│   ├── logger.js
-│   ├── menu-system.js
-│   └── plugin-loader.js
-│
-├── 📂 config/                       # Configuration
-│   └── database.js
-│
-├── 📂 web/                          # HTTP Server
-│   └── index.js
-│
-└── 📂 logs/                         # Application Logs
-    └── app.log
-```
-
-### Message Flow
-
-```
-User Message → Platform Handler → Session Manager → Message Parser
-    ↓
-Command Detector → Plugin Loader → Permission Check → Execute
-    ↓
-Response Builder → Platform Router → User Receives
-```
-
----
-
-## 🔌 Plugin Ecosystem
-
-### Plugin Structure
-
-```javascript
-export default {
-  name: "commandname",
-  commands: ["cmd", "alias1"],
-  description: "Command description",
-  usage: ".cmd <args>",
-  adminOnly: false,
-  ownerOnly: false,
-  
-  async execute(sock, sessionId, args, m) {
-    try {
-      // Your logic here
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  }
-};
-```
+## PLUGIN SYSTEM
 
 ### Plugin Categories
 
-| Category | Commands | Description | Docs |
-|----------|----------|-------------|------|
-| **Main Menu** | 8 | Core commands & info | [📖](./plugins/mainmenu/README.md) |
-| **Group Menu** | 40+ | Group administration | [📖](./plugins/groupmenu/README.md) |
-| **Download Menu** | 15 | Media downloads | [📖](./plugins/downloadmenu/README.md) |
-| **Convert Menu** | 10 | Format conversion | [📖](./plugins/convertmenu/README.md) |
-| **Game Menu** | 8 | Interactive games | [📖](./plugins/gamemenu/README.md) |
-| **AI Menu** | 10+ | AI features | [📖](./plugins/aimenu/README.md) |
-| **Owner Menu** | 15 | Owner tools | [📖](./plugins/ownermenu/README.md) |
-| **Bug Menu** | 5 | System utilities | [📖](./plugins/bugmenu/README.md) |
+| Category | Description | Example Commands |
+|:---------|:------------|:-----------------|
+| **mainmenu** | Core bot commands | `menu`, `ping`, `help`, `allmenu` |
+| **groupmenu** | Group management | `antilink`, `kick`, `promote`, `warn`, `mute` |
+| **downloadmenu** | Media downloaders | `ytdl`, `igdl`, `tiktokdl`, `spotify` |
+| **gamemenu** | Interactive games | `trivia`, `quiz`, `tictactoe`, `wordguess` |
+| **aimenu** | AI-powered features | `ai`, `chat`, `imagine` |
+| **ownermenu** | Bot owner commands | `mode`, `setprefix`, `block`, `antidelete` |
+| **convertmenu** | Media conversion | `sticker`, `toimage`, `tomp3`, `togif` |
+| **bugmenu** | Testing tools | Various crash tests |
+| **vipmenu** | VIP management | `viptakeover`, `viplist`, `vipadd` |
 
-### Quick Command Reference
+### Plugin Structure
 
-```bash
-# Main
-.menu               # Show menu
-.help               # Get help
-.ping               # Check latency
+\`\`\`javascript
+export default {
+    name: "commandname",
+    description: "Command description",
+    commands: ["cmd", "alias1", "alias2"],
+    category: "category",
+    adminOnly: false,    // Requires group admin
+    ownerOnly: false,    // Requires bot owner
+    groupOnly: false,    // Only works in groups
+  
+    async execute(sock, sessionId, args, m) {
+        // Command logic here
+        await sock.sendMessage(m.key.remoteJid, {
+            text: "Hello from plugin!"
+        });
+    }
+}
+\`\`\`
 
-# Group
-.add @user          # Add member
-.kick @user         # Remove member
-.warn @user         # Warn user
-.antilink on        # Enable anti-link
+### Auto Anti-Features Plugin
 
-# Downloads
-.ytdl <url>         # YouTube
-.igdl <url>         # Instagram
-.tiktokdl <url>     # TikTok
-
-# Conversions
-.sticker            # Create sticker
-.toimage            # Convert to image
-.toaudio            # Extract audio
-
-# Games
-.tictactoe @user    # Tic Tac Toe
-.quiz               # Trivia
-.rps                # Rock Paper Scissors
-
-# AI
-.gpt4 <prompt>      # GPT-4
-.gemini <prompt>    # Gemini
-.flux <prompt>      # AI image
-```
+\`\`\`javascript
+export default {
+    name: "antilink",
+    
+    async processMessage(sock, sessionId, m, messageText) {
+        // Automatically processes every message
+        // Check for links, spam, etc.
+    }
+}
+\`\`\`
 
 ---
 
-## 🗄️ Database Architecture
+## FOLDER STRUCTURE
 
-### Schema Overview
+\`\`\`
+nexusbot/
+│
+├── 📄 index.js                      # Main entry point
+├── 📄 package.json                  # Dependencies
+├── 📄 README.md                     # Documentation
+│
+├── 📁 config/
+│   ├── 📄 database.js               # PostgreSQL configuration
+│   ├── 📄 telegram.js               # Telegram bot config
+│   ├── 📄 baileys.js                # WhatsApp/Baileys config
+│   └── 📄 constant.js               # App constants
+│
+├── 📁 database/
+│   ├── 📄 index.js                  # Database connection
+│   ├── 📄 query.js                  # Database queries
+│   ├── 📄 groupscheduler.js         # Scheduled group actions
+│   ├── 📄 vip.js                    # VIP subscription logic
+│   └── 📁 migrations/
+│       └── 📄 001_init.sql          # Initial schema
+│
+├── 📁 Defaults/
+│   └── 📁 images/
+│       └── 📄 menu.png              # Menu display image
+│
+├── 📁 telegram/
+│   ├── 📄 index.js                  # Telegram bot entry
+│   ├── 📁 core/                     # Bot initialization
+│   ├── 📁 handlers/
+│   │   ├── 📄 connection.js         # Session creation handler
+│   │   └── 📄 commands.js           # Telegram commands
+│   ├── 📁 middleware/
+│   │   └── 📄 admin.js              # Auth middleware
+│   └── 📁 ui/                       # Messages & keyboards
+│
+├── 📁 whatsapp/
+│   ├── 📄 index.js                  # WhatsApp entry
+│   ├── 📁 core/                     # Baileys socket
+│   ├── 📁 sessions/
+│   │   ├── 📄 index.js              # Session exports
+│   │   ├── 📄 manager.js            # Session lifecycle
+│   │   └── 📄 handlers.js           # Session handlers
+│   ├── 📁 storage/
+│   │   ├── 📄 index.js              # Storage exports
+│   │   ├── 📄 mongodb.js            # MongoDB storage
+│   │   └── 📄 coordinator.js        # Storage coordinator
+│   ├── 📁 events/
+│   │   ├── 📄 index.js              # Event router
+│   │   ├── 📄 connection.js         # Connection events
+│   │   └── 📄 messages.js           # Message handling
+│   ├── 📁 groups/                   # Group management
+│   ├── 📁 messages/                 # Message processing
+│   └── 📁 utils/
+│       └── 📄 vip-helper.js         # VIP utilities
+│
+├── 📁 web/
+│   ├── 📄 index.js                  # Express server
+│   ├── 📁 routes/
+│   │   ├── 📄 auth.js               # Authentication routes
+│   │   └── 📄 session.js            # Session management
+│   ├── 📁 controllers/
+│   │   └── 📄 session-controller.js # Request handlers
+│   ├── 📁 services/                 # Business logic
+│   ├── 📁 middleware/
+│   │   └── 📄 auth.js               # JWT middleware
+│   └── 📁 views/                    # HTML templates
+│
+├── 📁 plugins/                      # 130+ Bot plugins
+│   ├── 📁 mainmenu/                 # Core commands
+│   ├── 📁 groupmenu/                # Group management
+│   ├── 📁 downloadmenu/             # Media downloaders
+│   ├── 📁 gamemenu/                 # Games
+│   ├── 📁 aimenu/                   # AI features
+│   ├── 📁 ownermenu/                # Owner commands
+│   ├── 📁 convertmenu/              # Converters
+│   ├── 📁 bugmenu/                  # Testing tools
+│   └── 📁 vipmenu/                  # VIP features
+│
+├── 📁 utils/
+│   ├── 📄 plugin-loader.js          # Dynamic plugin loader
+│   ├── 📄 menu-system.js            # Menu generation
+│   ├── 📄 permission-system.js      # Permission management
+│   └── 📄 logger.js                 # Logging utility
+│
+└── 📁 lib/
+    ├── 📁 ai/                       # AI integrations
+    ├── 📁 downloaders/              # Media download utilities
+    ├── 📁 converters/               # Media conversion
+    └── 📁 buggers/                  # Bug/Crash generators
+\`\`\`
 
-Nexus uses hybrid database architecture:
-- **PostgreSQL (Supabase)** - Structured data, relations
-- **MongoDB (Atlas)** - Sessions, cache, temporary data
+---
 
-### Core Tables
+## API ENDPOINTS
 
-#### **Users Table**
-```sql
-CREATE TABLE users (
-  id BIGSERIAL PRIMARY KEY,
-  telegram_id BIGINT UNIQUE NOT NULL,
-  first_name VARCHAR(255),
-  username VARCHAR(255),
-  is_admin BOOLEAN DEFAULT FALSE,
-  is_active BOOLEAN DEFAULT TRUE,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
+### Health & Status
 
-#### **WhatsApp Users Table**
-```sql
-CREATE TABLE whatsapp_users (
-  id BIGSERIAL PRIMARY KEY,
-  telegram_id BIGINT UNIQUE NOT NULL,
-  jid VARCHAR(255),
-  phone VARCHAR(50),
-  name VARCHAR(255),
-  bot_mode VARCHAR(20) DEFAULT 'public',
-  custom_prefix VARCHAR(10) DEFAULT '.',
-  vip_level INTEGER DEFAULT 0,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
+| Method | Endpoint | Description |
+|:------:|:---------|:------------|
+| `GET` | `/health` | Server health check |
+| `GET` | `/api/status` | Platform status with session count |
 
-#### **Groups Table**
-```sql
-CREATE TABLE groups (
-  id BIGSERIAL PRIMARY KEY,
-  jid VARCHAR(255) UNIQUE NOT NULL,
-  name VARCHAR(255),
-  antilink_enabled BOOLEAN DEFAULT FALSE,
-  antispam_enabled BOOLEAN DEFAULT FALSE,
-  autowelcome_enabled BOOLEAN DEFAULT FALSE,
-  warning_limit INTEGER DEFAULT 4,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
+### Authentication (Web)
 
-#### **Messages Table**
-```sql
-CREATE TABLE messages (
-  n_o BIGSERIAL PRIMARY KEY,
-  id VARCHAR(255) NOT NULL,
-  from_jid VARCHAR(255) NOT NULL,
-  sender_jid VARCHAR(255) NOT NULL,
-  content TEXT,
-  timestamp BIGINT NOT NULL,
-  is_deleted BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
+| Method | Endpoint | Description |
+|:------:|:---------|:------------|
+| `POST` | `/auth/register` | Register new web user |
+| `POST` | `/auth/login` | Login existing user |
+| `POST` | `/auth/logout` | Logout |
+| `GET` | `/auth/verify` | Verify JWT token |
 
-#### **Warnings Table**
-```sql
-CREATE TABLE warnings (
-  id BIGSERIAL PRIMARY KEY,
-  user_jid VARCHAR(255) NOT NULL,
-  group_jid VARCHAR(255) NOT NULL,
-  warning_type VARCHAR(50) NOT NULL,
-  warning_count INTEGER DEFAULT 1,
-  last_warning_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
+### Sessions (Web - Authenticated)
 
-#### **Spam Tracking Table**
-```sql
-CREATE TABLE spam_tracking (
-  id BIGSERIAL PRIMARY KEY,
-  group_jid VARCHAR(255) NOT NULL,
-  user_jid VARCHAR(255) NOT NULL,
-  message_text TEXT,
-  links JSONB,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
+| Method | Endpoint | Description |
+|:------:|:---------|:------------|
+| `GET` | `/api/sessions/status` | Get session status |
+| `POST` | `/api/sessions/create` | Create new session |
+| `GET` | `/api/sessions/pairing-code` | Get pairing code |
+| `POST` | `/api/sessions/disconnect` | Disconnect session |
+| `POST` | `/api/sessions/reconnect` | Reconnect session |
+| `GET` | `/api/sessions/stats` | Get session statistics |
 
-### Auto-Cleanup Features
+---
 
-- **Messages**: Auto-cleanup at 10k rows → keeps newest 5k
-- **Spam Tracking**: Auto-cleanup after 2 hours
-- **JID Transfer**: Automatic when phone number moves to new account
+## INSTALLATION
 
-### Migration System
+### Prerequisites
 
-```bash
-# Run migrations
+- Node.js 18+
+- PostgreSQL 14+
+- MongoDB 6+
+- Telegram Bot Token (from [@BotFather](https://t.me/BotFather))
+
+### Quick Start
+
+\`\`\`bash
+# Clone the repository
+git clone https://github.com/Adexx-11234/nexus-bot-panel.git
+
+# Navigate to directory
+cd nexus-bot-panel
+
+# Install dependencies
+npm install
+
+# Setup environment variables
+cp .env.example .env
+# Edit .env with your values
+
+# Run database migrations
 npm run migrate
 
-# Create new migration
-npm run migrate:create feature_name
-
-# Rollback
-npm run migrate:rollback
-```
-
----
-
-## 🌐 API Reference
-
-### REST Endpoints
-
-#### **GET /health**
-Platform health status
-
-```bash
-curl http://localhost:3000/health
-```
-
-Response:
-```json
-{
-  "status": "healthy",
-  "uptime": 86400,
-  "version": "1.0.0"
-}
-```
-
-#### **GET /api/status**
-Detailed component status
-
-```bash
-curl http://localhost:3000/api/status
-```
-
-Response:
-```json
-{
-  "database": "connected",
-  "whatsapp": "active",
-  "telegram": "active",
-  "plugins": 82,
-  "sessions": 5
-}
-```
-
-#### **POST /api/send-message**
-Send message via API
-
-```bash
-curl -X POST http://localhost:3000/api/send-message \
-  -H "Content-Type: application/json" \
-  -d '{
-    "platform": "whatsapp",
-    "chatId": "1234567890@s.whatsapp.net",
-    "message": "Hello from API!"
-  }'
-```
-
----
-
-## 🎮 Game System
-
-### Available Games
-
-| Game | Players | Description |
-|------|---------|-------------|
-| **Tic Tac Toe** | 2 | Classic grid game |
-| **Rock Paper Scissors** | 2+ | Hand game with variants |
-| **Trivia Quiz** | 1+ | 10K+ questions |
-| **Math Challenge** | 1+ | Speed math |
-| **Word Guessing** | 1+ | Hangman style |
-| **Number Guessing** | 1 | Guess 1-100 |
-| **Reaction Speed** | 1+ | Test reflexes |
-| **Memory Game** | 1+ | Remember sequence |
-
-### Game Commands
-
-```bash
-.tictactoe @user    # Start game
-.move 5             # Make move
-.answer B           # Answer question
-.endgame            # End game
-.leaderboard        # View scores
-```
-
----
-
-## 🤖 AI Integration
-
-### Supported Models
-
-| Provider | Model | Command |
-|----------|-------|---------|
-| **OpenAI** | GPT-4o | `.gpt4` |
-| **OpenAI** | GPT-4o Mini | `.gpt` |
-| **Anthropic** | Claude Sonnet | `.claude` |
-| **Google** | Gemini 1.5 Pro | `.gemini` |
-| **Google** | Gemini Flash | `.geminilite` |
-| **Meta** | Llama 3.3-70B | `.llama` |
-| **Microsoft** | Copilot | `.copilot` |
-| **Specialized** | Bible AI | `.bibleai` |
-| **Specialized** | Gita AI | `.gitaai` |
-| **Specialized** | Muslim AI | `.muslim` |
-
-### Image Generation
-
-```bash
-.flux <prompt>           # Flux AI
-.magicstudio <prompt>    # Magic Studio
-```
-
----
-
-## 📚 Documentation
-
-Comprehensive module documentation:
-
-- [📦 Database System](./database/README.md)
-- [🛠️ Core Libraries](./lib/README.md)
-- [🔌 Plugin System](./plugins/README.md)
-- [👥 Group Management](./plugins/groupmenu/README.md)
-- [⬇️ Downloads](./plugins/downloadmenu/README.md)
-- [🔄 Conversions](./plugins/convertmenu/README.md)
-- [🎮 Games](./plugins/gamemenu/README.md)
-- [🤖 AI Integration](./plugins/aimenu/README.md)
-- [👑 Owner Commands](./plugins/ownermenu/README.md)
-- [💬 WhatsApp Module](./whatsapp/README.md)
-- [✈️ Telegram Module](./telegram/README.md)
-
----
-
-## 🛠️ Development
-
-### Development Mode
-
-```bash
-npm run dev          # Hot-reload
-npm test             # Run tests
-npm run lint         # Check style
-```
-
-### Tech Stack
-
-| Component | Technology |
-|-----------|-----------|
-| **Runtime** | Node.js 20+ |
-| **WhatsApp** | Baileys |
-| **Telegram** | node-telegram-bot-api |
-| **Database** | PostgreSQL + MongoDB |
-| **Web** | Next.js 14 + Express |
-| **UI** | shadcn/ui |
-| **Media** | FFmpeg, Sharp |
-| **Logging** | Pino |
-
----
-
-## 🚢 Deployment
-
-### Production
-
-```bash
+# Start the bot
 npm start
-```
+\`\`\`
 
-### Docker
+### Production (PM2)
 
-```bash
-docker build -t nexus-bot .
-docker run -p 3000:3000 nexus-bot
-```
+\`\`\`bash
+# Install PM2 globally
+npm install -g pm2
 
----
+# Start with PM2
+pm2 start index.js --name nexusbot
 
-## 🤝 Contributing
+# Auto-restart on reboot
+pm2 startup
+pm2 save
 
-1. Fork the repository
-2. Create feature branch (`git checkout -b feature/amazing`)
-3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push to branch (`git push origin feature/amazing`)
-5. Open Pull Request
-
-### Guidelines
-
-- Add tests for new features
-- Update documentation
-- Follow existing code style
-- Test on both platforms
+# View logs
+pm2 logs nexusbot
+\`\`\`
 
 ---
 
-## 📄 License
+## INITIALIZATION SEQUENCE
 
-MIT License - see [LICENSE](LICENSE) file
+\`\`\`
+1. Database Connection     →  Connect to PostgreSQL with retry logic
+         ↓
+2. Migrations              →  Run database schema migrations
+         ↓
+3. Plugin Loading          →  Load all plugins with hot-reload support
+         ↓
+4. Telegram Bot            →  Initialize Telegram bot for user control
+         ↓
+5. WhatsApp Module         →  Initialize session manager and storage
+         ↓
+6. VIP Initialization      →  Set up default VIP from environment
+         ↓
+7. Group Scheduler         →  Start automated group open/close scheduler
+         ↓
+8. HTTP Server             →  Start Express server for web interface
+\`\`\`
 
 ---
 
-<div align="center">
+## SESSION STATES
 
-### 📞 Support & Community
+| State | Description |
+|:------|:------------|
+| `initializing` | Session being created |
+| `connecting` | Connecting to WhatsApp |
+| `connected` | Active and ready |
+| `disconnected` | Logged out or closed |
+| `reconnecting` | Attempting to reconnect |
 
-[![Issues](https://img.shields.io/badge/🐛-Report_Bug-red?style=for-the-badge)](https://github.com/Adexx-11234/nexus-bot-panel/issues)
-[![Discussions](https://img.shields.io/badge/💬-Discussions-green?style=for-the-badge)](https://github.com/Adexx-11234/nexus-bot-panel/discussions)
+---
 
-**Made with ❤️ by the community**
+## BOT MODES
 
-⭐ Star this repo if you find it useful!
+| Mode | Description | Command |
+|:-----|:------------|:--------|
+| `public` | Bot responds to everyone (default) | `.mode public` |
+| `self` | Bot only responds to the owner | `.mode self` |
 
-**Version:** 1.0.0 | **Status:** 🟢 Active Development
+---
 
-</div>
+## CONTRIBUTING
+
+We welcome contributions! Here's how:
+
+1. **Fork** the repository
+2. **Create** a feature branch: `git checkout -b feature/amazing-feature`
+3. **Commit** your changes: `git commit -m 'Add amazing feature'`
+4. **Push** to branch: `git push origin feature/amazing-feature`
+5. **Open** a Pull Request
+
+---
+
+## SUPPORT
+
+<p align="center">
+  <a href="https://whatsapp.com/channel/YOUR_CHANNEL">
+    <img title="WhatsApp Channel" src="https://img.shields.io/badge/WhatsApp Channel-25D366?style=for-the-badge&logo=whatsapp&logoColor=white">
+  </a>
+  <a href="https://t.me/YOUR_SUPPORT_GROUP">
+    <img title="Telegram Group" src="https://img.shields.io/badge/Telegram Support-0088cc?style=for-the-badge&logo=telegram&logoColor=white">
+  </a>
+  <a href="https://github.com/Adexx-11234/nexus-bot-panel/issues">
+    <img title="GitHub Issues" src="https://img.shields.io/badge/GitHub Issues-181717?style=for-the-badge&logo=github&logoColor=white">
+  </a>
+</p>
+
+---
+
+## LICENSE
+
+**Private** - All Rights Reserved
+
+---
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Made%20with-Node.js-339933?style=for-the-badge&logo=node.js&logoColor=white">
+  <img src="https://img.shields.io/badge/Powered%20by-Baileys-25D366?style=for-the-badge&logo=whatsapp&logoColor=white">
+</p>
+
+<p align="center">
+  <strong>If you found this project helpful, please give it a star!</strong>
+</p>
+
+<p align="center">
+  <sub>Built with passion by the Nexus Team</sub>
+</p>
