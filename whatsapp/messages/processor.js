@@ -1,9 +1,10 @@
-import { createComponentLogger } from '../../utils/logger.js'
-import { MessageLogger } from './logger.js'
-import { MessagePersistence } from './persistence.js'
-import { MessageExtractor } from './extractor.js'
+import { createComponentLogger } from "../../utils/logger.js"
+import { MessageLogger } from "./logger.js"
+import { MessagePersistence } from "./persistence.js"
+import { MessageExtractor } from "./extractor.js"
+import { recordSessionActivity, analyzeMessage } from "../utils/index.js"
 
-const logger = createComponentLogger('MESSAGE_PROCESSOR')
+const logger = createComponentLogger("MessageProcessor")
 
 /**
  * MessageProcessor - Main message processing pipeline
@@ -16,22 +17,23 @@ export class MessageProcessor {
     this.messagePersistence = new MessagePersistence()
     this.messageExtractor = new MessageExtractor()
     this.userStates = new Map() // key: "chatId_userId" -> { type, data, expires, handler }
-    
+
     // Plugin loader (lazy loaded)
     this.pluginLoader = null
-    
+
     // Minimal stats tracking
     this.messageStats = {
       processed: 0,
       commands: 0,
-      errors: 0
+      errors: 0,
+      blocked: 0, // Track blocked messages
     }
   }
 
   /**
    * Set state with custom handler function
    * @param {string} chatId - Chat ID
-   * @param {string} userId - User ID  
+   * @param {string} userId - User ID
    * @param {string} type - State type (for debugging/logging)
    * @param {object} data - Any data to store
    * @param {function} handler - Function to call when user replies: (sock, sessionId, m, data, userReply) => Promise
@@ -42,24 +44,24 @@ export class MessageProcessor {
       type,
       data,
       handler, // The plugin's custom handler function
-      expires: Date.now() + (5 * 60 * 1000) // 5 minutes
+      expires: Date.now() + 5 * 60 * 1000, // 5 minutes
     })
     logger.debug(`State set: ${type} for ${userId}`)
   }
-  
+
   _getState(chatId, userId) {
     const key = `${chatId}_${userId}`
     const state = this.userStates.get(key)
-    
+
     if (state && Date.now() > state.expires) {
       this.userStates.delete(key)
       logger.debug(`State expired: ${state.type}`)
       return null
     }
-    
+
     return state
   }
-  
+
   _clearState(chatId, userId) {
     const key = `${chatId}_${userId}`
     this.userStates.delete(key)
@@ -72,40 +74,43 @@ export class MessageProcessor {
   async _handleStateReply(sock, sessionId, m) {
     // Only check if NOT a command
     if (m.isCommand) return null
-    
+
     // Must be replying to bot
     if (!m.quoted) return null
-    
+
     const quotedSender = m.quoted.sender || m.quoted.participant
     const botJid = sock.user?.id
-    
+
     if (quotedSender !== botJid && !this.pluginLoader.compareJids(quotedSender, botJid)) {
       return null
     }
-    
+
     // Get user's state
     const state = this._getState(m.chat, m.sender)
     if (!state) return null
-    
+
     // State exists and user is replying to bot
     // Call the handler function that the plugin provided
     try {
       logger.debug(`Executing state handler: ${state.type}`)
-      
+
       const result = await state.handler(sock, sessionId, m, state.data, m.body.trim())
-      
+
       return result || { processed: true }
-      
     } catch (error) {
       logger.error(`Error in state handler (${state.type}):`, error)
-      
+
       // Clear broken state
       this._clearState(m.chat, m.sender)
-      
-      await sock.sendMessage(m.chat, {
-        text: `❌ An error occurred. Please try again.`
-      }, { quoted: m })
-      
+
+      await sock.sendMessage(
+        m.chat,
+        {
+          text: `❌ An error occurred. Please try again.`,
+        },
+        { quoted: m },
+      )
+
       return { processed: true, error: true }
     }
   }
@@ -116,7 +121,7 @@ export class MessageProcessor {
   async initialize() {
     if (!this.isInitialized) {
       // Lazy load plugin loader
-      const pluginLoaderModule = await import('../../utils/plugin-loader.js')
+      const pluginLoaderModule = await import("../../utils/plugin-loader.js")
       this.pluginLoader = pluginLoaderModule.default
 
       if (!this.pluginLoader.isInitialized) {
@@ -124,7 +129,7 @@ export class MessageProcessor {
       }
 
       this.isInitialized = true
-      logger.info('Message processor initialized')
+      logger.info("Message processor initialized")
     }
   }
 
@@ -134,17 +139,17 @@ export class MessageProcessor {
    */
   async getUserPrefix(telegramId) {
     try {
-      const { UserQueries } = await import('../../database/query.js')
+      const { UserQueries } = await import("../../database/query.js")
       const settings = await UserQueries.getUserSettings(telegramId)
-      
+
       // Return custom prefix or default to '.'
-      const prefix = settings?.custom_prefix || '.'
-      
+      const prefix = settings?.custom_prefix || "."
+
       // Handle 'none' prefix case (empty string means no prefix required)
-      return prefix === 'none' ? '' : prefix
+      return prefix === "none" ? "" : prefix
     } catch (error) {
-      logger.error('Error getting user prefix:', error)
-      return '.' // Fallback to default on error
+      logger.error("Error getting user prefix:", error)
+      return "." // Fallback to default on error
     }
   }
 
@@ -153,39 +158,70 @@ export class MessageProcessor {
    */
   async processMessage(sock, sessionId, m, prefix = null) {
     try {
+      recordSessionActivity(sessionId)
+
       await this.initialize()
 
       // Validate message
       if (!m || !m.message) {
-        return { processed: false, error: 'Invalid message object' }
+        return { processed: false, error: "Invalid message object" }
+      }
+
+      const virtexCheck = analyzeMessage(m.message)
+      if (virtexCheck.isMalicious) {
+        logger.warn(`[${sessionId}] BLOCKED malicious message: ${virtexCheck.reason}`)
+        this.messageStats.blocked++
+
+        // Fire-and-forget: Try to delete the malicious message if in group
+        const chat = m.key?.remoteJid || m.from
+        const isGroup = chat && chat.endsWith("@g.us")
+
+        if (isGroup && chat) {
+          sock.sendMessage(chat, { delete: m.key }).catch(() => {})
+
+          // Notify group about blocked message (fire-and-forget)
+          const senderNumber = (m.key?.participant || m.sender || "").split("@")[0]
+          sock
+            .sendMessage(chat, {
+              text:
+                `🛡️ *Security Alert*\n\n` +
+                `Blocked malicious message from @${senderNumber}\n` +
+                `Reason: ${virtexCheck.reason}\n\n` +
+                `> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+              mentions: [m.key?.participant || m.sender],
+            })
+            .catch(() => {})
+        }
+
+        return { processed: false, blocked: true, reason: virtexCheck.reason }
       }
 
       const chat = m.key?.remoteJid || m.from
-      const isGroup = chat && chat.endsWith('@g.us')
-      
+      const isGroup = chat && chat.endsWith("@g.us")
+
       // Skip protocol/system messages
       if (m.message?.protocolMessage) {
         const protocolType = m.message.protocolMessage.type
-        
+
         const skipTypes = [
-          'PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE',
-          'MESSAGE_EDIT',
-          'REVOKE',
-          'EPHEMERAL_SETTING'
+          "PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE",
+          "MESSAGE_EDIT",
+          "REVOKE",
+          "EPHEMERAL_SETTING",
         ]
-        
+
         if (skipTypes.includes(protocolType)) {
           logger.debug(`Skipping protocol message type: ${protocolType}`)
           return { processed: false, silent: true, protocolMessage: true }
         }
       }
-        
+
       // Set chat, isGroup, and sender
       if (!m.chat) {
         m.chat = m.key?.remoteJid || m.from
       }
-      if (typeof m.isGroup === 'undefined') {
-        m.isGroup = m.chat && m.chat.endsWith('@g.us')
+      if (typeof m.isGroup === "undefined") {
+        m.isGroup = m.chat && m.chat.endsWith("@g.us")
       }
 
       if (!m.sender) {
@@ -200,21 +236,21 @@ export class MessageProcessor {
         }
       }
 
-      if (m.sender?.includes('@lid') && m.originalSelfAuthorUserJidString) {
+      if (m.sender?.includes("@lid") && m.originalSelfAuthorUserJidString) {
         m.sender = m.originalSelfAuthorUserJidString
         logger.debug(`Corrected @lid sender to: ${m.sender}`)
       }
-      
+
       // Validate critical fields
       if (!m.chat || !m.sender) {
-        logger.error('Missing critical message fields:', { chat: m.chat, sender: m.sender })
-        return { processed: false, error: 'Missing chat or sender information' }
+        logger.error("Missing critical message fields:", { chat: m.chat, sender: m.sender })
+        return { processed: false, error: "Missing chat or sender information" }
       }
 
       // Get session context
       m.sessionContext = this._getSessionContext(sessionId)
       m.sessionId = sessionId
-      
+
       // Get user's custom prefix directly from database
       const userPrefix = await this.getUserPrefix(m.sessionContext.telegram_id)
       m.prefix = userPrefix
@@ -234,7 +270,7 @@ export class MessageProcessor {
       await this._setAdminStatus(sock, m)
 
       // Determine if it's a command
-      const isCommand = m.body && (m.prefix === '' || m.body.startsWith(m.prefix))
+      const isCommand = m.body && (m.prefix === "" || m.body.startsWith(m.prefix))
       m.isCommand = isCommand
 
       if (isCommand) {
@@ -244,7 +280,7 @@ export class MessageProcessor {
       // Process anti-plugins (skip for commands)
       if (!m.isCommand) {
         await this._processAntiPlugins(sock, sessionId, m)
-        
+
         if (m._wasDeletedByAntiPlugin) {
           this.messagePersistence.persistMessage(sessionId, sock, m).catch(() => {})
           this.messageLogger.logEnhancedMessageEntry(sock, sessionId, m).catch(() => {})
@@ -253,11 +289,11 @@ export class MessageProcessor {
       }
 
       // Fire-and-forget for persistence and logging
-      this.messagePersistence.persistMessage(sessionId, sock, m).catch(err => {
+      this.messagePersistence.persistMessage(sessionId, sock, m).catch((err) => {
         logger.debug(`Persistence failed for ${m.key?.id}:`, err.message)
       })
-      
-      this.messageLogger.logEnhancedMessageEntry(sock, sessionId, m).catch(err => {
+
+      this.messageLogger.logEnhancedMessageEntry(sock, sessionId, m).catch((err) => {
         logger.debug(`Logging failed for ${m.key?.id}:`, err.message)
       })
 
@@ -273,9 +309,11 @@ export class MessageProcessor {
         return await this._handleListResponse(sock, sessionId, m)
       }
 
-      if (m.message?.interactiveResponseMessage || 
-          m.message?.templateButtonReplyMessage || 
-          m.message?.buttonsResponseMessage) {
+      if (
+        m.message?.interactiveResponseMessage ||
+        m.message?.templateButtonReplyMessage ||
+        m.message?.buttonsResponseMessage
+      ) {
         return await this._handleInteractiveResponse(sock, sessionId, m)
       }
 
@@ -295,11 +333,10 @@ export class MessageProcessor {
 
       this.messageStats.processed++
       return { processed: true }
-
     } catch (error) {
-      logger.error('Error processing message:', error)
+      logger.error(`Error processing message:`, error)
       this.messageStats.errors++
-      return { error: error.message }
+      return { processed: false, error: error.message }
     }
   }
 
@@ -309,21 +346,21 @@ export class MessageProcessor {
    */
   _getSessionContext(sessionId) {
     const sessionIdMatch = sessionId.match(/session_(-?\d+)/)
-    
+
     if (sessionIdMatch) {
-      const telegramId = parseInt(sessionIdMatch[1])
+      const telegramId = Number.parseInt(sessionIdMatch[1])
       return {
         telegram_id: telegramId,
         session_id: sessionId,
         isWebSession: telegramId < 0,
-        id: telegramId
+        id: telegramId,
       }
     }
 
     return {
-      telegram_id: 'Unknown',
+      telegram_id: "Unknown",
       session_id: sessionId,
-      id: null
+      id: null,
     }
   }
 
@@ -333,12 +370,12 @@ export class MessageProcessor {
    */
   async _extractContactInfo(sock, m) {
     try {
-      const { getContactResolver } = await import('../contacts/index.js')
+      const { getContactResolver } = await import("../contacts/index.js")
       const resolver = getContactResolver()
       await resolver.extractPushName(sock, m)
     } catch (error) {
-      logger.error('Error extracting contact info:', error)
-      m.pushName = 'Unknown'
+      logger.error("Error extracting contact info:", error)
+      m.pushName = "Unknown"
     }
   }
 
@@ -357,20 +394,19 @@ export class MessageProcessor {
       }
 
       // Group chats: check admin status
-      const { isGroupAdmin, isBotAdmin } = await import('../groups/index.js')
-      
+      const { isGroupAdmin, isBotAdmin } = await import("../groups/index.js")
+
       m.isAdmin = await isGroupAdmin(sock, m.chat, m.sender)
       m.isBotAdmin = await isBotAdmin(sock, m.chat)
       m.isCreator = this._checkIsBotOwner(sock, m.sender)
 
       // Get group metadata for reference
-      const { getGroupMetadataManager } = await import('../groups/index.js')
+      const { getGroupMetadataManager } = await import("../groups/index.js")
       const metadataManager = getGroupMetadataManager()
       m.groupMetadata = await metadataManager.getMetadata(sock, m.chat)
       m.participants = m.groupMetadata?.participants || []
-
     } catch (error) {
-      logger.error('Error setting admin status:', error)
+      logger.error("Error setting admin status:", error)
       m.isAdmin = false
       m.isBotAdmin = false
       m.isCreator = this._checkIsBotOwner(sock, m.sender)
@@ -387,8 +423,8 @@ export class MessageProcessor {
         return false
       }
 
-      const botNumber = sock.user.id.split(':')[0]
-      const userNumber = userJid.split('@')[0]
+      const botNumber = sock.user.id.split(":")[0]
+      const userNumber = userJid.split("@")[0]
 
       return botNumber === userNumber
     } catch (error) {
@@ -402,17 +438,15 @@ export class MessageProcessor {
    */
   _parseCommand(m, prefix) {
     // Handle 'none' prefix case (empty string)
-    const commandText = prefix === '' 
-      ? m.body.trim() 
-      : m.body.slice(prefix.length).trim()
-      
+    const commandText = prefix === "" ? m.body.trim() : m.body.slice(prefix.length).trim()
+
     const [cmd, ...args] = commandText.split(/\s+/)
 
     m.command = {
       name: cmd.toLowerCase(),
       args: args,
       raw: commandText,
-      fullText: m.body
+      fullText: m.body,
     }
   }
 
@@ -426,7 +460,7 @@ export class MessageProcessor {
 
       await this.pluginLoader.processAntiPlugins(sock, sessionId, m)
     } catch (error) {
-      logger.error('Error processing anti-plugins:', error)
+      logger.error("Error processing anti-plugins:", error)
     }
   }
 
@@ -436,8 +470,8 @@ export class MessageProcessor {
    */
   async _handleGameMessage(sock, sessionId, m) {
     try {
-      const { gameManager } = await import('../../lib/game managers/game-manager.js')
-      
+      const { gameManager } = await import("../../lib/game managers/game-manager.js")
+
       // Skip if no body or if it's a command with prefix
       if (!m.body || (m.prefix && m.body.startsWith(m.prefix))) return null
       if (!m.chat) return null
@@ -447,36 +481,36 @@ export class MessageProcessor {
 
       if (isGameCommand) {
         // Lock game command to prevent multiple sessions from processing same game action
-        const { default: pluginLoader } = await import('../../utils/plugin-loader.js')
+        const { default: pluginLoader } = await import("../../utils/plugin-loader.js")
         const messageKey = pluginLoader.deduplicator.generateKey(m.chat, m.key?.id)
-        
+
         if (messageKey) {
-          if (!pluginLoader.deduplicator.tryLockForProcessing(messageKey, sessionId, 'game-start')) {
-            logger.debug('Game command already being processed by another session')
+          if (!pluginLoader.deduplicator.tryLockForProcessing(messageKey, sessionId, "game-start")) {
+            logger.debug("Game command already being processed by another session")
             return null // Another session is processing the game
           }
         }
       }
 
       const result = await gameManager.processGameMessage(sock, m.chat, m.sender, m.body)
-      
+
       // Mark as processed if game action was successful
       if (result && result.success !== false && isGameCommand) {
-        const { default: pluginLoader } = await import('../../utils/plugin-loader.js')
+        const { default: pluginLoader } = await import("../../utils/plugin-loader.js")
         const messageKey = pluginLoader.deduplicator.generateKey(m.chat, m.key?.id)
-        
+
         if (messageKey) {
-          pluginLoader.deduplicator.markAsProcessed(messageKey, sessionId, 'game-start')
+          pluginLoader.deduplicator.markAsProcessed(messageKey, sessionId, "game-start")
         }
       }
-      
+
       if (result && result.success !== false) {
         return { processed: true, gameMessage: true, result }
       }
 
       return null
     } catch (error) {
-      logger.error('Error handling game message:', error)
+      logger.error("Error handling game message:", error)
       return null
     }
   }
@@ -487,32 +521,30 @@ export class MessageProcessor {
    */
   async isGameCommand(messageBody) {
     try {
-      if (!messageBody || typeof messageBody !== 'string') return false
-      
+      if (!messageBody || typeof messageBody !== "string") return false
+
       // Import plugin loader
-      const { default: pluginLoader } = await import('../../utils/plugin-loader.js')
-      
+      const { default: pluginLoader } = await import("../../utils/plugin-loader.js")
+
       // Extract first word as potential command
       const firstWord = messageBody.trim().split(/\s+/)[0].toLowerCase()
-      
+
       // Check if command exists in plugin loader
       const plugin = pluginLoader.findCommand(firstWord)
-      
+
       // Check if it's a game command (gamemenu category)
-      if (plugin && plugin.category === 'gamemenu') {
+      if (plugin && plugin.category === "gamemenu") {
         return true
       }
-      
+
       // Also check if message contains any game-related keywords
       // This handles cases like "tictactoe start", "rps start", etc.
-      const gameKeywords = ['tictactoe', 'rps', 'trivia', 'quiz', 'hangman', 'math', 'guess']
-      const containsGameKeyword = gameKeywords.some(keyword => 
-        messageBody.toLowerCase().includes(keyword)
-      )
-      
+      const gameKeywords = ["tictactoe", "rps", "trivia", "quiz", "hangman", "math", "guess"]
+      const containsGameKeyword = gameKeywords.some((keyword) => messageBody.toLowerCase().includes(keyword))
+
       return containsGameKeyword
     } catch (error) {
-      logger.error('Error checking if message is game command:', error)
+      logger.error("Error checking if message is game command:", error)
       return false
     }
   }
@@ -524,7 +556,7 @@ export class MessageProcessor {
   async _handleInteractiveResponse(sock, sessionId, m) {
     try {
       let selectedCommand = null
-      
+
       if (m.message?.interactiveResponseMessage?.nativeFlowResponseMessage) {
         const flowResponse = m.message.interactiveResponseMessage.nativeFlowResponseMessage
         const paramsJson = flowResponse.paramsJson
@@ -559,7 +591,7 @@ export class MessageProcessor {
 
       return { processed: true, interactiveResponse: true }
     } catch (error) {
-      logger.error('Error handling interactive response:', error)
+      logger.error("Error handling interactive response:", error)
       return { processed: false, error: error.message }
     }
   }
@@ -590,16 +622,10 @@ export class MessageProcessor {
 
     try {
       if (!this.pluginLoader) {
-        throw new Error('Plugin loader not initialized')
+        throw new Error("Plugin loader not initialized")
       }
 
-      const exec = await this.pluginLoader.executeCommand(
-        sock,
-        sessionId,
-        command,
-        m.command.args,
-        m
-      )
+      const exec = await this.pluginLoader.executeCommand(sock, sessionId, command, m.command.args, m)
 
       if (exec?.ignore) {
         return { processed: true, ignored: true }
@@ -631,26 +657,26 @@ export class MessageProcessor {
         await sock.sendMessage(m.chat, result.response, messageOptions)
       } else if (result.media) {
         const mediaMessage = {
-          [result.mediaType || 'image']: result.media,
-          caption: result.response
+          [result.mediaType || "image"]: result.media,
+          caption: result.response,
         }
         await sock.sendMessage(m.chat, mediaMessage, messageOptions)
       } else {
         await sock.sendMessage(m.chat, { text: result.response }, messageOptions)
       }
     } catch (error) {
-      logger.error('Failed to send response:', error)
+      logger.error("Failed to send response:", error)
     }
   }
 
   /**
-   * Get statistics
+   * Get processor stats
    */
   getStats() {
     return {
+      ...this.messageStats,
+      userStates: this.userStates.size,
       isInitialized: this.isInitialized,
-      messageStats: { ...this.messageStats },
-      pluginStats: this.pluginLoader?.getPluginStats() || {}
     }
   }
 
@@ -661,7 +687,8 @@ export class MessageProcessor {
     this.messageStats = {
       processed: 0,
       commands: 0,
-      errors: 0
+      errors: 0,
+      blocked: 0,
     }
   }
 
@@ -670,6 +697,6 @@ export class MessageProcessor {
    */
   performMaintenance() {
     // Clean up any temporary data if needed
-    logger.debug('Message processor maintenance performed')
+    logger.debug("Message processor maintenance performed")
   }
 }

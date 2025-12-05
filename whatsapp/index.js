@@ -39,7 +39,13 @@ export {
   cleanupSessionAuthData,
   hasValidAuthData,
   getSessionStorage,
-  initializeStorage
+  initializeStorage,
+  getAuthCacheStats,
+  FileBasedStore,
+  createFileStore,
+  getFileStore,
+  deleteFileStore,
+  getStoreStats,
 } from './storage/index.js'
 
 // ============================================================================
@@ -169,7 +175,12 @@ export {
   initializePresenceForSession,
   handlePresenceBeforeSend,
   handlePresenceAfterSend,
-  handlePresenceOnReceive
+  handlePresenceOnReceive,
+  ConnectionHealthMonitor,
+  getHealthMonitor,
+  recordSessionActivity,
+  analyzeMessage,
+  isSpamMessage
 } from './utils/index.js'
 
 // ============================================================================

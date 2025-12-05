@@ -28,12 +28,23 @@ const BufferJSON = {
 // Cache for auth data (30 second TTL)
 const authCache = new Map()
 const writeQueue = new Map()
-const MAX_CACHE_SIZE = 52428800 // 50MB limit
+const MAX_CACHE_SIZE = 5 * 1024 * 1024 // 5MB total limit (was 50MB per session!)
 
 let currentCacheSize = 0
 
 /**
- * Cleanup auth cache with size limits
+ * Get estimated size of data
+ */
+const getDataSize = (data) => {
+  try {
+    return JSON.stringify(data).length
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Cleanup auth cache with strict size limits
  * @private
  */
 const cleanupCache = (sessionId = null) => {
@@ -41,10 +52,8 @@ const cleanupCache = (sessionId = null) => {
     for (const [key] of authCache) {
       if (key.startsWith(`${sessionId}:`)) {
         const cached = authCache.get(key)
-        if (cached.data) {
-          try {
-            currentCacheSize -= JSON.stringify(cached.data).length
-          } catch (e) {}
+        if (cached?.data) {
+          currentCacheSize -= getDataSize(cached.data)
         }
         authCache.delete(key)
       }
@@ -57,12 +66,11 @@ const cleanupCache = (sessionId = null) => {
     }
   } else {
     const now = Date.now()
-    const maxAge = 30000 // Reduced from 300000 (5min) to 30000 (30sec)
+    const maxAge = 15000
+
     for (const [key, data] of authCache) {
       if (data.timestamp && now - data.timestamp > maxAge) {
-        try {
-          currentCacheSize -= JSON.stringify(data.data).length
-        } catch (e) {}
+        currentCacheSize -= getDataSize(data.data)
         authCache.delete(key)
       }
     }
@@ -70,21 +78,22 @@ const cleanupCache = (sessionId = null) => {
     if (currentCacheSize > MAX_CACHE_SIZE) {
       const entries = Array.from(authCache.entries()).sort((a, b) => (a[1].timestamp || 0) - (b[1].timestamp || 0))
 
-      const toDelete = Math.ceil(entries.length * 0.3) // Remove oldest 30%
+      // Remove oldest 50% (was 30%)
+      const toDelete = Math.ceil(entries.length * 0.5)
       for (let i = 0; i < toDelete && authCache.size > 0; i++) {
         const [key, data] = entries[i]
-        try {
-          currentCacheSize -= JSON.stringify(data.data).length
-        } catch (e) {}
+        currentCacheSize -= getDataSize(data.data)
         authCache.delete(key)
       }
 
-      logger.warn(`[Cache] Cleaned ${toDelete} entries (size: ${currentCacheSize} bytes)`)
+      logger.warn(
+        `[Cache] Aggressive cleanup: removed ${toDelete} entries (size: ${(currentCacheSize / 1024 / 1024).toFixed(2)}MB)`,
+      )
     }
   }
 }
 
-setInterval(() => cleanupCache(), 30000)
+setInterval(() => cleanupCache(), 10000)
 
 /**
  * Use MongoDB as authentication state storage
@@ -98,26 +107,23 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
   const fixFileName = (file) => file?.replace(/\//g, "__")?.replace(/:/g, "-") || ""
 
   /**
-   * Read data from MongoDB with caching and retry logic
+   * Read data from MongoDB with minimal caching
    */
   const readData = async (fileName) => {
     const cacheKey = `${sessionId}:${fileName}`
 
-    // Check cache (30 second TTL instead of 5 minute)
     if (authCache.has(cacheKey)) {
       const cached = authCache.get(cacheKey)
-      if (cached.timestamp && Date.now() - cached.timestamp < 30000) {
+      if (cached.timestamp && Date.now() - cached.timestamp < 15000) {
         return cached.data
       } else {
-        try {
-          currentCacheSize -= JSON.stringify(cached.data).length
-        } catch (e) {}
+        currentCacheSize -= getDataSize(cached.data)
         authCache.delete(cacheKey)
       }
     }
 
-    // Retry logic for critical auth files
-    const isCriticalFile = fileName === "creds.json" || fileName.includes("creds")
+    // Only retry for critical files
+    const isCriticalFile = fileName === "creds.json"
     const maxRetries = isCriticalFile ? 3 : 1
     let lastError = null
 
@@ -129,55 +135,64 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
         )
 
         if (!result) {
-          if (isCriticalFile && attempt === maxRetries) {
-            logger.error(`Auth read failed for ${sessionId}:${fileName} after ${maxRetries} attempts`)
-          }
           return null
         }
 
         const data = JSON.parse(result.datajson, BufferJSON.reviver)
 
-        if (data) {
-          const size = JSON.stringify(data).length
-          currentCacheSize += size
-          authCache.set(cacheKey, { data, timestamp: Date.now() })
+        if (data && isCriticalFile) {
+          const size = getDataSize(data)
+
+          // Check if we have room
+          if (currentCacheSize + size <= MAX_CACHE_SIZE) {
+            currentCacheSize += size
+            authCache.set(cacheKey, { data, timestamp: Date.now() })
+          }
         }
 
         return data
       } catch (error) {
         lastError = error
         if (attempt < maxRetries) {
-          await new Promise((resolve) => setTimeout(resolve, 1000 * attempt))
-        } else if (isCriticalFile) {
-          logger.error(`Auth read error for ${sessionId}:${fileName} after ${maxRetries} attempts:`, error.message)
+          await new Promise((resolve) => setTimeout(resolve, 500 * attempt))
         }
       }
+    }
+
+    if (isCriticalFile && lastError) {
+      logger.error(`Auth read error for ${sessionId}:${fileName}:`, lastError.message)
     }
 
     return null
   }
 
   /**
-   * Write data to MongoDB with debouncing
+   * Write data to MongoDB immediately (write-through)
    */
   const writeData = async (datajson, fileName) => {
     const cacheKey = `${sessionId}:${fileName}`
-      // Subtract old entry size if it exists
-  const cached = authCache.get(cacheKey)
-  if (cached?.data) {
-    try {
-      currentCacheSize -= JSON.stringify(cached.data).length
-    } catch (e) {}
-  }
-    const size = JSON.stringify(datajson).length
-    currentCacheSize += size
-    authCache.set(cacheKey, { data: datajson, timestamp: Date.now() })
+    const isCriticalFile = fileName === "creds.json"
+
+    // Update cache only for creds
+    if (isCriticalFile) {
+      const cached = authCache.get(cacheKey)
+      if (cached?.data) {
+        currentCacheSize -= getDataSize(cached.data)
+      }
+
+      const size = getDataSize(datajson)
+      if (currentCacheSize + size <= MAX_CACHE_SIZE) {
+        currentCacheSize += size
+        authCache.set(cacheKey, { data: datajson, timestamp: Date.now() })
+      }
+    }
 
     const queueKey = `${sessionId}:${fileName}`
     if (writeQueue.has(queueKey)) {
       clearTimeout(writeQueue.get(queueKey))
     }
 
+    // Short debounce of 25ms to batch rapid writes
     const timeoutId = setTimeout(async () => {
       try {
         const query = { filename: fixFileName(fileName), sessionId: sessionId }
@@ -195,7 +210,7 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
       } finally {
         writeQueue.delete(queueKey)
       }
-    }, 50)
+    }, 25)
 
     writeQueue.set(queueKey, timeoutId)
   }
@@ -206,10 +221,8 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
   const removeData = async (fileName) => {
     const cacheKey = `${sessionId}:${fileName}`
     const cached = authCache.get(cacheKey)
-    if (cached.data) {
-      try {
-        currentCacheSize -= JSON.stringify(cached.data).length
-      } catch (e) {}
+    if (cached?.data) {
+      currentCacheSize -= getDataSize(cached.data)
     }
     authCache.delete(cacheKey)
 
@@ -231,23 +244,18 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
       keys: {
         get: async (type, ids) => {
           const data = {}
-          const batchSize = 10
-
-          for (let i = 0; i < ids.length; i += batchSize) {
-            const batch = ids.slice(i, i + batchSize)
-            const promises = batch.map(async (id) => {
-              try {
-                let value = await readData(`${type}-${id}.json`)
-                if (type === "app-state-sync-key" && value) {
-                  value = proto.Message.AppStateSyncKeyData.fromObject(value)
-                }
-                if (value) data[id] = value
-              } catch (error) {
-                // Silent error
+          const promises = ids.map(async (id) => {
+            try {
+              let value = await readData(`${type}-${id}.json`)
+              if (type === "app-state-sync-key" && value) {
+                value = proto.Message.AppStateSyncKeyData.fromObject(value)
               }
-            })
-            await Promise.allSettled(promises)
-          }
+              if (value) data[id] = value
+            } catch (error) {
+              // Silent error
+            }
+          })
+          await Promise.allSettled(promises)
           return data
         },
         set: async (data) => {
@@ -256,18 +264,10 @@ export const useMongoDBAuthState = async (collection, sessionId) => {
             for (const id in data[category]) {
               const value = data[category][id]
               const file = `${category}-${id}.json`
-
-              if (tasks.length >= 20) {
-                await Promise.allSettled(tasks)
-                tasks.length = 0
-              }
-
               tasks.push(value ? writeData(value, file) : removeData(file))
             }
           }
-          if (tasks.length > 0) {
-            await Promise.allSettled(tasks)
-          }
+          await Promise.allSettled(tasks)
         },
       },
     },
@@ -334,4 +334,17 @@ export const hasValidAuthData = async (collection, sessionId) => {
   }
 
   return false
+}
+
+/**
+ * Export cache stats for monitoring
+ */
+export const getAuthCacheStats = () => {
+  return {
+    entries: authCache.size,
+    sizeBytes: currentCacheSize,
+    sizeMB: (currentCacheSize / 1024 / 1024).toFixed(2),
+    maxSizeMB: (MAX_CACHE_SIZE / 1024 / 1024).toFixed(2),
+    writeQueueSize: writeQueue.size,
+  }
 }

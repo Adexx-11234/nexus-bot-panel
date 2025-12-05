@@ -56,43 +56,43 @@ export class SessionManager {
 
   _startTrackingCleanup() {
     setInterval(() => {
-      // Clear old entries from tracking sets
-      // Only keep entries for sessions that are currently active
+      const now = Date.now()
       const activeIds = new Set(this.activeSockets.keys())
+      let cleanedCount = 0
 
-      for (const sessionId of this.initializingSessions) {
-        if (!activeIds.has(sessionId)) {
-          this.initializingSessions.delete(sessionId)
+      // Helper to safely clean a Set
+      const cleanSet = (set, name) => {
+        const toRemove = []
+        for (const sessionId of set) {
+          // Only remove if NOT in active sockets
+          if (!activeIds.has(sessionId)) {
+            toRemove.push(sessionId)
+          }
         }
+        toRemove.forEach((id) => {
+          set.delete(id)
+          cleanedCount++
+        })
       }
 
-      for (const sessionId of this.voluntarilyDisconnected) {
-        if (!activeIds.has(sessionId)) {
-          this.voluntarilyDisconnected.delete(sessionId)
-        }
-      }
-
-      for (const sessionId of this.detectedWebSessions) {
-        if (!activeIds.has(sessionId)) {
-          this.detectedWebSessions.delete(sessionId)
-        }
-      }
+      cleanSet(this.initializingSessions, "initializingSessions")
+      cleanSet(this.voluntarilyDisconnected, "voluntarilyDisconnected")
+      cleanSet(this.detectedWebSessions, "detectedWebSessions")
 
       if (ENABLE_515_FLOW) {
-        for (const sessionId of this.sessions515Restart) {
-          if (!activeIds.has(sessionId)) {
-            this.sessions515Restart.delete(sessionId)
-          }
-        }
-        for (const sessionId of this.completed515Restart) {
-          if (!activeIds.has(sessionId)) {
-            this.completed515Restart.delete(sessionId)
-          }
-        }
+        cleanSet(this.sessions515Restart, "sessions515Restart")
+        cleanSet(this.completed515Restart, "completed515Restart")
       }
 
+      if (cleanedCount > 0) {
+        logger.debug(
+          `Tracking cleanup: removed ${cleanedCount} stale entries, ${this.activeSockets.size} active sessions`,
+        )
+      }
+
+      const memUsage = process.memoryUsage()
       logger.debug(
-        `Tracking cleanup: ${this.activeSockets.size} active, ${this.initializingSessions.size} initializing`,
+        `Memory: RSS ${Math.round(memUsage.rss / 1024 / 1024)}MB, Heap ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB/${Math.round(memUsage.heapTotal / 1024 / 1024)}MB`,
       )
     }, 60000) // Every minute
   }

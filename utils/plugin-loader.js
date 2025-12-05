@@ -4,7 +4,7 @@ import fsr from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
 import chalk from "chalk"
-import { isGroupAdmin, isBotAdmin } from "../whatsapp/groups/index.js"
+import { isGroupAdmin } from "../whatsapp/groups/index.js"
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
@@ -124,6 +124,9 @@ class MessageDeduplicator {
   }
 }
 
+const commandIndexCache = new Map() // command -> pluginId (prebuilt index)
+let commandIndexBuilt = false
+
 class PluginLoader {
   constructor() {
     this.plugins = new Map()
@@ -138,6 +141,8 @@ class PluginLoader {
     this.reloadDebounceMs = 1000
     this.tempContactStore = new Map()
     this.deduplicator = new MessageDeduplicator()
+    this.permissionCache = new Map() // "pluginId_userId" -> { allowed, timestamp }
+    this.PERMISSION_CACHE_TTL = 30000 // 30 seconds
 
     this._startTempCleanup()
 
@@ -209,6 +214,7 @@ class PluginLoader {
       log.info(`Loaded ${this.plugins.size} plugins, ${this.commands.size} commands`)
 
       setInterval(() => this.cleanupTempData(), 120000)
+      this._buildCommandIndex()
       return Array.from(this.plugins.values())
     } catch (error) {
       log.error("Error loading plugins:", error)
@@ -422,12 +428,63 @@ class PluginLoader {
     this.reloadTimeouts.forEach((timeout) => clearTimeout(timeout))
     this.reloadTimeouts.clear()
   }
-
+  shouldCheckDatabaseUpdate(plugin, commandName) {
+    if (!plugin || !commandName) return false
+    
+    // Method 1: Check if it's a groupmenu command
+    if (plugin.category === 'groupmenu') {
+      return true
+    }
+    
+    // Method 2: Check if command requires admin permissions (boolean flags)
+    if (plugin.adminOnly === true || plugin.groupAdmin === true) {
+      return true
+    }
+    
+    // Method 3: Check permissions array for "admin" or "group_admin"
+    if (Array.isArray(plugin.permissions)) {
+      const hasAdminPerm = plugin.permissions.some(perm => {
+        const p = String(perm).toLowerCase()
+        return p === 'admin' || p === 'group_admin' || p === 'system_admin'
+      })
+      if (hasAdminPerm) return true
+    }
+    
+    // Method 4: Fallback - specific critical commands that MUST be deduplicated
+    const criticalCommands = [
+      'antilink', 'anticall', 'antibot', 'antispam', 'antiraid',
+      'antiimage', 'antivideo', 'antiaudio', 'antidocument', 'antisticker',
+      'antigroupmention', 'antidelete', 'antiviewonce', 'antitag',
+      'grouponly', 'publicmode', 'welcome', 'goodbye',
+      'autowelcome', 'autokick', 'closetime', 'opentime',
+      'antipromote', 'antidemote', 'antiadd', 'antiremove'
+    ]
+    
+    return criticalCommands.includes(commandName.toLowerCase())
+  }
+    
   // ==================== COMMAND EXECUTION ====================
+
+  _buildCommandIndex() {
+    commandIndexCache.clear()
+    for (const [command, pluginId] of this.commands.entries()) {
+      commandIndexCache.set(command, pluginId)
+    }
+    commandIndexBuilt = true
+    log.info(`Command index built: ${commandIndexCache.size} commands`)
+  }
 
   findCommand(commandName) {
     if (!commandName || typeof commandName !== "string") return null
     const normalizedCommand = commandName.toLowerCase().trim()
+
+    // Use cached index for O(1) lookup
+    if (commandIndexBuilt && commandIndexCache.has(normalizedCommand)) {
+      const pluginId = commandIndexCache.get(normalizedCommand)
+      return this.plugins.get(pluginId)
+    }
+
+    // Fallback to original lookup
     const pluginId = this.commands.get(normalizedCommand)
     return pluginId ? this.plugins.get(pluginId) : null
   }
@@ -438,7 +495,11 @@ class PluginLoader {
       if (!plugin) return { success: false, silent: true }
 
       if (!m.pushName) {
-        m.pushName = await this.extractPushName(sock, m)
+        this.extractPushName(sock, m)
+          .then((name) => {
+            m.pushName = name
+          })
+          .catch(() => {})
       }
 
       const isCreator = this.checkIsBotOwner(sock, m.sender, m.key?.fromMe)
@@ -448,7 +509,7 @@ class PluginLoader {
         chat: m.chat || m.key?.remoteJid || m.from,
         sender: m.sender || m.key?.participant || m.from,
         isCreator,
-        isOwner: isCreator, // Add alias for compatibility
+        isOwner: isCreator,
         isGroup: m.isGroup || (m.chat && m.chat.endsWith("@g.us")),
         sessionContext: m.sessionContext || { telegram_id: "Unknown", session_id: sessionId },
         sessionId,
@@ -456,50 +517,24 @@ class PluginLoader {
         prefix: m.prefix || ".",
       }
 
-      // Bot mode check
-      if (!enhancedM.isCreator) {
-        try {
-          const { UserQueries } = await import("../database/query.js")
-          const modeSettings = await UserQueries.getBotMode(enhancedM.sessionContext.telegram_id)
+      const [modeAllowed, permissionCheck] = await Promise.all([
+        this._checkBotMode(enhancedM),
+        this._checkPermissionsCached(sock, plugin, enhancedM),
+      ])
 
-          if (modeSettings.mode === "self") {
-            this.clearTempData()
-            return { success: false, silent: true }
-          }
-        } catch (error) {
-          log.error("Error checking bot mode:", error)
-        }
+      if (!modeAllowed) {
+        this.clearTempData()
+        return { success: false, silent: true }
       }
 
-      // Group-only check
       if (enhancedM.isGroup) {
-        try {
-          const { GroupQueries } = await import("../database/query.js")
-          const isGroupOnlyEnabled = await GroupQueries.isGroupOnlyEnabled(enhancedM.chat)
-
-          if (!isGroupOnlyEnabled && !["grouponly", "go"].includes(commandName.toLowerCase())) {
-            const isAdmin = await isGroupAdmin(sock, enhancedM.chat, enhancedM.sender)
-
-            if (isAdmin || enhancedM.isCreator) {
-              await sock.sendMessage(
-                enhancedM.chat,
-                {
-                  text: `❌ *Group Commands Disabled*\n\nUse *${enhancedM.prefix}grouponly on* to enable.`,
-                },
-                { quoted: m },
-              )
-            }
-
-            this.clearTempData()
-            return { success: false, silent: true }
-          }
-        } catch (error) {
-          log.error("Error checking grouponly:", error)
+        const groupOnlyAllowed = await this._checkGroupOnly(sock, enhancedM, commandName)
+        if (!groupOnlyAllowed) {
+          this.clearTempData()
+          return { success: false, silent: true }
         }
       }
 
-      // Permission check
-      const permissionCheck = await this.checkPluginPermissions(sock, plugin, enhancedM)
       if (!permissionCheck.allowed) {
         this.clearTempData()
 
@@ -508,13 +543,7 @@ class PluginLoader {
         }
 
         try {
-          await sock.sendMessage(
-            enhancedM.chat,
-            {
-              text: permissionCheck.message,
-            },
-            { quoted: m },
-          )
+          await sock.sendMessage(enhancedM.chat, { text: permissionCheck.message }, { quoted: m })
         } catch (sendError) {
           log.error("Failed to send permission error:", sendError)
         }
@@ -525,24 +554,14 @@ class PluginLoader {
       // Execute plugin
       const result = await this.executePluginWithFallback(sock, sessionId, args, enhancedM, plugin)
 
-      // DEDUPLICATION: For admin commands that update database
-      // ALL users already responded above (in plugin.execute)
-      // Now check if database should be updated (ONLY ONCE)
       if (this.shouldCheckDatabaseUpdate(plugin, commandName)) {
-        const messageKey = this.deduplicator.generateKey(enhancedM.chat, enhancedM.key?.id)
-
+        const messageKey = this.deduplicator.generateKey(enhancedM.chat, m.key?.id)
         if (messageKey && !this.deduplicator.isActionProcessed(messageKey, "db-update")) {
-          // First session - database update already happened in plugin.execute()
-          // Just mark it as processed so others skip
           this.deduplicator.markAsProcessed(messageKey, sessionId, "db-update")
-          log.debug(`DB update marked for ${commandName} by ${sessionId}`)
-        } else if (messageKey) {
-          log.debug(`DB update already done for ${commandName}, session ${sessionId} skipped`)
         }
       }
 
       this.clearTempData()
-
       return { success: true, result }
     } catch (error) {
       log.error(`Error executing command ${commandName}:`, error)
@@ -551,96 +570,66 @@ class PluginLoader {
     }
   }
 
-  /**
-   * Check if command needs database update deduplication
-   * This applies to:
-   * 1. Commands in groupmenu category (admin commands that modify group settings)
-   * 2. Commands that have adminOnly or groupAdmin permissions
-   * 3. Commands with "admin" in permissions array
-   */
-  shouldCheckDatabaseUpdate(plugin, commandName) {
-    if (!plugin || !commandName) return false
-
-    // Method 1: Check if it's a groupmenu command
-    if (plugin.category === "groupmenu") {
-      return true
+  async _checkBotMode(m) {
+    if (m.isCreator) return true
+    try {
+      const { UserQueries } = await import("../database/query.js")
+      const modeSettings = await UserQueries.getBotMode(m.sessionContext.telegram_id)
+      return modeSettings.mode !== "self"
+    } catch (error) {
+      log.error("Error checking bot mode:", error)
+      return true // Allow on error
     }
-
-    // Method 2: Check if command requires admin permissions (boolean flags)
-    if (plugin.adminOnly === true || plugin.groupAdmin === true) {
-      return true
-    }
-
-    // Method 3: Check permissions array for "admin" or "group_admin"
-    if (Array.isArray(plugin.permissions)) {
-      const hasAdminPerm = plugin.permissions.some((perm) => {
-        const p = String(perm).toLowerCase()
-        return p === "admin" || p === "group_admin" || p === "system_admin"
-      })
-      if (hasAdminPerm) return true
-    }
-
-    // Method 4: Fallback - specific critical commands that MUST be deduplicated
-    const criticalCommands = [
-      "antilink",
-      "anticall",
-      "antibot",
-      "antispam",
-      "antiraid",
-      "antiimage",
-      "antivideo",
-      "antiaudio",
-      "antidocument",
-      "antisticker",
-      "antigroupmention",
-      "antidelete",
-      "antiviewonce",
-      "antitag",
-      "grouponly",
-      "publicmode",
-      "welcome",
-      "goodbye",
-      "autowelcome",
-      "autokick",
-      "closetime",
-      "opentime",
-      "antipromote",
-      "antidemote",
-      "antiadd",
-      "antiremove",
-    ]
-
-    return criticalCommands.includes(commandName.toLowerCase())
   }
 
-  async executePluginWithFallback(sock, sessionId, args, m, plugin) {
+  async _checkGroupOnly(sock, m, commandName) {
     try {
-      if (m.isGroup && (!m.hasOwnProperty("isAdmin") || !m.hasOwnProperty("isBotAdmin"))) {
-        m.isAdmin = await isGroupAdmin(sock, m.chat, m.sender)
-        m.isBotAdmin = await isBotAdmin(sock, m.chat)
-      }
+      const { GroupQueries } = await import("../database/query.js")
+      const isGroupOnlyEnabled = await GroupQueries.isGroupOnlyEnabled(m.chat)
 
-      if (plugin.execute.length === 4) {
-        return await plugin.execute(sock, sessionId, args, m)
-      }
+      if (!isGroupOnlyEnabled && !["grouponly", "go"].includes(commandName.toLowerCase())) {
+        const isAdmin = await isGroupAdmin(sock, m.chat, m.sender)
 
-      if (plugin.execute.length === 3) {
-        const context = {
-          args: args || [],
-          quoted: m.quoted || null,
-          isAdmin: m.isAdmin || false,
-          isBotAdmin: m.isBotAdmin || false,
-          isCreator: m.isCreator || false,
-          store: null,
+        if (isAdmin || m.isCreator) {
+          await sock.sendMessage(
+            m.chat,
+            { text: `❌ *Group Commands Disabled*\n\nUse *${m.prefix}grouponly on* to enable.` },
+            { quoted: m },
+          )
         }
-        return await plugin.execute(sock, m, context)
+        return false
       }
-
-      return await plugin.execute(sock, sessionId, args, m)
+      return true
     } catch (error) {
-      log.error(`Plugin execution failed for ${plugin.name}:`, error)
-      throw error
+      log.error("Error checking grouponly:", error)
+      return true
     }
+  }
+
+  async _checkPermissionsCached(sock, plugin, m) {
+    const cacheKey = `${plugin.id}_${m.sender}_${m.chat}`
+    const cached = this.permissionCache.get(cacheKey)
+
+    if (cached && Date.now() - cached.timestamp < this.PERMISSION_CACHE_TTL) {
+      return cached.result
+    }
+
+    const result = await this.checkPluginPermissions(sock, plugin, m)
+
+    // Cache the result
+    this.permissionCache.set(cacheKey, {
+      result,
+      timestamp: Date.now(),
+    })
+
+    // Cleanup old cache entries
+    if (this.permissionCache.size > 500) {
+      const entries = Array.from(this.permissionCache.entries())
+      const toRemove = entries.slice(0, 200)
+      toRemove.forEach(([key]) => this.permissionCache.delete(key))
+    }
+
+    return result
   }
 
   // ==================== PERMISSION CHECKS ====================
@@ -745,6 +734,35 @@ class PluginLoader {
       return { allowed: false, message: "❌ Permission check failed.", silent: false }
     }
   }
+async executePluginWithFallback(sock, sessionId, args, m, plugin) {
+    try {
+      if (m.isGroup && (!m.hasOwnProperty('isAdmin') || !m.hasOwnProperty('isBotAdmin'))) {
+        m.isAdmin = await isGroupAdmin(sock, m.chat, m.sender)
+        m.isBotAdmin = await isBotAdmin(sock, m.chat)
+      }
+
+      if (plugin.execute.length === 4) {
+        return await plugin.execute(sock, sessionId, args, m)
+      }
+      
+      if (plugin.execute.length === 3) {
+        const context = {
+          args: args || [],
+          quoted: m.quoted || null,
+          isAdmin: m.isAdmin || false,
+          isBotAdmin: m.isBotAdmin || false,
+          isCreator: m.isCreator || false,
+          store: null
+        }
+        return await plugin.execute(sock, m, context)
+      }
+
+      return await plugin.execute(sock, sessionId, args, m)
+    } catch (error) {
+      log.error(`Plugin execution failed for ${plugin.name}:`, error)
+      throw error
+    }
+  }
 
   checkIsBotOwner(sock, userJid, fromMe = false) {
     // If fromMe is true, it's the bot owner
@@ -789,7 +807,37 @@ class PluginLoader {
 
     return "user"
   }
+async executePluginWithFallback(sock, sessionId, args, m, plugin) {
+    try {
+      if (m.isGroup && (!m.hasOwnProperty('isAdmin') || !m.hasOwnProperty('isBotAdmin'))) {
+        m.isAdmin = await isGroupAdmin(sock, m.chat, m.sender)
+        m.isBotAdmin = await isBotAdmin(sock, m.chat)
+      }
 
+      if (plugin.execute.length === 4) {
+        return await plugin.execute(sock, sessionId, args, m)
+      }
+      
+      if (plugin.execute.length === 3) {
+        const context = {
+          args: args || [],
+          quoted: m.quoted || null,
+          isAdmin: m.isAdmin || false,
+          isBotAdmin: m.isBotAdmin || false,
+          isCreator: m.isCreator || false,
+          store: null
+        }
+        return await plugin.execute(sock, m, context)
+      }
+
+      return await plugin.execute(sock, sessionId, args, m)
+    } catch (error) {
+      log.error(`Plugin execution failed for ${plugin.name}:`, error)
+      throw error
+    }
+  }
+
+    
   // ==================== HELPER METHODS ====================
 
   async extractPushName(sock, m) {
@@ -869,6 +917,8 @@ class PluginLoader {
   async shutdown() {
     await this.clearWatchers()
     this.clearTempData()
+    this.permissionCache.clear()
+    commandIndexCache.clear()
   }
 
   getAvailableCommands(category = null) {

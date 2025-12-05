@@ -7,7 +7,7 @@ const logger = createComponentLogger("STICKER")
 
 export default {
   name: "sticker",
-  aliases: ["stiker", "s"],
+  aliases: ["stiker", "s", "tosticker", "tostiker"],
   category: "convertmenu",
   description: "Convert image/video to sticker",
   usage: "Reply to image/video with .sticker",

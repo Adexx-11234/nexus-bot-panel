@@ -3,12 +3,17 @@ import { createComponentLogger } from "../../utils/logger.js"
 const logger = createComponentLogger("SESSION_HANDLERS")
 
 // Track which sessions have already been auto-joined to prevent duplicates
-const autoJoinedSessions = new Set()
-const MAX_AUTOJOIN_CACHE = 300 // Limit to 300 sessions
+const SESSION_TRACKING = {
+  autoJoinedSessions: new Map(), // Changed to Map to track timestamps
+  joinQueue: [],
+  MAX_AUTOJOIN_CACHE: 300,
+  MAX_QUEUE_SIZE: 50,
+}
 
-let joinQueue = []
+// Replace the Set with Map for better tracking
+const autoJoinedSessions = SESSION_TRACKING.autoJoinedSessions
+let joinQueue = SESSION_TRACKING.joinQueue
 let isProcessingQueue = false
-const MAX_QUEUE_SIZE = 50 // Max queue size
 
 const ENABLE_515_FLOW = process.env.ENABLE_515_FLOW === "true" // Default: false
 
@@ -35,34 +40,71 @@ export class SessionEventHandlers {
     this._startAutoJoinCleanup()
   }
 
+  /**
+   * Get user's custom prefix from database
+   * @private
+   */
+  async getUserPrefix(telegramId) {
+    try {
+      const { UserQueries } = await import("../../database/query.js")
+      const settings = await UserQueries.getUserSettings(telegramId)
+
+      // Return custom prefix or default to '.'
+      const prefix = settings?.custom_prefix || "."
+
+      // Handle 'none' prefix case (empty string means no prefix required)
+      return prefix === "none" ? "" : prefix
+    } catch (error) {
+      logger.error("Error getting user prefix:", error)
+      return "." // Fallback to default on error
+    }
+  }
+
   _startAutoJoinCleanup() {
     setInterval(() => {
-      // Only keep entries for active sessions
+      const now = Date.now()
+      const MAX_AGE = 60 * 60 * 1000 // 1 hour
+
+      // Only keep entries for active sessions or recent entries
       const activeIds = new Set(this.sessionManager.activeSockets.keys())
       let removed = 0
 
-      for (const sessionId of autoJoinedSessions) {
-        if (!activeIds.has(sessionId)) {
+      for (const [sessionId, timestamp] of autoJoinedSessions.entries()) {
+        // Remove if session not active AND older than 1 hour
+        if (!activeIds.has(sessionId) && now - timestamp > MAX_AGE) {
           autoJoinedSessions.delete(sessionId)
           removed++
         }
       }
 
-      // Hard limit
-      if (autoJoinedSessions.size > MAX_AUTOJOIN_CACHE) {
-        const toRemove = autoJoinedSessions.size - MAX_AUTOJOIN_CACHE
-        const entries = Array.from(autoJoinedSessions)
-        entries.slice(0, toRemove).forEach((id) => autoJoinedSessions.delete(id))
-        removed += toRemove
+      // Hard limit - remove oldest entries if over limit
+      if (autoJoinedSessions.size > SESSION_TRACKING.MAX_AUTOJOIN_CACHE) {
+        const entries = Array.from(autoJoinedSessions.entries()).sort((a, b) => a[1] - b[1]) // Sort by timestamp ascending (oldest first)
+
+        const toRemove = autoJoinedSessions.size - SESSION_TRACKING.MAX_AUTOJOIN_CACHE
+        entries.slice(0, toRemove).forEach(([id]) => {
+          autoJoinedSessions.delete(id)
+          removed++
+        })
       }
 
-      // Cleanup join queue
-      if (joinQueue.length > MAX_QUEUE_SIZE) {
-        joinQueue = joinQueue.slice(-MAX_QUEUE_SIZE)
+      // Cleanup join queue - remove stale entries (older than 10 minutes)
+      const QUEUE_MAX_AGE = 10 * 60 * 1000
+      const originalLength = joinQueue.length
+      joinQueue = joinQueue.filter((item) => now - item.addedAt < QUEUE_MAX_AGE)
+      SESSION_TRACKING.joinQueue = joinQueue
+
+      if (joinQueue.length > SESSION_TRACKING.MAX_QUEUE_SIZE) {
+        joinQueue = joinQueue.slice(-SESSION_TRACKING.MAX_QUEUE_SIZE)
+        SESSION_TRACKING.joinQueue = joinQueue
       }
 
-      if (removed > 0) {
-        logger.debug(`[SessionHandlers] Cleaned ${removed} autoJoin entries (remaining: ${autoJoinedSessions.size})`)
+      const queueRemoved = originalLength - joinQueue.length
+
+      if (removed > 0 || queueRemoved > 0) {
+        logger.debug(
+          `[SessionHandlers] Cleanup: ${removed} autoJoin entries, ${queueRemoved} queue entries (remaining: ${autoJoinedSessions.size}/${joinQueue.length})`,
+        )
       }
     }, 60000) // Every minute
   }
@@ -100,11 +142,11 @@ export class SessionEventHandlers {
 
           if (alreadyInChannel) {
             logger.debug(`${sessionId} already in channel, skipping`)
-            autoJoinedSessions.add(sessionId)
+            autoJoinedSessions.set(sessionId, Date.now())
             continue
           }
 
-          if (joinQueue.length < MAX_QUEUE_SIZE) {
+          if (joinQueue.length < SESSION_TRACKING.MAX_QUEUE_SIZE) {
             joinQueue.push({ sock, sessionId, addedAt: Date.now() })
             logger.debug(`Queued ${sessionId} for channel join`)
           } else {
@@ -288,12 +330,16 @@ export class SessionEventHandlers {
           // ✅ Send welcome message to the REINITIALIZED session
           try {
             const userJid = newSock.user.id
+            const telegramId = sessionId.replace("session_", "")
 
-            logger.info(`[515 Flow] 📤 Sending welcome message to ${sessionId} (JID: ${userJid})`)
+            // ✅ Get user's custom prefix
+            const userPrefix = await this.getUserPrefix(telegramId)
 
-            // Send welcome message
+            logger.info(`[515 Flow] 📤 Sending welcome message to ${sessionId} (JID: ${userJid}, prefix: "${userPrefix}")`)
+
+            // Send welcome message with user's prefix
             await newSock.sendMessage(userJid, {
-              text: `Welcome to 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙! 🤖\n\nType *.allmenu* to begin exploring all features.`,
+              text: `Welcome to 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙! 🤖\n\nType *${userPrefix}allmenu* to begin exploring all features.`,
             })
 
             // Flush buffer if buffering
@@ -304,9 +350,9 @@ export class SessionEventHandlers {
             // Small delay between messages
             await new Promise((resolve) => setTimeout(resolve, 500))
 
-            // Send ping command
+            // Send ping command with user's prefix
             await newSock.sendMessage(userJid, {
-              text: ".ping",
+              text: `${userPrefix}ping`,
             })
 
             // Flush buffer again
@@ -422,7 +468,7 @@ export class SessionEventHandlers {
         if (!alreadyInChannel) {
           await this._queueChannelJoin(sock, sessionId)
         } else {
-          autoJoinedSessions.add(sessionId)
+          autoJoinedSessions.set(sessionId, Date.now())
         }
       }
 
@@ -432,16 +478,23 @@ export class SessionEventHandlers {
     }
   }
 
-  /**
-   * Queue a session for channel joining
-   * @private
-   */
   async _queueChannelJoin(sock, sessionId) {
     try {
       const alreadyQueued = joinQueue.some((item) => item.sessionId === sessionId)
       if (alreadyQueued) {
         logger.debug(`${sessionId} already in queue`)
         return
+      }
+
+      // Check if already joined with timestamp check
+      if (autoJoinedSessions.has(sessionId)) {
+        const joinedAt = autoJoinedSessions.get(sessionId)
+        const age = Date.now() - joinedAt
+        // If joined less than 1 hour ago, skip
+        if (age < 60 * 60 * 1000) {
+          logger.debug(`${sessionId} recently joined channel, skipping`)
+          return
+        }
       }
 
       joinQueue.push({ sock, sessionId, addedAt: Date.now() })
@@ -495,17 +548,17 @@ export class SessionEventHandlers {
             const alreadyInChannel = await this._checkIfInChannel(item.sock, item.sessionId)
             if (alreadyInChannel) {
               logger.debug(`${item.sessionId} already in channel, skipping`)
-              autoJoinedSessions.add(item.sessionId)
+              autoJoinedSessions.set(item.sessionId, Date.now())
               continue
             }
 
             const joined = await this._autoJoinWhatsAppChannel(item.sock, item.sessionId)
 
             if (joined) {
-              autoJoinedSessions.add(item.sessionId)
-              logger.info(`✅ ${item.sessionId} successfully joined channel (${autoJoinedSessions.size} total)`)
+              autoJoinedSessions.set(item.sessionId, Date.now())
+              logger.info(`${item.sessionId} successfully joined channel (${autoJoinedSessions.size} total)`)
             } else {
-              logger.warn(`❌ Failed to join ${item.sessionId} to channel`)
+              logger.warn(`Failed to join ${item.sessionId} to channel`)
             }
 
             await new Promise((resolve) => setTimeout(resolve, JOIN_DELAY))
@@ -520,7 +573,7 @@ export class SessionEventHandlers {
         }
       }
 
-      logger.info(`✅ Channel join queue processing completed - ${autoJoinedSessions.size} users joined`)
+      logger.info(`Channel join queue processing completed - ${autoJoinedSessions.size} users joined`)
     } catch (error) {
       logger.error("Error processing join queue:", error)
     } finally {

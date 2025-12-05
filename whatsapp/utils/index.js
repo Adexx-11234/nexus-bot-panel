@@ -16,6 +16,17 @@ export {
   handlePresenceOnReceive
 } from './presence-manager.js'
 
+export {
+  ConnectionHealthMonitor,
+  getHealthMonitor,
+  recordSessionActivity
+} from './connection-health.js'
+
+export {
+  analyzeMessage,
+  isSpamMessage
+} from './virtex-protection.js'
+
 // Status handling
 export {
   StatusHandler,

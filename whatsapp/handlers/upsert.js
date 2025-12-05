@@ -1,6 +1,8 @@
-import { createComponentLogger } from '../../utils/logger.js'
+import { createComponentLogger } from "../../utils/logger.js"
+import { recordSessionActivity } from "../utils/index.js"
+import { updateSessionLastMessage } from "../../config/baileys.js"
 
-const logger = createComponentLogger('MESSAGE_UPSERT')
+const logger = createComponentLogger("MESSAGE_UPSERT")
 
 // Singleton message processor
 let messageProcessorInstance = null
@@ -10,7 +12,7 @@ let messageProcessorInstance = null
  */
 export async function getMessageProcessor() {
   if (!messageProcessorInstance) {
-    const { MessageProcessor } = await import('../messages/index.js')
+    const { MessageProcessor } = await import("../messages/index.js")
     messageProcessorInstance = new MessageProcessor()
   }
   return messageProcessorInstance
@@ -22,6 +24,9 @@ export async function getMessageProcessor() {
  */
 export async function handleMessagesUpsert(sessionId, messageUpdate, sock) {
   try {
+    recordSessionActivity(sessionId)
+    updateSessionLastMessage(sessionId)
+
     const processor = await getMessageProcessor()
 
     // Process each message in the batch
@@ -44,12 +49,12 @@ export async function handleMessagesUpsert(sessionId, messageUpdate, sock) {
         }
         if (!m.sender && m.key?.participant) {
           m.sender = m.key.participant
-        } else if (!m.sender && m.key?.remoteJid && !m.key.remoteJid.includes('@g.us')) {
+        } else if (!m.sender && m.key?.remoteJid && !m.key.remoteJid.includes("@g.us")) {
           m.sender = m.key.remoteJid
         }
 
         // Validate chat
-        if (typeof m.chat !== 'string') {
+        if (typeof m.chat !== "string") {
           continue
         }
 
@@ -59,18 +64,18 @@ export async function handleMessagesUpsert(sessionId, messageUpdate, sock) {
             try {
               const chatJid = m.chat || m.key?.remoteJid
 
-              if (!chatJid || typeof chatJid !== 'string') {
+              if (!chatJid || typeof chatJid !== "string") {
                 throw new Error(`Invalid chat JID: ${chatJid}`)
               }
 
               const messageOptions = {
                 quoted: m,
-                ...options
+                ...options,
               }
 
-              if (typeof text === 'string') {
+              if (typeof text === "string") {
                 return await sock.sendMessage(chatJid, { text }, messageOptions)
-              } else if (typeof text === 'object') {
+              } else if (typeof text === "object") {
                 return await sock.sendMessage(chatJid, text, messageOptions)
               }
             } catch (error) {
@@ -82,13 +87,11 @@ export async function handleMessagesUpsert(sessionId, messageUpdate, sock) {
 
         // ✅ NO PREFIX PASSED - Processor fetches from memory cache
         await processor.processMessage(sock, sessionId, m)
-
       } catch (messageError) {
         logger.error(`Error processing individual message:`, messageError)
         continue
       }
     }
-
   } catch (error) {
     logger.error(`Error processing messages for ${sessionId}:`, error)
   }
@@ -100,7 +103,7 @@ export async function handleMessagesUpsert(sessionId, messageUpdate, sock) {
  */
 export async function handleGroupParticipantsUpdate(sessionId, update, sock, m = null) {
   try {
-    const { getGroupParticipantsHandler } = await import('../groups/index.js')
+    const { getGroupParticipantsHandler } = await import("../groups/index.js")
     const handler = getGroupParticipantsHandler()
 
     // Create default message object if not provided
@@ -108,12 +111,11 @@ export async function handleGroupParticipantsUpdate(sessionId, update, sock, m =
       m = {
         chat: update.id,
         isGroup: true,
-        sessionId: sessionId
+        sessionId: sessionId,
       }
     }
 
     await handler.handleParticipantsUpdate(sock, sessionId, update, m)
-
   } catch (error) {
     logger.error(`Error handling participants update for ${sessionId}:`, error)
   }
@@ -130,5 +132,5 @@ export const messageProcessor = {
   getStats: async () => {
     const processor = await getMessageProcessor()
     return processor.getStats()
-  }
+  },
 }
