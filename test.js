@@ -24,14 +24,14 @@ const CONFIG = {
   operations: {
     // OPERATION 1: Clean orphaned PostgreSQL users (not in MongoDB sessions)
     cleanOrphanedUsers: {
-      enabled: true, // Set true to run this operation
+      enabled: false, // Set true to run this operation
       skipWebUsers: true, // Always keep web users safe
       onlyCleanTelegram: true // Only remove telegram users without sessions
     },
     
     // OPERATION 2: Sync from auth_baileys → sessions → PostgreSQL
     syncFromAuthBaileys: {
-      enabled: true, // Set true to run this operation
+      enabled: false, // Set true to run this operation
       writeToSessions: true, // Update MongoDB sessions collection
       writeToPostgres: true, // Update PostgreSQL users table
       skipWebUsers: false, // Don't modify existing web users

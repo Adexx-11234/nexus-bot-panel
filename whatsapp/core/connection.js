@@ -31,32 +31,43 @@ async createConnection(sessionId, phoneNumber = null, callbacks = {}, allowPairi
 
     // ✅ Create store BEFORE socket
     const { createSessionStore, createBaileysSocket, bindStoreToSocket } = await import('./config.js')
+    
+    // ✅ CRITICAL FIX: Import proto for fallback
+    const { proto } = await import('@whiskeysockets/baileys')
+    
     const store = createSessionStore(sessionId)
 
-    // ✅ CRITICAL: Create getMessage BEFORE socket creation
+    // ✅ CRITICAL: Create getMessage with proper fallback BEFORE socket creation
     const getMessage = async (key) => {
+      if (!key || !key.remoteJid || !key.id) {
+        logger.debug(`Invalid key in getMessage`)
+        return proto.Message.fromObject({})
+      }
+      
       if (store) {
         try {
           const msg = await store.loadMessage(key.remoteJid, key.id)
-          return msg?.message || undefined
+          if (msg?.message) {
+            return msg.message
+          }
         } catch (error) {
           logger.debug(`getMessage failed for ${key.id}:`, error.message)
-          return undefined
         }
       }
-      return undefined
+      
+      return proto.Message.fromObject({})
     }
         
 
     // ✅ Create socket WITH getMessage function
     const sock = createBaileysSocket(authState.state, sessionId, getMessage)
-extendSocket(sock)
-    // ✅ CRITICAL: Bind store to socket IMMEDIATELY and wait for initial sync
-    logger.info(`Binding store to socket for ${sessionId}`)
-    bindStoreToSocket(sock, sessionId)
+    extendSocket(sock)
     
-    // ✅ IMPORTANT: Give the store a moment to start listening to events
-    // This ensures it catches all the initial sync data
+    // ✅ Bind store to socket IMMEDIATELY
+    logger.info(`Binding store to socket for ${sessionId}`)
+    await bindStoreToSocket(sock, sessionId)
+    
+    // ✅ Give store time to sync initial data
     await new Promise(resolve => setTimeout(resolve, 1000))
     
     logger.info(`Store bound and ready for ${sessionId}`)

@@ -397,7 +397,7 @@ export class SessionManager {
   ) {
     const userIdStr = String(userId)
     const sessionId = userIdStr.startsWith("session_") ? userIdStr : `session_${userIdStr}`
-
+     
     try {
       // Prevent duplicate session creation
       if (this.initializingSessions.has(sessionId)) {
@@ -443,8 +443,8 @@ export class SessionManager {
         }
       }
 
-      // Create socket connection
-      const sock = await this.connectionManager.createConnection(sessionId, phoneNumber, callbacks, allowPairing)
+    // Create socket connection (store gets bound inside createConnection)
+    const sock = await this.connectionManager.createConnection(sessionId, phoneNumber, callbacks, allowPairing)
 
       if (!sock) {
         throw new Error("Failed to create socket connection")
@@ -709,19 +709,22 @@ export class SessionManager {
     }
   }
 
-  /**
-   * Get session socket
-   */
-  getSession(sessionId) {
-    const sock = this.activeSockets.get(sessionId)
+/**
+ * Get session socket
+ */
+getSession(sessionId) {
+  const sock = this.activeSockets.get(sessionId)
 
-    if (!sock && sessionId) {
-      const { invalidateSessionLookupCache } = require("../utils/index.js")
+  if (!sock && sessionId) {
+    import("../utils/index.js").then(({ invalidateSessionLookupCache }) => {
       invalidateSessionLookupCache(sessionId)
-    }
-
-    return sock
+    }).catch(err => {
+      logger.error(`Failed to invalidate cache for ${sessionId}:`, err)
+    })
   }
+
+  return sock
+}
 
   /**
    * Get session by WhatsApp JID
