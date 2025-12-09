@@ -79,7 +79,8 @@ export const DisconnectReason = {
   CONFLICT: 409,               // Session conflict
   INTERNAL_SERVER_ERROR: 500,  // WhatsApp internal error
   BAD_REQUEST: 400,            // Invalid request
-  NOT_FOUND: 404               // Resource not found
+  NOT_FOUND: 404,               // Resource not found
+  CONNECTION_ISSUES: 405,  // General connection issues
 }
 
 // ==========================================
@@ -93,6 +94,16 @@ export const DisconnectConfig = {
   // ============================================================
   
   [DisconnectReason.LOGGED_OUT]: {
+    shouldReconnect: false,
+    isPermanent: true,
+    requiresCleanup: true,
+    requiresNotification: true,
+    message: 'Account logged out from WhatsApp',
+    userAction: 'Use /connect to reconnect',
+    handler: 'handleLoggedOut'
+  },
+
+    [DisconnectReason.CONNECTION_ISSUES]: {
     shouldReconnect: false,
     isPermanent: true,
     requiresCleanup: true,

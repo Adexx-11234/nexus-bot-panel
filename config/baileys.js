@@ -31,7 +31,6 @@ const defaultGetMessage = async (key) => {
 export const baileysConfig = {
   logger: baileysLogger,
   printQRInTerminal: false,
-  browser: Browsers.windows("safari"),
   retryRequestDelayMs: 10,
   markOnlineOnConnect: true,
   getMessage: defaultGetMessage,

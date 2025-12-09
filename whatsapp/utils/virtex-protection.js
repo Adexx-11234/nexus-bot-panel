@@ -20,7 +20,7 @@ try {
 
 // Default thresholds
 const DEFAULT_OPTIONS = {
-  maxTextLength: 25000,
+  maxTextLength: 250000,
   maxInvisibleCharCount: 5000,
   maxInvisibleCharRatio: 0.5,
   maxMentionCount: 1000,

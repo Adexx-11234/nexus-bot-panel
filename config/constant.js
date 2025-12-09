@@ -45,3 +45,19 @@ export const CONNECTION_STATES = {
   PAIRING: "pairing",
   ERROR: "error",
 }
+
+// Storage configuration constants
+export const STORAGE_CONFIG = {
+  // Storage type: 'mongo' or 'file'
+  TYPE: process.env.SESSION_STORAGE_TYPE || "mongo",
+  // Auth sessions directory for file-based storage
+  AUTH_SESSIONS_DIR: process.env.AUTH_SESSIONS_DIR || "./auth_sessions",
+  // Active sockets storage: 'memory' or 'file'
+  SOCKETS_STORAGE: process.env.SOCKETS_STORAGE_TYPE || "file",
+  // Sockets state file path
+  SOCKETS_STATE_FILE: process.env.SOCKETS_STATE_FILE || "./auth_sessions/.sockets_state.json",
+}
+
+// Helper to check storage type
+export const isFileBasedStorage = () => STORAGE_CONFIG.TYPE === "file"
+export const isMongoBasedStorage = () => STORAGE_CONFIG.TYPE === "mongo"

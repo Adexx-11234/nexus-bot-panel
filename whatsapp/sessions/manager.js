@@ -2,6 +2,7 @@ import { createComponentLogger } from "../../utils/logger.js"
 import { SessionState } from "./state.js"
 import { WebSessionDetector } from "./detector.js"
 import { SessionEventHandlers } from "./handlers.js"
+import { STORAGE_CONFIG, isFileBasedStorage } from "../../config/constant.js"
 
 const logger = createComponentLogger("SESSION_MANAGER")
 
@@ -23,7 +24,8 @@ export class SessionManager {
     this.fileManager = null
     this.eventDispatcher = null
 
-    // Session tracking
+    // For now, keep using Map for in-memory sockets (they can't be serialized)
+    // But we'll persist metadata about active sessions
     this.activeSockets = new Map()
     this.sessionState = new SessionState()
     this.webSessionDetector = null
@@ -42,7 +44,7 @@ export class SessionManager {
     // Configuration
     this.eventHandlersEnabled = false
     this.maxSessions = 200
-    this.concurrencyLimit = 10 // Increased from 8 to 10
+    this.concurrencyLimit = 10
     this.isInitialized = false
 
     // Event handlers helper
@@ -52,6 +54,7 @@ export class SessionManager {
 
     logger.info("Session manager created (maxSessions: 200)")
     logger.info(`515 Flow: ${ENABLE_515_FLOW ? "ENABLED" : "DISABLED"}`)
+    logger.info(`Storage Mode: ${STORAGE_CONFIG.TYPE}`)
   }
 
   _startTrackingCleanup() {
@@ -94,7 +97,7 @@ export class SessionManager {
       logger.debug(
         `Memory: RSS ${Math.round(memUsage.rss / 1024 / 1024)}MB, Heap ${Math.round(memUsage.heapUsed / 1024 / 1024)}MB/${Math.round(memUsage.heapTotal / 1024 / 1024)}MB`,
       )
-    }, 60000) // Every minute
+    }, 60000)
   }
 
   /**
@@ -103,6 +106,7 @@ export class SessionManager {
   async initialize() {
     try {
       logger.info("Initializing session manager...")
+      logger.info(`Using ${STORAGE_CONFIG.TYPE} storage mode`)
 
       // Initialize storage
       await this._initializeStorage()
@@ -110,8 +114,9 @@ export class SessionManager {
       // Initialize connection manager
       await this._initializeConnectionManager()
 
-      // Wait for MongoDB connection
-      await this._waitForMongoDB()
+      if (!isFileBasedStorage()) {
+        await this._waitForMongoDB()
+      }
 
       logger.info("Session manager initialization complete")
       return true
@@ -141,7 +146,9 @@ export class SessionManager {
 
     this.fileManager = new FileManager(this.sessionDir)
     this.connectionManager = new ConnectionManager()
-    this.connectionManager.initialize(this.fileManager, this.storage.isMongoConnected ? this.storage.client : null)
+
+    const mongoClient = !isFileBasedStorage() && this.storage.isMongoConnected ? this.storage.client : null
+    this.connectionManager.initialize(this.fileManager, mongoClient)
 
     logger.info("Connection manager initialized")
   }
@@ -151,6 +158,11 @@ export class SessionManager {
    * @private
    */
   async _waitForMongoDB(maxWaitTime = 10000) {
+    if (isFileBasedStorage()) {
+      logger.info("File-based storage mode - skipping MongoDB wait")
+      return true
+    }
+
     const startTime = Date.now()
 
     while (Date.now() - startTime < maxWaitTime) {
@@ -175,7 +187,9 @@ export class SessionManager {
         await this.initialize()
       }
 
-      await this._waitForMongoDB()
+      if (!isFileBasedStorage()) {
+        await this._waitForMongoDB()
+      }
 
       const existingSessions = await this._getActiveSessionsFromDatabase()
 
@@ -443,7 +457,7 @@ export class SessionManager {
         }
       }
 
-      // Create socket connection
+      // Create socket connection (store gets bound inside createConnection)
       const sock = await this.connectionManager.createConnection(sessionId, phoneNumber, callbacks, allowPairing)
 
       if (!sock) {
@@ -586,13 +600,13 @@ export class SessionManager {
    */
   async _cleanupSocket(sessionId, sock) {
     try {
-      // ✅ Cleanup session store first
+      // Cleanup session store first
       if (sock._storeCleanup) {
         sock._storeCleanup()
       }
 
       // Delete store from config - FIXED IMPORT PATH
-      const { deleteSessionStore } = await import("../core/index.js") // ✅ This is CORRECT
+      const { deleteSessionStore } = await import("../core/index.js") // This is CORRECT
       deleteSessionStore(sessionId)
 
       // Remove event listeners
@@ -609,7 +623,7 @@ export class SessionManager {
       sock.user = null
       sock.eventHandlersSetup = false
       sock.connectionCallbacks = null
-      sock._sessionStore = null // ✅ This is CORRECT
+      sock._sessionStore = null // This is CORRECT
 
       logger.debug(`Socket cleaned up for ${sessionId}`)
       return true
@@ -681,8 +695,8 @@ export class SessionManager {
       this.activeSockets.delete(sessionId)
       this.sessionState.delete(sessionId)
       this.initializingSessions.delete(sessionId)
-      this.detectedWebSessions.delete(sessionId)
       this.voluntarilyDisconnected.delete(sessionId)
+      this.detectedWebSessions.delete(sessionId)
 
       await this.storage.completelyDeleteSession(sessionId)
       await this.connectionManager.cleanupAuthState(sessionId)
@@ -716,8 +730,13 @@ export class SessionManager {
     const sock = this.activeSockets.get(sessionId)
 
     if (!sock && sessionId) {
-      const { invalidateSessionLookupCache } = require("../utils/index.js")
-      invalidateSessionLookupCache(sessionId)
+      import("../utils/index.js")
+        .then(({ invalidateSessionLookupCache }) => {
+          invalidateSessionLookupCache(sessionId)
+        })
+        .catch((err) => {
+          logger.error(`Failed to invalidate cache for ${sessionId}:`, err)
+        })
     }
 
     return sock

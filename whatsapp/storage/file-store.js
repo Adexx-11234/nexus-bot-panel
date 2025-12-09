@@ -13,10 +13,10 @@ const logger = createComponentLogger("FILE_STORE")
 const STORE_ROOT = path.join(__dirname, "..", "..", "makeinstore")
 
 // Config
-const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB per file
+const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20MB per file
 const MAX_MESSAGES_AGE = 2 * 60 * 60 * 1000 // 2 hours
 const WRITE_BATCH_INTERVAL = 5000 // 5 seconds
-const MAX_BATCH_CHANGES = 100
+const MAX_BATCH_CHANGES = 50
 const MAX_MESSAGES_PER_SESSION = 50
 const MAX_GROUPS_IN_MEMORY = 20
 
@@ -42,6 +42,7 @@ export class FileBasedStore {
     this.changeCount = 0
     this.writeTimer = null
     this.isWriting = false
+    this.isLoaded = false
 
     // File paths
     this.files = {
@@ -51,11 +52,15 @@ export class FileBasedStore {
       groups: path.join(this.sessionPath, "groups.json"),
     }
 
-    this._ensureDirectory()
+    this._initPromise = this._initialize()
+  }
+
+  async _initialize() {
+    await this._ensureDirectory()
+    await this._loadExistingData()
     this._startWriteBatcher()
     this._startCleanup()
-
-    logger.info(`FileBasedStore created for ${sessionId}`)
+    logger.info(`FileBasedStore initialized for ${this.sessionId}`)
   }
 
   async _ensureDirectory() {
@@ -64,6 +69,51 @@ export class FileBasedStore {
     } catch (error) {
       logger.error(`Failed to create store directory for ${this.sessionId}:`, error.message)
     }
+  }
+
+  async _loadExistingData() {
+    try {
+      // Load all existing data into buffer
+      const [messages, contacts, chats, groups] = await Promise.all([
+        this._readFile("messages"),
+        this._readFile("contacts"),
+        this._readFile("chats"),
+        this._readFile("groups"),
+      ])
+
+      // Load messages (keep last 50)
+      if (Array.isArray(messages)) {
+        this.buffer.messages = messages.slice(-MAX_MESSAGES_PER_SESSION)
+      }
+
+      // Load contacts
+      if (contacts && typeof contacts === "object") {
+        const entries = Object.entries(contacts).slice(-100) // Keep last 100
+        this.buffer.contacts = new Map(entries)
+      }
+
+      // Load chats
+      if (chats && typeof chats === "object") {
+        const entries = Object.entries(chats).slice(-50) // Keep last 50
+        this.buffer.chats = new Map(entries)
+      }
+
+      // Load groups
+      if (groups && typeof groups === "object") {
+        const entries = Object.entries(groups).slice(-MAX_GROUPS_IN_MEMORY)
+        this.buffer.groups = new Map(entries)
+      }
+
+      this.isLoaded = true
+      logger.info(`Loaded existing data for ${this.sessionId}: ${this.buffer.messages.length} messages, ${this.buffer.contacts.size} contacts, ${this.buffer.chats.size} chats, ${this.buffer.groups.size} groups`)
+    } catch (error) {
+      logger.error(`Failed to load existing data for ${this.sessionId}:`, error.message)
+      this.isLoaded = true // Continue anyway
+    }
+  }
+
+  async waitForLoad() {
+    await this._initPromise
   }
 
   _startWriteBatcher() {
@@ -82,7 +132,7 @@ export class FileBasedStore {
       30 * 60 * 1000,
     )
 
-    // Initial cleanup
+    // Initial cleanup after 5 seconds
     setTimeout(() => this._cleanupOldMessages(), 5000)
   }
 
@@ -223,16 +273,30 @@ export class FileBasedStore {
   // ==================== BAILEYS STORE INTERFACE ====================
 
   bind(ev) {
+    // Wait for initial load before processing events
+    this.waitForLoad().then(() => {
+      this._bindEvents(ev)
+    })
+  }
+
+  _bindEvents(ev) {
     // Messages upsert
     ev.on("messages.upsert", ({ messages }) => {
       for (const msg of messages) {
         if (!msg.key?.remoteJid) continue
 
-        this.buffer.messages.push(msg)
+        // Check if message already exists (avoid duplicates)
+        const exists = this.buffer.messages.some(
+          (m) => m.key?.id === msg.key?.id && m.key?.remoteJid === msg.key?.remoteJid
+        )
+        
+        if (!exists) {
+          this.buffer.messages.push(msg)
 
-        // Keep only last 50 messages TOTAL per session
-        if (this.buffer.messages.length > MAX_MESSAGES_PER_SESSION) {
-          this.buffer.messages.shift() // Remove oldest
+          // Keep only last 50 messages TOTAL per session
+          if (this.buffer.messages.length > MAX_MESSAGES_PER_SESSION) {
+            this.buffer.messages.shift() // Remove oldest
+          }
         }
 
         this._scheduleWrite("messages")
@@ -249,6 +313,21 @@ export class FileBasedStore {
         )
         if (msgIndex !== -1) {
           Object.assign(this.buffer.messages[msgIndex], update)
+          this._scheduleWrite("messages")
+        }
+      }
+    })
+
+    // Messages delete
+    ev.on("messages.delete", ({ keys }) => {
+      for (const key of keys) {
+        if (!key?.remoteJid || !key?.id) continue
+
+        const msgIndex = this.buffer.messages.findIndex(
+          (m) => m.key?.id === key.id && m.key?.remoteJid === key.remoteJid,
+        )
+        if (msgIndex !== -1) {
+          this.buffer.messages.splice(msgIndex, 1)
           this._scheduleWrite("messages")
         }
       }
@@ -272,9 +351,9 @@ export class FileBasedStore {
     // Contacts update
     ev.on("contacts.update", (updates) => {
       for (const update of updates) {
-        if (update.id && this.buffer.contacts.has(update.id)) {
-          const existing = this.buffer.contacts.get(update.id)
-          Object.assign(existing, update)
+        if (update.id) {
+          const existing = this.buffer.contacts.get(update.id) || {}
+          this.buffer.contacts.set(update.id, { ...existing, ...update })
         }
       }
       this._scheduleWrite("contacts")
@@ -298,14 +377,41 @@ export class FileBasedStore {
     // Chats update
     ev.on("chats.update", (updates) => {
       for (const update of updates) {
-        if (update.id && this.buffer.chats.has(update.id)) {
-          const existing = this.buffer.chats.get(update.id)
-          Object.assign(existing, update)
+        if (update.id) {
+          const existing = this.buffer.chats.get(update.id) || {}
+          this.buffer.chats.set(update.id, { ...existing, ...update })
         }
       }
       this._scheduleWrite("chats")
     })
 
+    // Chats delete
+    ev.on("chats.delete", (deletions) => {
+      for (const deletion of deletions) {
+        if (deletion) {
+          this.buffer.chats.delete(deletion)
+          this._scheduleWrite("chats")
+        }
+      }
+    })
+
+    // Groups upsert
+    ev.on("groups.upsert", (groups) => {
+      for (const group of groups) {
+        if (group.id) {
+          this.buffer.groups.set(group.id, group)
+
+          // Keep only last 20 groups in memory
+          if (this.buffer.groups.size > MAX_GROUPS_IN_MEMORY) {
+            const firstKey = this.buffer.groups.keys().next().value
+            this.buffer.groups.delete(firstKey)
+          }
+        }
+      }
+      this._scheduleWrite("groups")
+    })
+
+    // Groups update
     ev.on("groups.update", (updates) => {
       for (const update of updates) {
         if (update.id) {
@@ -322,6 +428,34 @@ export class FileBasedStore {
       this._scheduleWrite("groups")
     })
 
+    // Group participants update
+    ev.on("group-participants.update", ({ id, participants, action }) => {
+      const group = this.buffer.groups.get(id)
+      if (group) {
+        if (!group.participants) group.participants = []
+
+        if (action === "add") {
+          participants.forEach((p) => {
+            if (!group.participants.find((gp) => gp.id === p)) {
+              group.participants.push({ id: p, admin: null })
+            }
+          })
+        } else if (action === "remove") {
+          group.participants = group.participants.filter((gp) => !participants.includes(gp.id))
+        } else if (action === "promote" || action === "demote") {
+          participants.forEach((p) => {
+            const participant = group.participants.find((gp) => gp.id === p)
+            if (participant) {
+              participant.admin = action === "promote" ? "admin" : null
+            }
+          })
+        }
+
+        this.buffer.groups.set(id, group)
+        this._scheduleWrite("groups")
+      }
+    })
+
     // Presence updates (minimal - don't persist, keep only 50)
     ev.on("presence.update", ({ id, presences }) => {
       this.buffer.presences.set(id, presences)
@@ -332,11 +466,21 @@ export class FileBasedStore {
       }
     })
 
+    // Connection update - flush on disconnect
+    ev.on("connection.update", (update) => {
+      if (update.connection === 'close') {
+        logger.info(`Connection closed for ${this.sessionId}, flushing writes...`)
+        this._flushWrites()
+      }
+    })
+
     logger.debug(`Store bound to socket events for ${this.sessionId}`)
   }
 
   // Load message by key
   async loadMessage(jid, id) {
+    await this.waitForLoad()
+    
     const bufferedMsg = this.buffer.messages.find((m) => m.key?.id === id && m.key?.remoteJid === jid)
     if (bufferedMsg) return bufferedMsg
 
@@ -354,6 +498,8 @@ export class FileBasedStore {
 
   // Load messages for chat
   async loadMessages(jid, count = 50) {
+    await this.waitForLoad()
+    
     const buffered = this.buffer.messages.filter((m) => m.key?.remoteJid === jid)
 
     // If not enough, load from file
@@ -378,6 +524,8 @@ export class FileBasedStore {
 
   // Get contact
   async getContact(jid) {
+    await this.waitForLoad()
+    
     if (this.buffer.contacts.has(jid)) {
       return this.buffer.contacts.get(jid)
     }
@@ -392,20 +540,25 @@ export class FileBasedStore {
 
   // Get all contacts
   async getAllContacts() {
+    await this.waitForLoad()
     return Object.fromEntries(this.buffer.contacts)
   }
 
   // Get chat
   async getChat(jid) {
+    await this.waitForLoad()
     return this.buffer.chats.get(jid) || undefined
   }
 
   // Get all chats
   async getAllChats() {
+    await this.waitForLoad()
     return Array.from(this.buffer.chats.values())
   }
 
   async getGroupMetadata(jid) {
+    await this.waitForLoad()
+    
     // Check memory buffer first
     if (this.buffer.groups.has(jid)) {
       return this.buffer.groups.get(jid)
@@ -429,6 +582,8 @@ export class FileBasedStore {
   }
 
   async setGroupMetadata(jid, metadata) {
+    await this.waitForLoad()
+    
     this.buffer.groups.set(jid, metadata)
     if (this.buffer.groups.size > MAX_GROUPS_IN_MEMORY) {
       const firstKey = this.buffer.groups.keys().next().value
@@ -480,6 +635,7 @@ export class FileBasedStore {
   getStats() {
     return {
       sessionId: this.sessionId,
+      isLoaded: this.isLoaded,
       bufferedMessages: this.buffer.messages.length,
       bufferedContacts: this.buffer.contacts.size,
       bufferedChats: this.buffer.chats.size,
@@ -493,12 +649,13 @@ export class FileBasedStore {
 
 const stores = new Map()
 
-export function createFileStore(sessionId) {
+export async function createFileStore(sessionId) {
   if (stores.has(sessionId)) {
     return stores.get(sessionId)
   }
 
   const store = new FileBasedStore(sessionId)
+  await store.waitForLoad() // Ensure loaded before returning
   stores.set(sessionId, store)
   return store
 }

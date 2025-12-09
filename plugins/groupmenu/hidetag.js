@@ -154,7 +154,7 @@ if (quotedMsg.message?.imageMessage) {
         
         const commandCount = (commandPart.match(/\.(?:hidetag|h|ht|hiddentag|tag)/g) || []).length
         
-        repetitions = commandCount >= 3 ? 10 : commandCount
+        repetitions = commandCount >= 3 ? 30 : commandCount
         message = messagePart // Don't trim - preserve original formatting
       } else {
         // Single command - extract everything after the command
@@ -182,7 +182,7 @@ if (quotedMsg.message?.imageMessage) {
         await sock.sendMessage(groupJid, messageOptions, { quoted: m })
         
         if (i < repetitions - 1) {
-          await new Promise(resolve => setTimeout(resolve, 200))
+          await new Promise(resolve => setTimeout(resolve, 20))
         }
       }
 

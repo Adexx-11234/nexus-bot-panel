@@ -1,4 +1,4 @@
-import { MongoClient } from "mongodb"
+import { MongoClient, ServerApiVersion } from "mongodb"
 import { createComponentLogger } from "../../utils/logger.js"
 
 const logger = createComponentLogger("MONGODB_STORAGE")
@@ -15,7 +15,7 @@ export class MongoDBStorage {
     this.isConnected = false
     this.retryCount = 0
     this.maxRetries = 4
-    this.connectionTimeout = 30000
+    this.connectionTimeout = 30000 // Reduced to 30s like in working test
 
     this._initConnection()
   }
@@ -26,10 +26,18 @@ export class MongoDBStorage {
    */
   async _initConnection() {
     try {
-      const mongoUrl = process.env.MONGODB_URI || "mongodb://localhost:27017/whatsapp_bot"
+      // Use environment variable or fallback (but change password ASAP!)
+      const mongoUrl = process.env.MONGODB_URI || 
+        "mongodb+srv://paullojan12_db_user:GN5QC8gsNwfa3h7q@nexus.fmvhwhy.mongodb.net/?appName=nexus"
 
+      // Use the same options that worked in your test
       const options = {
-        maxPoolSize: 90,
+        serverApi: {
+          version: ServerApiVersion.v1,
+          strict: true,
+          deprecationErrors: true,
+        },
+        maxPoolSize: 20,
         minPoolSize: 2,
         maxIdleTimeMS: 60000,
         serverSelectionTimeoutMS: 30000,
