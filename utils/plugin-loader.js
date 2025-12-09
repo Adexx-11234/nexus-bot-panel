@@ -1,31 +1,36 @@
-// Optimized Plugin System with Full Directory Watching
+// ============================================================
+// COMPLETE Plugin Loader - Neatly Organized
+// Location: src/utils/plugin-loader.js
+// ============================================================
+
 import fs from "fs/promises"
 import fsr from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
 import chalk from "chalk"
-import { isGroupAdmin } from "../whatsapp/groups/index.js"
+import { isGroupAdmin, isBotAdmin } from "../whatsapp/index.js"
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
+// ==================== LOGGING UTILITIES ====================
 const log = {
   info: (msg) => console.log(chalk.blue("[INFO]"), msg),
   warn: (msg) => console.log(chalk.yellow("[WARN]"), msg),
-  debug: (msg) => /*console.log(chalk.cyan('[DEBUG]'), msg)*/ null,
+  debug: (msg) => null, // Disabled by default
   error: (msg, err) => console.log(chalk.red("[ERROR]"), msg, err?.message || ""),
 }
 
 // ==================== MESSAGE DEDUPLICATION SYSTEM ====================
 /**
  * MessageDeduplicator - Prevents multiple bot sessions from processing same message
- *
  * Fire and forget - reduced TTL to 10s, cleanup every 10s for fast RAM release
  */
 class MessageDeduplicator {
   constructor() {
     this.processedMessages = new Map()
     this.cleanupInterval = 10000 // 10 seconds
-    this.maxAge = 10000 // 10 seconds TTL (fire and forget)
+    this.maxAge = 10000 // 10 seconds TTL
 
     this.startCleanup()
 
@@ -124,9 +129,11 @@ class MessageDeduplicator {
   }
 }
 
-const commandIndexCache = new Map() // command -> pluginId (prebuilt index)
+// ==================== COMMAND INDEX CACHE ====================
+const commandIndexCache = new Map() // command -> pluginId
 let commandIndexBuilt = false
 
+// ==================== PLUGIN LOADER CLASS ====================
 class PluginLoader {
   constructor() {
     this.plugins = new Map()
@@ -148,6 +155,8 @@ class PluginLoader {
 
     log.info(`Plugin loader initialized (Auto-reload: ${this.autoReloadEnabled ? "ON" : "OFF"})`)
   }
+
+  // ==================== UTILITY METHODS ====================
 
   _startTempCleanup() {
     setInterval(() => {
@@ -183,7 +192,6 @@ class PluginLoader {
     let removed = 0
     for (const [jid, data] of this.tempContactStore.entries()) {
       if (now - data.timestamp > 30000) {
-        // 30 seconds
         this.tempContactStore.delete(jid)
         removed++
       }
@@ -335,14 +343,11 @@ class PluginLoader {
         const fullPath = path.join(dirPath, filename)
 
         if (filename.endsWith(".js")) {
-          // Check if it's a plugin file
           if (fullPath.includes(this.pluginDir)) {
-            // Hot-reload PLUGIN file
             const relativePath = path.relative(this.pluginDir, dirPath)
             const pluginCategory = relativePath ? relativePath.split(path.sep)[0] : category
             this.handleFileChange(dirPath, filename, pluginCategory)
           } else {
-            // Hot-reload ANY other JavaScript file (utilities, helpers, etc.)
             this.handleAnyFileChange(fullPath)
           }
         }
@@ -397,12 +402,10 @@ class PluginLoader {
       try {
         const relativePath = path.relative(this.projectRoot, fullPath)
 
-        // Clear Node's require cache (if using CommonJS)
         if (require.cache[fullPath]) {
           delete require.cache[fullPath]
         }
 
-        // Hot-reload with cache busting
         const moduleUrl = `file://${fullPath}?t=${Date.now()}`
         await import(moduleUrl)
 
@@ -417,6 +420,7 @@ class PluginLoader {
 
     this.reloadTimeouts.set(reloadKey, timeout)
   }
+
   async clearWatchers() {
     this.watchers.forEach((watcher) => {
       try {
@@ -428,20 +432,18 @@ class PluginLoader {
     this.reloadTimeouts.forEach((timeout) => clearTimeout(timeout))
     this.reloadTimeouts.clear()
   }
+
   shouldCheckDatabaseUpdate(plugin, commandName) {
     if (!plugin || !commandName) return false
     
-    // Method 1: Check if it's a groupmenu command
     if (plugin.category === 'groupmenu') {
       return true
     }
     
-    // Method 2: Check if command requires admin permissions (boolean flags)
     if (plugin.adminOnly === true || plugin.groupAdmin === true) {
       return true
     }
     
-    // Method 3: Check permissions array for "admin" or "group_admin"
     if (Array.isArray(plugin.permissions)) {
       const hasAdminPerm = plugin.permissions.some(perm => {
         const p = String(perm).toLowerCase()
@@ -450,7 +452,6 @@ class PluginLoader {
       if (hasAdminPerm) return true
     }
     
-    // Method 4: Fallback - specific critical commands that MUST be deduplicated
     const criticalCommands = [
       'antilink', 'anticall', 'antibot', 'antispam', 'antiraid',
       'antiimage', 'antivideo', 'antiaudio', 'antidocument', 'antisticker',
@@ -462,7 +463,7 @@ class PluginLoader {
     
     return criticalCommands.includes(commandName.toLowerCase())
   }
-    
+
   // ==================== COMMAND EXECUTION ====================
 
   _buildCommandIndex() {
@@ -478,13 +479,11 @@ class PluginLoader {
     if (!commandName || typeof commandName !== "string") return null
     const normalizedCommand = commandName.toLowerCase().trim()
 
-    // Use cached index for O(1) lookup
     if (commandIndexBuilt && commandIndexCache.has(normalizedCommand)) {
       const pluginId = commandIndexCache.get(normalizedCommand)
       return this.plugins.get(pluginId)
     }
 
-    // Fallback to original lookup
     const pluginId = this.commands.get(normalizedCommand)
     return pluginId ? this.plugins.get(pluginId) : null
   }
@@ -578,7 +577,7 @@ class PluginLoader {
       return modeSettings.mode !== "self"
     } catch (error) {
       log.error("Error checking bot mode:", error)
-      return true // Allow on error
+      return true
     }
   }
 
@@ -616,13 +615,11 @@ class PluginLoader {
 
     const result = await this.checkPluginPermissions(sock, plugin, m)
 
-    // Cache the result
     this.permissionCache.set(cacheKey, {
       result,
       timestamp: Date.now(),
     })
 
-    // Cleanup old cache entries
     if (this.permissionCache.size > 500) {
       const entries = Array.from(this.permissionCache.entries())
       const toRemove = entries.slice(0, 200)
@@ -648,7 +645,7 @@ class PluginLoader {
         return { allowed: true }
       }
 
-      // VIP menu - VIP and owner only
+      // VIP menu
       if (commandName === "vipmenu") {
         const { VIPQueries } = await import("../database/query.js")
         const { VIPHelper } = await import("../whatsapp/index.js")
@@ -669,18 +666,17 @@ class PluginLoader {
         return { allowed: true }
       }
 
-      // Game menu - everyone can use
+      // Game menu
       if (plugin.category === "gamemenu") {
         return { allowed: true }
       }
 
-      // === CRITICAL: GROUP PERMISSION LOGIC ===
-      // In groups: ONLY bot owner (m.sender === sock.user.id) and group admins can use commands
+      // ✅ CRITICAL: GROUP PERMISSION LOGIC
+      // In groups: ONLY bot owner and group admins can use commands
       if (m.isGroup) {
-        // Fresh admin check - always get latest metadata
+        // Fresh admin check
         const isAdmin = await isGroupAdmin(sock, m.chat, m.sender)
 
-        // Only bot owner or group admin allowed
         if (!m.isCreator && !isAdmin) {
           return { allowed: false, silent: true }
         }
@@ -734,7 +730,8 @@ class PluginLoader {
       return { allowed: false, message: "❌ Permission check failed.", silent: false }
     }
   }
-async executePluginWithFallback(sock, sessionId, args, m, plugin) {
+
+  async executePluginWithFallback(sock, sessionId, args, m, plugin) {
     try {
       if (m.isGroup && (!m.hasOwnProperty('isAdmin') || !m.hasOwnProperty('isBotAdmin'))) {
         m.isAdmin = await isGroupAdmin(sock, m.chat, m.sender)
@@ -765,10 +762,8 @@ async executePluginWithFallback(sock, sessionId, args, m, plugin) {
   }
 
   checkIsBotOwner(sock, userJid, fromMe = false) {
-    // If fromMe is true, it's the bot owner
     if (fromMe === true) return true
 
-    // Fallback: compare phone numbers
     try {
       if (!sock?.user?.id || !userJid) return false
 
@@ -807,37 +802,7 @@ async executePluginWithFallback(sock, sessionId, args, m, plugin) {
 
     return "user"
   }
-async executePluginWithFallback(sock, sessionId, args, m, plugin) {
-    try {
-      if (m.isGroup && (!m.hasOwnProperty('isAdmin') || !m.hasOwnProperty('isBotAdmin'))) {
-        m.isAdmin = await isGroupAdmin(sock, m.chat, m.sender)
-        m.isBotAdmin = await isBotAdmin(sock, m.chat)
-      }
 
-      if (plugin.execute.length === 4) {
-        return await plugin.execute(sock, sessionId, args, m)
-      }
-      
-      if (plugin.execute.length === 3) {
-        const context = {
-          args: args || [],
-          quoted: m.quoted || null,
-          isAdmin: m.isAdmin || false,
-          isBotAdmin: m.isBotAdmin || false,
-          isCreator: m.isCreator || false,
-          store: null
-        }
-        return await plugin.execute(sock, m, context)
-      }
-
-      return await plugin.execute(sock, sessionId, args, m)
-    } catch (error) {
-      log.error(`Plugin execution failed for ${plugin.name}:`, error)
-      throw error
-    }
-  }
-
-    
   // ==================== HELPER METHODS ====================
 
   async extractPushName(sock, m) {
@@ -868,18 +833,16 @@ async executePluginWithFallback(sock, sessionId, args, m, plugin) {
       return this.generateFallbackName(m.sender)
     }
   }
-
-  async processAntiPlugins(sock, sessionId, m) {
-    // DEDUPLICATION: Generate message key
+    async processAntiPlugins(sock, sessionId, m) {
     const messageKey = this.deduplicator.generateKey(m.chat, m.key?.id)
     if (!messageKey) {
       log.warn("Cannot generate message key for anti-plugin processing")
       return
     }
 
-    for (const plugin of this.antiPlugins.values()) {
+    for (const [pluginId, plugin] of this.antiPlugins.entries()) {
       try {
-        if (!sock || !sessionId || !m || !plugin) continue
+        if (!plugin) continue
 
         let enabled = true
         if (typeof plugin.isEnabled === "function") {
@@ -893,20 +856,17 @@ async executePluginWithFallback(sock, sessionId, args, m, plugin) {
         }
         if (!shouldProcess) continue
 
-        // DEDUPLICATION: Try to acquire lock BEFORE processing
-        const actionKey = `anti-${plugin.name || "unknown"}` // e.g., 'anti-Anti-Link'
+        const actionKey = `anti-${plugin.name || "unknown"}`
 
         if (!this.deduplicator.tryLockForProcessing(messageKey, sessionId, actionKey)) {
           log.debug(`Skipping ${plugin.name} - already being processed by another session`)
-          continue // Another session is processing, SKIP
+          continue
         }
 
-        // Got lock - process the message
         if (typeof plugin.processMessage === "function") {
           await plugin.processMessage(sock, sessionId, m)
         }
 
-        // DEDUPLICATION: Mark as processed AFTER completion
         this.deduplicator.markAsProcessed(messageKey, sessionId, actionKey)
       } catch (pluginErr) {
         log.warn(`Anti-plugin error in ${plugin?.name || "unknown"}: ${pluginErr.message}`)
@@ -955,7 +915,7 @@ async executePluginWithFallback(sock, sessionId, args, m, plugin) {
       isInitialized: this.isInitialized,
       autoReloadEnabled: this.autoReloadEnabled,
       watchersActive: this.watchers.size,
-      deduplication: this.deduplicator.getStats(), // Add deduplicator stats
+      deduplication: this.deduplicator.getStats(),
     }
   }
 
@@ -972,6 +932,7 @@ async executePluginWithFallback(sock, sessionId, args, m, plugin) {
   }
 }
 
+// ==================== SINGLETON EXPORT ====================
 const pluginLoader = new PluginLoader()
 
 const shutdown = async () => {

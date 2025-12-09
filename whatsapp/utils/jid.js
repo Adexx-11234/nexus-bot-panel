@@ -5,8 +5,17 @@ import { createComponentLogger } from '../../utils/logger.js'
 const logger = createComponentLogger('JID_UTILS')
 
 /**
- * Normalize JID to standard format
- * Handles various WhatsApp ID formats including LID
+ * ============================================================================
+ * CORE JID NORMALIZATION - BAILEYS 7.X COMPATIBLE
+ * ============================================================================
+ * Handles :0, :1, :16 device suffixes added by Baileys 7.x multi-device
+ */
+
+/**
+ * Normalize JID - removes :0, :1, etc suffixes from Baileys 7.x
+ * Examples:
+ *   2348162352322:0@s.whatsapp.net → 2348162352322@s.whatsapp.net
+ *   120363418879636966@g.us → 120363418879636966@g.us (unchanged)
  */
 export function normalizeJid(jid) {
   if (!jid) return null
@@ -17,8 +26,17 @@ export function normalizeJid(jid) {
       return jid
     }
 
+    // ✅ CRITICAL: Remove :0, :1, :16, etc. suffix BEFORE decoding
+    // Format: 2348162352322:0@s.whatsapp.net → 2348162352322@s.whatsapp.net
+    let cleanedJid = jid
+    if (jid.includes(':') && jid.includes('@')) {
+      const [numberPart, domain] = jid.split('@')
+      const phoneNumber = numberPart.split(':')[0]
+      cleanedJid = `${phoneNumber}@${domain}`
+    }
+
     // Try to decode using Baileys
-    const decoded = jidDecode(jid)
+    const decoded = jidDecode(cleanedJid)
     if (decoded?.user) {
       // Handle group JIDs
       if (decoded.server === 'g.us') {
@@ -34,7 +52,7 @@ export function normalizeJid(jid) {
     logger.debug(`JID decode failed for ${jid}, using fallback`)
   }
 
-  // Fallback normalization
+  // Fallback normalization with device suffix removal
   return formatJid(jid)
 }
 
@@ -45,8 +63,16 @@ export function normalizeJid(jid) {
 export function formatJid(jid) {
   if (!jid) return null
 
-  // Remove extra characters
-  const cleaned = jid.replace(/[^\d@.]/g, '')
+  // ✅ Remove :0, :1, :16 device suffixes FIRST
+  let cleaned = jid
+  if (jid.includes(':') && jid.includes('@')) {
+    const [numberPart, domain] = jid.split('@')
+    const phoneNumber = numberPart.split(':')[0]
+    cleaned = `${phoneNumber}@${domain}`
+  }
+
+  // Remove extra characters (but keep @ and .)
+  cleaned = cleaned.replace(/[^\d@.]/g, '')
 
   // Already formatted group JID
   if (cleaned.includes('@g.us')) {
@@ -65,6 +91,12 @@ export function formatJid(jid) {
 
   return cleaned
 }
+
+/**
+ * ============================================================================
+ * JID TYPE CHECKING
+ * ============================================================================
+ */
 
 /**
  * Check if JID is a group
@@ -88,23 +120,105 @@ export function isLid(jid) {
 }
 
 /**
- * Extract phone number from JID
+ * Check if JID is a LID (alias for consistency)
+ */
+export function isLidJid(jid) {
+  return isLid(jid)
+}
+
+/**
+ * ============================================================================
+ * JID EXTRACTION AND PARSING
+ * ============================================================================
+ */
+
+/**
+ * Extract phone number from JID (without device suffix)
  */
 export function extractPhoneNumber(jid) {
   if (!jid) return null
 
   try {
-    const decoded = jidDecode(jid)
+    // ✅ Remove device suffix before extraction
+    const normalized = normalizeJid(jid)
+    const decoded = jidDecode(normalized)
     return decoded?.user || null
   } catch (error) {
     // Fallback: extract manually
-    const match = jid.match(/^(\d+)/)
+    const cleaned = jid.split(':')[0] // Remove :0, :1, etc.
+    const match = cleaned.match(/^(\d+)/)
     return match ? match[1] : null
   }
 }
 
 /**
+ * Extract phone number (alias for compatibility)
+ */
+export function extractPhone(jid) {
+  return extractPhoneNumber(jid)
+}
+
+/**
+ * Parse JID into components
+ */
+export function parseJid(jid) {
+  if (!jid) return null
+
+  try {
+    const normalized = normalizeJid(jid)
+    const decoded = jidDecode(normalized)
+    return {
+      user: decoded.user,
+      server: decoded.server,
+      full: normalized,
+      original: jid,
+      isGroup: decoded.server === 'g.us',
+      isUser: decoded.server === 's.whatsapp.net',
+      isLid: jid.endsWith('@lid'),
+      hasDeviceSuffix: jid.includes(':')
+    }
+  } catch (error) {
+    return null
+  }
+}
+
+/**
+ * Get display ID (without server part)
+ */
+export function getDisplayId(jid) {
+  if (!jid) return 'Unknown'
+
+  const phone = extractPhoneNumber(jid)
+  return phone || jid.split('@')[0].split(':')[0] || 'Unknown'
+}
+
+/**
+ * Format JID for display (clean version)
+ */
+export function formatJidForDisplay(jid) {
+  if (!jid) return 'Unknown'
+  
+  const normalized = normalizeJid(jid)
+  const phone = normalized.split('@')[0]
+  
+  // For group JIDs, return as-is
+  if (normalized.endsWith('@g.us')) {
+    return normalized
+  }
+  
+  // For user JIDs, return just the phone number
+  return phone
+}
+
+/**
+ * ============================================================================
+ * JID COMPARISON AND VALIDATION
+ * ============================================================================
+ */
+
+/**
  * Compare two JIDs (check if they're the same user)
+ * Ignores device suffixes
  */
 export function isSameJid(jid1, jid2) {
   if (!jid1 || !jid2) return false
@@ -114,6 +228,19 @@ export function isSameJid(jid1, jid2) {
 
   return normalized1 === normalized2
 }
+
+/**
+ * Check if two JIDs are equal (alias)
+ */
+export function areJidsEqual(jid1, jid2) {
+  return isSameJid(jid1, jid2)
+}
+
+/**
+ * ============================================================================
+ * JID CREATION AND TRANSFORMATION
+ * ============================================================================
+ */
 
 /**
  * Create JID from phone number
@@ -132,35 +259,31 @@ export function createJidFromPhone(phoneNumber) {
 }
 
 /**
- * Parse JID into components
+ * Convert to standard JID format
  */
-export function parseJid(jid) {
+export function toStandardJid(jid) {
   if (!jid) return null
-
-  try {
-    const decoded = jidDecode(jid)
-    return {
-      user: decoded.user,
-      server: decoded.server,
-      full: jid,
-      isGroup: decoded.server === 'g.us',
-      isUser: decoded.server === 's.whatsapp.net',
-      isLid: jid.endsWith('@lid')
-    }
-  } catch (error) {
-    return null
+  
+  const normalized = normalizeJid(jid)
+  
+  // Already in standard format
+  if (normalized.includes('@')) {
+    return normalized
   }
+  
+  // Just a phone number, add @s.whatsapp.net
+  if (/^\d+$/.test(normalized)) {
+    return `${normalized}@s.whatsapp.net`
+  }
+  
+  return normalized
 }
 
 /**
- * Get display ID (without server part)
+ * ============================================================================
+ * BATCH OPERATIONS
+ * ============================================================================
  */
-export function getDisplayId(jid) {
-  if (!jid) return 'Unknown'
-
-  const phone = extractPhoneNumber(jid)
-  return phone || jid.split('@')[0] || 'Unknown'
-}
 
 /**
  * Batch normalize JIDs
@@ -171,8 +294,129 @@ export function normalizeJids(jids) {
 }
 
 /**
+ * ============================================================================
+ * BAILEYS 7.X MESSAGE KEY HELPERS
+ * ============================================================================
+ */
+
+/**
+ * Get participant JID from message key
+ * Handles both participantAlt (Baileys 7.x) and participant
+ * Returns normalized JID without device suffix
+ */
+export function getParticipantFromKey(messageKey) {
+  if (!messageKey) return null
+  
+  // Baileys 7.x: participantAlt is the phone number (PN)
+  if (messageKey.participantAlt) {
+    return normalizeJid(messageKey.participantAlt)
+  }
+  
+  // Fallback to participant (might be LID)
+  if (messageKey.participant) {
+    return normalizeJid(messageKey.participant)
+  }
+  
+  return null
+}
+
+/**
+ * Get sender JID from message key
+ * Handles both remoteJidAlt (Baileys 7.x) and remoteJid
+ * Returns normalized JID without device suffix
+ */
+export function getSenderFromKey(messageKey) {
+  if (!messageKey) return null
+  
+  // For DMs, use remoteJidAlt if available (Baileys 7.x)
+  if (messageKey.remoteJidAlt && !messageKey.remoteJid?.endsWith('@g.us')) {
+    return normalizeJid(messageKey.remoteJidAlt)
+  }
+  
+  // For groups, use participant
+  if (messageKey.remoteJid?.endsWith('@g.us')) {
+    return getParticipantFromKey(messageKey)
+  }
+  
+  // Fallback to remoteJid
+  return normalizeJid(messageKey.remoteJid)
+}
+
+/**
+ * Normalize message object - fixes all JIDs in message
+ * Removes all device suffixes (:0, :1, :16, etc.)
+ */
+export function normalizeMessage(message) {
+  if (!message || !message.key) return message
+  
+  const normalized = { ...message }
+  
+  // Normalize key JIDs
+  if (normalized.key.remoteJid) {
+    normalized.key.remoteJid = normalizeJid(normalized.key.remoteJid)
+  }
+  
+  if (normalized.key.participant) {
+    normalized.key.participant = normalizeJid(normalized.key.participant)
+  }
+  
+  if (normalized.key.remoteJidAlt) {
+    normalized.key.remoteJidAlt = normalizeJid(normalized.key.remoteJidAlt)
+  }
+  
+  if (normalized.key.participantAlt) {
+    normalized.key.participantAlt = normalizeJid(normalized.key.participantAlt)
+  }
+  
+  // Normalize top-level fields
+  if (normalized.participant) {
+    normalized.participant = normalizeJid(normalized.participant)
+  }
+  
+  if (normalized.sender) {
+    normalized.sender = normalizeJid(normalized.sender)
+  }
+  
+  if (normalized.chat) {
+    normalized.chat = normalizeJid(normalized.chat)
+  }
+  
+  // Normalize quoted message participant
+  if (normalized.message?.contextInfo?.participant) {
+    normalized.message.contextInfo.participant = normalizeJid(
+      normalized.message.contextInfo.participant
+    )
+  }
+  
+  if (normalized.message?.extendedTextMessage?.contextInfo?.participant) {
+    normalized.message.extendedTextMessage.contextInfo.participant = normalizeJid(
+      normalized.message.extendedTextMessage.contextInfo.participant
+    )
+  }
+  
+  return normalized
+}
+
+/**
+ * ============================================================================
+ * UTILITY FUNCTIONS
+ * ============================================================================
+ */
+
+/**
  * Create rate limit key from JID
  */
 export function createRateLimitKey(jid) {
-  return jid.replace(/[^\w]/g, '_')
+  const normalized = normalizeJid(jid)
+  return normalized ? normalized.replace(/[^\w]/g, '_') : null
+}
+
+/**
+ * Check if message should skip duplicate check
+ */
+export function shouldSkipDuplicateCheck(jid) {
+  // Skip for status/broadcast
+  if (jid === 'status@broadcast') return true
+  if (jid?.endsWith('@broadcast')) return true
+  return false
 }

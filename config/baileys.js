@@ -1,6 +1,6 @@
 import NodeCache from "node-cache"
 import { makeWASocket, Browsers } from "@whiskeysockets/baileys"
-import { createFileStore, deleteFileStore, recordSessionActivity } from "../whatsapp/index.js"
+import { createFileStore, deleteFileStore, getFileStore, recordSessionActivity } from "../whatsapp/index.js"
 import { logger } from "../utils/logger.js"
 import pino from "pino"
 
@@ -9,17 +9,19 @@ const baileysLogger = pino({
 })
 
 const groupCache = new NodeCache({
-  stdTTL: 60,
-  checkperiod: 5,
+  stdTTL: 90,
+  checkperiod: 9,
   useClones: false,
-  maxKeys: 500,
+  maxKeys: 900,
 })
+
+const msgRetryCounterCache = new NodeCache()
 
 const sessionLastActivity = new Map()
 const sessionLastMessage = new Map()
 const SESSION_CLEANUP_INTERVAL = 60 * 1000
 const SESSION_INACTIVITY_TIMEOUT = 10 * 60 * 1000
-const KEEPALIVE_INTERVAL = 25000
+const KEEPALIVE_INTERVAL = 5000
 const HEALTH_CHECK_TIMEOUT = 30 * 60 * 1000
 
 const defaultGetMessage = async (key) => {
@@ -30,13 +32,16 @@ export const baileysConfig = {
   logger: baileysLogger,
   printQRInTerminal: false,
   browser: Browsers.windows("safari"),
-  retryRequestDelayMs: 1500,
+  retryRequestDelayMs: 10,
   markOnlineOnConnect: true,
   getMessage: defaultGetMessage,
+  msgRetryCounterCache,
   version: [2, 3000, 1025190524],
-  syncFullHistory: false,
+  syncFullHistory: true,
   fireInitQueries: true,
-  maxMsgRetryCount: 20,
+  connectTimeoutMs: 800,
+  defaultQueryTimeoutMs: 1000,
+  maxMsgRetryCount: 10,
   keepAliveIntervalMs: KEEPALIVE_INTERVAL,
   patchMessageBeforeSending: (message) => {
     const requiresPatch = !!(message.buttonsMessage || message.templateMessage || message.listMessage)
@@ -55,8 +60,8 @@ export const baileysConfig = {
     }
     return message
   },
-  appStateSyncInitialTimeoutMs: 5000,
-  generateHighQualityLinkPreview: false,
+  appStateSyncInitialTimeoutMs: 500,
+  generateHighQualityLinkPreview: true,
 }
 
 export function getBaileysConfig() {
@@ -72,7 +77,7 @@ export const eventTypes = [
   "call",
 ]
 
-export function createSessionStore(sessionId) {
+export async function createSessionStore(sessionId) {
   const store = createFileStore(sessionId)
   sessionLastActivity.set(sessionId, Date.now())
   sessionLastMessage.set(sessionId, Date.now())
@@ -82,6 +87,12 @@ export function createSessionStore(sessionId) {
 
 export function getSessionStore(sessionId) {
   sessionLastActivity.set(sessionId, Date.now())
+      // Check if store already exists
+  const existingStore = getFileStore(sessionId)
+  if (existingStore) {
+    logger.debug(`[Store] Retrieved existing store for ${sessionId}`)
+    return existingStore
+  }
   return createSessionStore(sessionId)
 }
 
@@ -159,6 +170,7 @@ export function createBaileysSocket(authState, sessionId, getMessage = null) {
       ...baileysConfig,
       auth: authState,
       getMessage: getMessage || defaultGetMessage,
+      msgRetryCounterCache,
     })
 
     setupSocketDefaults(sock)
@@ -202,7 +214,7 @@ export function createBaileysSocket(authState, sessionId, getMessage = null) {
 export function setupSocketDefaults(sock) {
   try {
     if (sock.ev && typeof sock.ev.setMaxListeners === "function") {
-      sock.ev.setMaxListeners(1500)
+      sock.ev.setMaxListeners(9000)
     }
 
     sock.sessionId = null
@@ -424,9 +436,13 @@ export const getCacheStats = () => {
   }
 }
 
-export function bindStoreToSocket(sock, sessionId) {
+export async function bindStoreToSocket(sock, sessionId) {
   try {
-    const store = getSessionStore(sessionId)
+    const store = await getSessionStore(sessionId)
+    if (!store || typeof store.bind !== 'function') {
+      logger.error(`[Store] Invalid store object for ${sessionId}`)
+      return null
+    }
     store.bind(sock.ev)
 
     sock.getMessage = async (key) => {
