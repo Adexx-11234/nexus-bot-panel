@@ -1,7 +1,7 @@
 // plugins/download/ytsearch.js
 
 import youtubeDownloader from '../../lib/downloaders/index.js';
-import { generateWAMessageFromContent, WAProto as proto, prepareWAMessageMedia } from '@whiskeysockets/baileys';
+import { generateWAMessageFromContent, proto, prepareWAMessageMedia } from '@whiskeysockets/baileys';
 
 export default {
   name: "ytsearch",

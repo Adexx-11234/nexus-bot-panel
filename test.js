@@ -17,7 +17,7 @@ const logger = {
 const CONFIG = {
   // Global settings
   DRY_RUN: false, // Master switch - set false to execute
-  BATCH_SIZE: 20,
+  BATCH_SIZE: 50,
   MONGODB_URI: process.env.MONGODB_URI,
   
   // Operation flags - Enable/disable each operation independently
@@ -35,7 +35,7 @@ const CONFIG = {
       writeToSessions: true, // Update MongoDB sessions collection
       writeToPostgres: true, // Update PostgreSQL users table
       skipWebUsers: false, // Don't modify existing web users
-      updateExisting: false // If false, only create new records
+      updateExisting: true // If false, only create new records
     },
     
     // OPERATION 3: Create default passwords for web users without auth
@@ -48,9 +48,9 @@ const CONFIG = {
     
     // OPERATION 4: Clean old auth_baileys files
     cleanOldAuthFiles: {
-      enabled: true, // Set true to run this operation
+      enabled: false, // Set true to run this operation
       keepCredsJson: true, // Always keep creds.json
-      maxFilesPerSession: 2000, // Keep this many most recent files + creds.json
+      maxFilesPerSession: 1000, // Keep this many most recent files + creds.json
       skipWebUsers: false // Set true to skip web users
     }
   }

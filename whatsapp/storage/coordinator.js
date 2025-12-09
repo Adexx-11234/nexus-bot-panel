@@ -3,8 +3,6 @@ import { createComponentLogger } from "../../utils/logger.js"
 import { MongoDBStorage } from "./mongodb.js"
 import { PostgreSQLStorage } from "./postgres.js"
 import { FileManager } from "./file.js"
-import { STORAGE_CONFIG, isFileBasedStorage, isMongoBasedStorage } from "../../config/constant.js"
-import path from "path" // Added for _cleanupOrphanedFileSessions
 
 const logger = createComponentLogger("SESSION_STORAGE")
 
@@ -14,21 +12,9 @@ const WRITE_BUFFER_FLUSH_INTERVAL = 500
 
 export class SessionStorage {
   constructor() {
-    this.storageType = STORAGE_CONFIG.TYPE
-    logger.info(`Session storage initializing with ${this.storageType} mode`)
-
-    // Always initialize file manager as it's used for session metadata
-    this.fileManager = new FileManager()
-
-    // Only initialize MongoDB if we're using mongo storage
-    if (isMongoBasedStorage()) {
-      this.mongoStorage = new MongoDBStorage()
-    } else {
-      this.mongoStorage = { isConnected: false, sessions: null, client: null }
-      logger.info("MongoDB storage disabled - using file-based storage")
-    }
-
+    this.mongoStorage = new MongoDBStorage()
     this.postgresStorage = new PostgreSQLStorage()
+    this.fileManager = new FileManager()
 
     this.sessionCache = new Map()
     this.writeBuffer = new Map()
@@ -42,18 +28,15 @@ export class SessionStorage {
     this._startOrphanCleanup()
     this._startAggressiveCacheCleanup()
 
-    logger.info(`Session storage coordinator initialized (mode: ${this.storageType}, cache: 200 max, 30s TTL)`)
+    logger.info("Session storage coordinator initialized (cache: 200 max, 30s TTL)")
   }
 
   get isConnected() {
-    if (isFileBasedStorage()) {
-      return this.fileManager !== null || this.postgresStorage.isConnected
-    }
     return this.mongoStorage.isConnected || this.postgresStorage.isConnected || this.fileManager !== null
   }
 
   get isMongoConnected() {
-    return isMongoBasedStorage() && this.mongoStorage.isConnected
+    return this.mongoStorage.isConnected
   }
 
   get isPostgresConnected() {
@@ -128,16 +111,6 @@ export class SessionStorage {
   }
 
   async _writeToStorage(sessionId, sessionData) {
-    if (isFileBasedStorage()) {
-      // For file-based, write to file first, then postgres if available
-      const fileSaved = await this.fileManager.saveSession(sessionId, sessionData)
-      if (this.postgresStorage.isConnected) {
-        await this.postgresStorage.saveSession(sessionId, sessionData)
-      }
-      return fileSaved
-    }
-
-    // MongoDB mode
     if (this.mongoStorage.isConnected) {
       return await this.mongoStorage.saveSession(sessionId, sessionData)
     }
@@ -151,29 +124,18 @@ export class SessionStorage {
     try {
       let saved = false
 
-      if (isFileBasedStorage()) {
-        // File-based mode: save to file first
+      if (this.mongoStorage.isConnected) {
+        saved = await this.mongoStorage.saveSession(sessionId, sessionData)
+      }
+
+      if (this.postgresStorage.isConnected) {
+        const pgSaved = await this.postgresStorage.saveSession(sessionId, sessionData)
+        saved = saved || pgSaved
+      }
+
+      if (!saved) {
+        logger.warn(`DB unavailable for ${sessionId}, using file fallback`)
         saved = await this.fileManager.saveSession(sessionId, sessionData)
-
-        // Also save to postgres if available (for web users)
-        if (this.postgresStorage.isConnected) {
-          await this.postgresStorage.saveSession(sessionId, sessionData)
-        }
-      } else {
-        // MongoDB mode
-        if (this.mongoStorage.isConnected) {
-          saved = await this.mongoStorage.saveSession(sessionId, sessionData)
-        }
-
-        if (this.postgresStorage.isConnected) {
-          const pgSaved = await this.postgresStorage.saveSession(sessionId, sessionData)
-          saved = saved || pgSaved
-        }
-
-        if (!saved) {
-          logger.warn(`DB unavailable for ${sessionId}, using file fallback`)
-          saved = await this.fileManager.saveSession(sessionId, sessionData)
-        }
       }
 
       if (saved) {
@@ -206,27 +168,16 @@ export class SessionStorage {
 
       let sessionData = null
 
-      if (isFileBasedStorage()) {
-        // File-based mode: check file first
+      if (this.mongoStorage.isConnected) {
+        sessionData = await this.mongoStorage.getSession(sessionId)
+      }
+
+      if (!sessionData && this.postgresStorage.isConnected) {
+        sessionData = await this.postgresStorage.getSession(sessionId)
+      }
+
+      if (!sessionData) {
         sessionData = await this.fileManager.getSession(sessionId)
-
-        // Fallback to postgres for web users
-        if (!sessionData && this.postgresStorage.isConnected) {
-          sessionData = await this.postgresStorage.getSession(sessionId)
-        }
-      } else {
-        // MongoDB mode
-        if (this.mongoStorage.isConnected) {
-          sessionData = await this.mongoStorage.getSession(sessionId)
-        }
-
-        if (!sessionData && this.postgresStorage.isConnected) {
-          sessionData = await this.postgresStorage.getSession(sessionId)
-        }
-
-        if (!sessionData) {
-          sessionData = await this.fileManager.getSession(sessionId)
-        }
       }
 
       if (sessionData) {
@@ -257,39 +208,24 @@ export class SessionStorage {
 
       let updated = false
 
-      if (isFileBasedStorage()) {
-        updated = await this.fileManager.updateSession(sessionId, updates)
+      if (this.mongoStorage.isConnected) {
+        updated = await this.mongoStorage.updateSession(sessionId, updates)
         if (updated) {
-          logger.info(`✅ File storage updated immediately for ${sessionId}`)
+          logger.info(`✅ MongoDB updated immediately for ${sessionId}`)
         }
+      }
 
-        if (this.postgresStorage.isConnected) {
-          const pgUpdated = await this.postgresStorage.updateSession(sessionId, updates)
-          if (pgUpdated) {
-            logger.info(`✅ PostgreSQL updated immediately for ${sessionId}`)
-          }
-          updated = updated || pgUpdated
+      if (this.postgresStorage.isConnected) {
+        const pgUpdated = await this.postgresStorage.updateSession(sessionId, updates)
+        if (pgUpdated) {
+          logger.info(`✅ PostgreSQL updated immediately for ${sessionId}`)
         }
-      } else {
-        if (this.mongoStorage.isConnected) {
-          updated = await this.mongoStorage.updateSession(sessionId, updates)
-          if (updated) {
-            logger.info(`✅ MongoDB updated immediately for ${sessionId}`)
-          }
-        }
+        updated = updated || pgUpdated
+      }
 
-        if (this.postgresStorage.isConnected) {
-          const pgUpdated = await this.postgresStorage.updateSession(sessionId, updates)
-          if (pgUpdated) {
-            logger.info(`✅ PostgreSQL updated immediately for ${sessionId}`)
-          }
-          updated = updated || pgUpdated
-        }
-
-        if (!updated) {
-          await this.fileManager.updateSession(sessionId, updates)
-          logger.info(`✅ File storage updated immediately for ${sessionId}`)
-        }
+      if (!updated) {
+        await this.fileManager.updateSession(sessionId, updates)
+        logger.info(`✅ File storage updated immediately for ${sessionId}`)
       }
 
       if (this.sessionCache.has(sessionId)) {
@@ -330,27 +266,17 @@ export class SessionStorage {
           bufferedData.updatedAt = new Date()
 
           let updated = false
+          if (this.mongoStorage.isConnected) {
+            updated = await this.mongoStorage.updateSession(sessionId, bufferedData)
+          }
 
-          if (isFileBasedStorage()) {
-            updated = await this.fileManager.updateSession(sessionId, bufferedData)
+          if (this.postgresStorage.isConnected) {
+            const pgUpdated = await this.postgresStorage.updateSession(sessionId, bufferedData)
+            updated = updated || pgUpdated
+          }
 
-            if (this.postgresStorage.isConnected) {
-              const pgUpdated = await this.postgresStorage.updateSession(sessionId, bufferedData)
-              updated = updated || pgUpdated
-            }
-          } else {
-            if (this.mongoStorage.isConnected) {
-              updated = await this.mongoStorage.updateSession(sessionId, bufferedData)
-            }
-
-            if (this.postgresStorage.isConnected) {
-              const pgUpdated = await this.postgresStorage.updateSession(sessionId, bufferedData)
-              updated = updated || pgUpdated
-            }
-
-            if (!updated) {
-              await this.fileManager.updateSession(sessionId, bufferedData)
-            }
+          if (!updated) {
+            await this.fileManager.updateSession(sessionId, bufferedData)
           }
 
           if (this.sessionCache.has(sessionId)) {
@@ -388,17 +314,12 @@ export class SessionStorage {
         hadWebAuth: false,
       }
 
-      if (isFileBasedStorage()) {
-        // For file-based, delete the session file
-        results.fileDeleted = await this.fileManager.cleanupSessionFiles(sessionId)
-      } else {
-        if (this.mongoStorage.isConnected) {
-          results.authBaileysDeleted = await this.mongoStorage.deleteAuthState(sessionId)
-          results.mongoSessionDeleted = await this.mongoStorage.deleteSession(sessionId)
-        }
-
-        results.fileDeleted = await this.fileManager.cleanupSessionFiles(sessionId)
+      if (this.mongoStorage.isConnected) {
+        results.authBaileysDeleted = await this.mongoStorage.deleteAuthState(sessionId)
+        results.mongoSessionDeleted = await this.mongoStorage.deleteSession(sessionId)
       }
+
+      results.fileDeleted = await this.fileManager.cleanupSessionFiles(sessionId)
 
       if (this.postgresStorage.isConnected) {
         const pgResult = await this.postgresStorage.deleteSessionKeepUser(sessionId)
@@ -410,11 +331,7 @@ export class SessionStorage {
       logger.info(`Logout cleanup for ${sessionId}:`, results)
 
       return (
-        results.authBaileysDeleted ||
-        results.mongoSessionDeleted ||
-        results.postgresUpdated ||
-        results.postgresDeleted ||
-        results.fileDeleted
+        results.authBaileysDeleted || results.mongoSessionDeleted || results.postgresUpdated || results.postgresDeleted
       )
     } catch (error) {
       logger.error(`Error in deleteSessionKeepUser for ${sessionId}:`, error)
@@ -429,20 +346,16 @@ export class SessionStorage {
 
       let deleted = false
 
-      if (isFileBasedStorage()) {
-        deleted = await this.fileManager.cleanupSessionFiles(sessionId)
-      } else {
-        if (this.mongoStorage.isConnected) {
-          deleted = await this.mongoStorage.deleteSession(sessionId)
-        }
-
-        await this.fileManager.cleanupSessionFiles(sessionId)
+      if (this.mongoStorage.isConnected) {
+        deleted = await this.mongoStorage.deleteSession(sessionId)
       }
 
       if (this.postgresStorage.isConnected) {
         const pgDeleted = await this.postgresStorage.deleteSession(sessionId)
         deleted = deleted || pgDeleted
       }
+
+      await this.fileManager.cleanupSessionFiles(sessionId)
 
       return deleted
     } catch (error) {
@@ -458,20 +371,16 @@ export class SessionStorage {
 
       const deletePromises = []
 
-      if (isFileBasedStorage()) {
-        deletePromises.push(this.fileManager.cleanupSessionFiles(sessionId))
-      } else {
-        if (this.mongoStorage.isConnected) {
-          deletePromises.push(this.mongoStorage.deleteSession(sessionId))
-          deletePromises.push(this.mongoStorage.deleteAuthState(sessionId))
-        }
-
-        deletePromises.push(this.fileManager.cleanupSessionFiles(sessionId))
+      if (this.mongoStorage.isConnected) {
+        deletePromises.push(this.mongoStorage.deleteSession(sessionId))
+        deletePromises.push(this.mongoStorage.deleteAuthState(sessionId))
       }
 
       if (this.postgresStorage.isConnected) {
         deletePromises.push(this.postgresStorage.completelyDeleteSession(sessionId))
       }
+
+      deletePromises.push(this.fileManager.cleanupSessionFiles(sessionId))
 
       const results = await Promise.allSettled(deletePromises)
       const success = results.some((r) => r.status === "fulfilled" && r.value)
@@ -485,10 +394,6 @@ export class SessionStorage {
   }
 
   async cleanupOrphanedSessions() {
-    if (isFileBasedStorage()) {
-      return await this._cleanupOrphanedFileSessions()
-    }
-
     if (!this.mongoStorage.isConnected) {
       logger.warn("MongoDB not connected - skipping orphan cleanup")
       return { cleaned: 0, errors: 0 }
@@ -549,81 +454,16 @@ export class SessionStorage {
     }
   }
 
-  async _cleanupOrphanedFileSessions() {
-    try {
-      logger.info("Starting file-based orphaned sessions cleanup...")
-
-      const allSessions = await this.fileManager.getAllSessions()
-      let cleanedCount = 0
-      let errorCount = 0
-
-      const authDir = path.resolve(process.cwd(), STORAGE_CONFIG.AUTH_SESSIONS_DIR)
-      const fs = await import("fs")
-      // const path = await import('path') // path is already imported at the top
-
-      for (const session of allSessions) {
-        try {
-          const sessionId = session.sessionId
-          const authPath = path.join(authDir, sessionId, "creds.json")
-
-          // Check if auth credentials exist
-          if (!fs.existsSync(authPath)) {
-            logger.warn(`Session ${sessionId} has no auth credentials - cleaning up`)
-
-            await this.fileManager.cleanupSessionFiles(sessionId)
-
-            if (this.postgresStorage.isConnected) {
-              const source = session.source || "telegram"
-              await this.postgresStorage.cleanupOrphanedSession(sessionId, source)
-            }
-
-            this.sessionCache.delete(sessionId)
-            this._clearWriteBuffer(sessionId)
-
-            cleanedCount++
-          }
-        } catch (error) {
-          logger.error(`Error cleaning orphaned session ${session.sessionId}:`, error.message)
-          errorCount++
-        }
-      }
-
-      logger.info(`File-based orphaned cleanup: ${cleanedCount} cleaned, ${errorCount} errors`)
-      return { cleaned: cleanedCount, errors: errorCount }
-    } catch (error) {
-      logger.error("File-based orphaned sessions cleanup failed:", error)
-      return { cleaned: 0, errors: 1 }
-    }
-  }
-
   async getAllSessions() {
     try {
       let sessions = []
 
-      if (isFileBasedStorage()) {
-        // File-based mode: get from file first
-        sessions = await this.fileManager.getAllSessions()
-
-        // Also check postgres for web users
-        if (this.postgresStorage.isConnected) {
-          const pgSessions = await this.postgresStorage.getAllSessions()
-          // Merge, avoiding duplicates
-          const sessionIds = new Set(sessions.map((s) => s.sessionId))
-          for (const pgSession of pgSessions) {
-            if (!sessionIds.has(pgSession.sessionId)) {
-              sessions.push(pgSession)
-            }
-          }
-        }
+      if (this.postgresStorage.isConnected) {
+        sessions = await this.postgresStorage.getAllSessions()
+      } else if (this.mongoStorage.isConnected) {
+        sessions = await this.mongoStorage.getAllSessions()
       } else {
-        // MongoDB mode
-        if (this.postgresStorage.isConnected) {
-          sessions = await this.postgresStorage.getAllSessions()
-        } else if (this.mongoStorage.isConnected) {
-          sessions = await this.mongoStorage.getAllSessions()
-        } else {
-          sessions = await this.fileManager.getAllSessions()
-        }
+        sessions = await this.fileManager.getAllSessions()
       }
 
       return sessions.map((session) => this._formatSessionData(session))
@@ -659,9 +499,7 @@ export class SessionStorage {
 
       let updated = false
 
-      if (isFileBasedStorage()) {
-        updated = await this.fileManager.updateSession(sessionId, updateData)
-      } else if (this.mongoStorage.isConnected) {
+      if (this.mongoStorage.isConnected) {
         updated = await this.mongoStorage.updateSession(sessionId, updateData)
       }
 
@@ -717,7 +555,7 @@ export class SessionStorage {
 
   _startHealthCheck() {
     this.healthCheckInterval = setInterval(async () => {
-      if (isMongoBasedStorage() && this.mongoStorage.isConnected) {
+      if (this.mongoStorage.isConnected) {
         try {
           await this.mongoStorage.client.db("admin").command({ ping: 1 })
         } catch (error) {
@@ -755,8 +593,7 @@ export class SessionStorage {
 
   getConnectionStatus() {
     return {
-      storageType: this.storageType, // Include storage type
-      mongodb: isMongoBasedStorage() && this.mongoStorage.isConnected,
+      mongodb: this.mongoStorage.isConnected,
       postgresql: this.postgresStorage.isConnected,
       fileManager: this.fileManager !== null,
       overall: this.isConnected,
@@ -784,9 +621,7 @@ export class SessionStorage {
         try {
           const updates = { ...bufferData.data, updatedAt: new Date() }
 
-          if (isFileBasedStorage()) {
-            await this.fileManager.updateSession(sessionId, updates)
-          } else if (this.mongoStorage.isConnected) {
+          if (this.mongoStorage.isConnected) {
             await this.mongoStorage.updateSession(sessionId, updates)
           }
 
@@ -828,12 +663,7 @@ export class SessionStorage {
       await this.flushWriteBuffers()
       this.sessionCache.clear()
 
-      const closePromises = [this.postgresStorage.close()]
-      if (isMongoBasedStorage() && this.mongoStorage.close) {
-        closePromises.push(this.mongoStorage.close())
-      }
-
-      await Promise.allSettled(closePromises)
+      await Promise.allSettled([this.mongoStorage.close(), this.postgresStorage.close()])
 
       logger.info("Session storage closed")
     } catch (error) {
@@ -843,9 +673,8 @@ export class SessionStorage {
 
   getStats() {
     return {
-      storageType: this.storageType, // Include storage type
       connections: {
-        mongodb: isMongoBasedStorage() && this.mongoStorage.isConnected,
+        mongodb: this.mongoStorage.isConnected,
         postgresql: this.postgresStorage.isConnected,
         fileManager: this.fileManager !== null,
         overall: this.isConnected,
@@ -854,26 +683,29 @@ export class SessionStorage {
         size: this.sessionCache.size,
         maxSize: SESSION_CACHE_MAX_SIZE,
         ttl: SESSION_CACHE_TTL,
+        entries: Array.from(this.sessionCache.keys()).slice(0, 10),
       },
       writeBuffer: {
         size: this.writeBuffer.size,
-        flushInterval: WRITE_BUFFER_FLUSH_INTERVAL,
+        entries: Array.from(this.writeBuffer.keys()).slice(0, 10),
       },
+      fileManager: this.fileManager.getStats(),
     }
   }
 }
 
-// Singleton instance
 let storageInstance = null
 
-export function getSessionStorage() {
+export function initializeStorage() {
   if (!storageInstance) {
     storageInstance = new SessionStorage()
   }
   return storageInstance
 }
 
-export async function initializeStorage() {
-  const storage = getSessionStorage()
-  return storage
+export function getSessionStorage() {
+  if (!storageInstance) {
+    storageInstance = new SessionStorage()
+  }
+  return storageInstance
 }

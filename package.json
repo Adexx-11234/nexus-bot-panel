@@ -20,7 +20,7 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "latest",
+    "@whiskeysockets/baileys": "npm:@rexxhayanasi/elaina-baileys",
     "axios": "latest",
     "bcryptjs": "latest",
     "chalk": "^4.1.2",
@@ -34,7 +34,7 @@
     "file-type": "latest",
     "form-data": "^4.0.0",
     "guaranteed_security": "^1.0.0",
-    "jimp": "^1.6.0",
+    "jimp": "^0.16.1",
     "jsonwebtoken": "latest",
     "libphonenumber-js": "^1.10.51",
     "link-preview-js": "latest",
@@ -50,7 +50,8 @@
     "pg": "^8.11.3",
     "pino": "^8.16.2",
     "qrcode-terminal": "^0.12.0",
-    "sharp": "^0.34.4"
+    "sharp": "^0.34.4",
+    "undici": "latest"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"

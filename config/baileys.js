@@ -9,10 +9,10 @@ const baileysLogger = pino({
 })
 
 const groupCache = new NodeCache({
-  stdTTL: 90,
-  checkperiod: 9,
+  stdTTL: 60,
+  checkperiod: 5,
   useClones: false,
-  maxKeys: 900,
+  maxKeys: 500,
 })
 
 const msgRetryCounterCache = new NodeCache()
@@ -31,6 +31,7 @@ const defaultGetMessage = async (key) => {
 export const baileysConfig = {
   logger: baileysLogger,
   printQRInTerminal: false,
+  browser: Browsers.windows("safari"),
   retryRequestDelayMs: 10,
   markOnlineOnConnect: true,
   getMessage: defaultGetMessage,
@@ -38,9 +39,9 @@ export const baileysConfig = {
   version: [2, 3000, 1025190524],
   syncFullHistory: true,
   fireInitQueries: true,
-  connectTimeoutMs: 800,
+  connectTimeoutMs: 1000,
   defaultQueryTimeoutMs: 1000,
-  maxMsgRetryCount: 10,
+  maxMsgRetryCount: 40,
   keepAliveIntervalMs: KEEPALIVE_INTERVAL,
   patchMessageBeforeSending: (message) => {
     const requiresPatch = !!(message.buttonsMessage || message.templateMessage || message.listMessage)
@@ -59,7 +60,7 @@ export const baileysConfig = {
     }
     return message
   },
-  appStateSyncInitialTimeoutMs: 500,
+  appStateSyncInitialTimeoutMs: 5000,
   generateHighQualityLinkPreview: true,
 }
 
@@ -213,7 +214,7 @@ export function createBaileysSocket(authState, sessionId, getMessage = null) {
 export function setupSocketDefaults(sock) {
   try {
     if (sock.ev && typeof sock.ev.setMaxListeners === "function") {
-      sock.ev.setMaxListeners(9000)
+      sock.ev.setMaxListeners(1500)
     }
 
     sock.sessionId = null

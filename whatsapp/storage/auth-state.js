@@ -1,4 +1,4 @@
-import { WAProto as proto, initAuthCreds } from "@whiskeysockets/baileys"
+import { proto, initAuthCreds } from "@whiskeysockets/baileys"
 import { createComponentLogger } from "../../utils/logger.js"
 
 const logger = createComponentLogger("AUTH_STATE")

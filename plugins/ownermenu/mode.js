@@ -6,7 +6,7 @@ const logger = createComponentLogger('MODE')
 
 export default {
   name: "Mode",
-  commands: ["mode", "botmode", "privacy", "private", "public", "self"],
+  commands: ["mode", "botmode", "privacy"],
   description: "Switch between self and public mode",
   usage: "• .mode self - Only owner can use\n• .mode public - Everyone can use\n• .mode status - Check current mode\n• .mode - Show interactive menu",
   category: "ownermenu",
@@ -25,7 +25,7 @@ export default {
       const action = args[0]?.toLowerCase()
 
       // Handle text commands
-      if (action === 'self' || action === 'private') {
+      if (action === 'self' || 'private') {
         return await this.setSelfMode(telegramId, m)
       }
 

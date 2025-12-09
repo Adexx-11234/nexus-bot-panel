@@ -196,9 +196,6 @@ export class ConnectionEventHandler {
         await this._handleLoggedOut(sessionId)
         break
 
-        case DisconnectReason.CONNECTION_ISSUES:
-          await this._handleLoggedOut(sessionId)
-          break
       case DisconnectReason.FORBIDDEN:
         await this._handleForbidden(sessionId)
         break

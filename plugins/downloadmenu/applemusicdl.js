@@ -1,7 +1,7 @@
 // plugins/download/applemusicdl.js
 
 import downloader, { downloadMedia } from '../../lib/downloaders/index.js';
-import { generateWAMessageFromContent, WAProto as proto, prepareWAMessageMedia } from '@whiskeysockets/baileys';
+import { generateWAMessageFromContent, proto, prepareWAMessageMedia } from '@whiskeysockets/baileys';
 import fs from 'fs';
 
 export default {

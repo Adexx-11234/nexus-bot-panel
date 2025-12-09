@@ -13,10 +13,10 @@ const logger = createComponentLogger("FILE_STORE")
 const STORE_ROOT = path.join(__dirname, "..", "..", "makeinstore")
 
 // Config
-const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20MB per file
+const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB per file
 const MAX_MESSAGES_AGE = 2 * 60 * 60 * 1000 // 2 hours
 const WRITE_BATCH_INTERVAL = 5000 // 5 seconds
-const MAX_BATCH_CHANGES = 50
+const MAX_BATCH_CHANGES = 100
 const MAX_MESSAGES_PER_SESSION = 50
 const MAX_GROUPS_IN_MEMORY = 20
 
