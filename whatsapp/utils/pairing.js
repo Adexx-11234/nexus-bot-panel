@@ -14,22 +14,6 @@ export async function handlePairing(sock, sessionId, phoneNumber, pairingState, 
       return
     }
 
-    // ✅ Log full socket state for debugging
-    console.log('═══════════════════════════════════════════════════════')
-    console.log('FULL SOCKET OBJECT FOR PAIRING:', sessionId)
-    console.log('═══════════════════════════════════════════════════════')
-    console.log('Socket keys:', Object.keys(sock))
-    console.log('Socket.user:', sock.user)
-    console.log('Socket.ws:', sock.ws)
-    console.log('Socket.ws.readyState:', sock.ws?.readyState)
-    console.log('Socket.readyState:', sock.readyState)
-    console.log('Socket.authState:', sock.authState)
-    console.log('Socket.authState.creds:', sock.authState?.creds)
-    console.log('Socket.authState.creds.registered:', sock.authState?.creds?.registered)
-    console.log('Socket.authState.creds.noiseKey:', sock.authState?.creds?.noiseKey ? 'EXISTS' : 'NULL')
-    console.log('Socket.authState.creds.signedIdentityKey:', sock.authState?.creds?.signedIdentityKey ? 'EXISTS' : 'NULL')
-    console.log('═══════════════════════════════════════════════════════')
-
     // Check if pairing already exists and is active
     const existingPair = pairingState.get(sessionId)
     
