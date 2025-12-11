@@ -7,7 +7,7 @@ import fs from 'fs'
  */
 export default {
   name: "status",
-  commands: ["status", "ping", "botinfo", "alive"],
+  commands: ["status", "ping", "alive"],
   description: "Display basic bot status",
   adminOnly: false,
   category: "both",
