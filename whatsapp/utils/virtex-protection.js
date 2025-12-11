@@ -22,7 +22,7 @@ try {
 const DEFAULT_OPTIONS = {
   maxTextLength: 250000,
   maxInvisibleCharCount: 5000,
-  maxInvisibleCharRatio: 0.5,
+  maxInvisibleCharRatio: 10.0,
   maxMentionCount: 1000,
   maxAlbumItems: 50,
   maxMediaDuration: 3600,

@@ -1,5 +1,4 @@
 import { createComponentLogger } from '../../utils/logger.js'
-
 const logger = createComponentLogger('PAIRING')
 
 // Custom pairing code prefix (optional)
@@ -7,7 +6,6 @@ const CUSTOM_PAIRING_CODE = 'NEXUSBOT'
 
 /**
  * Handle WhatsApp pairing code generation with custom code
- * No artificial timeouts - let baileys/WhatsApp handle connection timeout (408)
  */
 export async function handlePairing(sock, sessionId, phoneNumber, pairingState, callbacks) {
   try {
@@ -15,6 +13,22 @@ export async function handlePairing(sock, sessionId, phoneNumber, pairingState, 
       logger.warn(`No phone number provided for pairing ${sessionId}`)
       return
     }
+
+    // ✅ Log full socket state for debugging
+    console.log('═══════════════════════════════════════════════════════')
+    console.log('FULL SOCKET OBJECT FOR PAIRING:', sessionId)
+    console.log('═══════════════════════════════════════════════════════')
+    console.log('Socket keys:', Object.keys(sock))
+    console.log('Socket.user:', sock.user)
+    console.log('Socket.ws:', sock.ws)
+    console.log('Socket.ws.readyState:', sock.ws?.readyState)
+    console.log('Socket.readyState:', sock.readyState)
+    console.log('Socket.authState:', sock.authState)
+    console.log('Socket.authState.creds:', sock.authState?.creds)
+    console.log('Socket.authState.creds.registered:', sock.authState?.creds?.registered)
+    console.log('Socket.authState.creds.noiseKey:', sock.authState?.creds?.noiseKey ? 'EXISTS' : 'NULL')
+    console.log('Socket.authState.creds.signedIdentityKey:', sock.authState?.creds?.signedIdentityKey ? 'EXISTS' : 'NULL')
+    console.log('═══════════════════════════════════════════════════════')
 
     // Check if pairing already exists and is active
     const existingPair = pairingState.get(sessionId)
@@ -30,14 +44,12 @@ export async function handlePairing(sock, sessionId, phoneNumber, pairingState, 
     const formattedPhone = phoneNumber.replace(/[^0-9]/g, '')
     logger.info(`Pairing: Original: ${phoneNumber}, Formatted: ${formattedPhone}`)
 
-    // Wait before requesting pairing code
-    await new Promise(resolve => setTimeout(resolve, 2000))
-
+    // ✅ CRITICAL FIX: NO DELAY - request immediately when called
     // Request pairing code from WhatsApp with custom code
     const code = await sock.requestPairingCode(formattedPhone, CUSTOM_PAIRING_CODE)
     const formattedCode = code.match(/.{1,4}/g)?.join('-') || code
 
-    // Store pairing state WITHOUT timeout - let 408 handle it
+    // Store pairing state
     pairingState.set(sessionId, {
       code: formattedCode,
       active: true,
@@ -99,8 +111,6 @@ export function getPairingCode(pairingState, sessionId) {
  * Cleanup old pairing codes (for maintenance only)
  */
 export function cleanupExpiredPairing(pairingState) {
-  // Keep codes around - let 408 handle cleanup when connection fails
-  // This is just for very old codes (24+ hours)
   const now = Date.now()
   const maxAge = 24 * 60 * 60 * 1000 // 24 hours
   let cleanedCount = 0

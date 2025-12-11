@@ -1,7 +1,7 @@
 // plugins/download/ytdl.js - UPDATED TO USE FILE PATHS
 
 import youtubeDownloader from '../../lib/downloaders/index.js';
-import { generateWAMessageFromContent, proto, prepareWAMessageMedia } from '@whiskeysockets/baileys';
+import { generateWAMessageFromContent, WAProto as proto, prepareWAMessageMedia } from '@whiskeysockets/baileys';
 import fs from 'fs';
 
 export default {

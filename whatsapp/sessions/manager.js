@@ -150,7 +150,7 @@ export class SessionManager {
    * Wait for MongoDB to be ready
    * @private
    */
-  async _waitForMongoDB(maxWaitTime = 10000) {
+  async _waitForMongoDB(maxWaitTime = 900000) {
     const startTime = Date.now()
 
     while (Date.now() - startTime < maxWaitTime) {
@@ -159,7 +159,7 @@ export class SessionManager {
         this.connectionManager.mongoClient = this.storage.client
         return true
       }
-      await new Promise((resolve) => setTimeout(resolve, 500))
+      await new Promise((resolve) => setTimeout(resolve, 9000))
     }
 
     logger.warn("MongoDB not ready after waiting")

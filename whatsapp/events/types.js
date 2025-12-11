@@ -59,6 +59,9 @@ export const DisconnectReason = {
   CONNECTION_LOST: 408,        // Connection timeout/lost
   TIMED_OUT: 408,              // Request timeout (same as CONNECTION_LOST)
   
+  // ✅ NEW: Early connection close (pre-pairing)
+  METHOD_NOT_ALLOWED: 405,     // Connection closed before pairing could complete
+  
   // Authentication & Session issues
   LOGGED_OUT: 401,             // User logged out from WhatsApp
   FORBIDDEN: 403,              // Account banned/restricted by WhatsApp
@@ -113,6 +116,22 @@ export const DisconnectConfig = {
   },
   
   // ============================================================
+  // ✅ NEW: 405 - Early Connection Close (Pre-Pairing)
+  // ============================================================
+  
+  [DisconnectReason.METHOD_NOT_ALLOWED]: {
+    shouldReconnect: true,
+    isPermanent: false,
+    requiresCleanup: false,
+    clearVoluntaryFlag: true,
+    reconnectDelay: 3000,
+    maxAttempts: 3,
+    message: 'Connection closed before pairing - retrying',
+    userAction: 'Reconnecting automatically',
+    handler: 'handleEarlyClose'
+  },
+  
+  // ============================================================
   // IMMEDIATE RECONNECT (Post-Pairing Restart)
   // ============================================================
   
@@ -124,7 +143,7 @@ export const DisconnectConfig = {
     reconnectDelay: 2000,
     maxAttempts: 10,
     message: 'Connection restart required (post-pairing)',
-    supports515Flow: true, // Can use complex 515 flow if enabled
+    supports515Flow: true,
     handler: 'handleRestartRequired'
   },
   
@@ -136,7 +155,7 @@ export const DisconnectConfig = {
     reconnectDelay: 2000,
     maxAttempts: 10,
     message: 'Stream error - restart required',
-    supports515Flow: true, // Can use complex 515 flow if enabled
+    supports515Flow: true,
     handler: 'handleRestartRequired'
   },
   
@@ -411,6 +430,7 @@ export function getUserAction(statusCode) {
 // ==========================================
 
 export const DisconnectMessages = {
+  [DisconnectReason.METHOD_NOT_ALLOWED]: 'Connection closed before pairing',
   [DisconnectReason.CONNECTION_CLOSED]: 'Connection closed unexpectedly',
   [DisconnectReason.CONNECTION_LOST]: 'Connection lost or timed out',
   [DisconnectReason.TIMED_OUT]: 'Connection request timed out',

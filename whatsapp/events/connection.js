@@ -54,7 +54,8 @@ export class ConnectionEventHandler {
   /**
    * Handle connection close - Configuration-driven approach
    */
-  async _handleConnectionClose(sock, sessionId, lastDisconnect) {
+    
+async _handleConnectionClose(sock, sessionId, lastDisconnect) {
     try {
       if (this.healthMonitor) {
         this.healthMonitor.stopMonitoring(sessionId)
@@ -66,15 +67,23 @@ export class ConnectionEventHandler {
         return
       }
 
-      // Update session status
+      // Extract disconnect reason
+      const error = lastDisconnect?.error
+      const statusCode = error instanceof Boom ? error.output?.statusCode : null
+
+      // ============================================================
+      // ✅ CRITICAL: SKIP 405 ENTIRELY - DO NOTHING
+      // ============================================================
+      if (statusCode === 405) {
+        logger.info(`⏭️  Skipping 405 disconnect for ${sessionId} - no action taken`)
+        return
+      }
+
+      // Update session status (only if NOT 405)
       await this.sessionManager.storage.updateSession(sessionId, {
         isConnected: false,
         connectionStatus: "disconnected",
       })
-
-      // Extract disconnect reason
-      const error = lastDisconnect?.error
-      const statusCode = error instanceof Boom ? error.output?.statusCode : null
 
       // Get configuration for this disconnect reason
       const config = getDisconnectConfig(statusCode)

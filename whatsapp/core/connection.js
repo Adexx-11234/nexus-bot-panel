@@ -178,32 +178,65 @@ async createConnection(sessionId, phoneNumber = null, callbacks = {}, allowPairi
   }
 
   _schedulePairing(sock, sessionId, phoneNumber, callbacks) {
-    if (this.pairingInProgress.has(sessionId)) {
-      logger.warn(`Pairing already in progress for ${sessionId}`)
-      return
-    }
-
-    this.pairingInProgress.add(sessionId)
-
-    setTimeout(async () => {
-      try {
-        const { handlePairing } = await import('../utils/index.js')
-        await handlePairing(sock, sessionId, phoneNumber, new Map(), callbacks)
-
-        setTimeout(() => {
-          this.pairingInProgress.delete(sessionId)
-        }, 500000)
-
-      } catch (error) {
-        logger.error(`Pairing error for ${sessionId}:`, error)
-        this.pairingInProgress.delete(sessionId)
-        
-        if (callbacks?.onError) {
-          callbacks.onError(error)
-        }
-      }
-    }, 2000)
+  if (this.pairingInProgress.has(sessionId)) {
+    logger.warn(`Pairing already in progress for ${sessionId}`)
+    return
   }
+
+  this.pairingInProgress.add(sessionId)
+
+  // ✅ CRITICAL FIX: Wait for WebSocket to be initialized, then request pairing
+  const waitForWebSocketAndPair = async () => {
+    try {
+      logger.info(`Waiting for WebSocket initialization for ${sessionId}`)
+      
+      // Wait for sock.ws to exist and be in a valid state
+      const maxWait = 30000 // 30 seconds
+      const checkInterval = 100 // Check every 100ms
+      let waited = 0
+      
+      while (waited < maxWait) {
+        // Check if WebSocket exists and is CONNECTING or OPEN
+        if (sock.ws && (sock.ws.readyState === sock.ws.CONNECTING || sock.ws.readyState === sock.ws.OPEN)) {
+          logger.info(`WebSocket initialized after ${waited}ms (readyState: ${sock.ws.readyState})`)
+          break
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, checkInterval))
+        waited += checkInterval
+      }
+      
+      // Timeout check
+      if (waited >= maxWait) {
+        throw new Error('WebSocket initialization timeout')
+      }
+      
+      // Additional small delay to ensure WebSocket is stable
+      await new Promise(resolve => setTimeout(resolve, 500))
+      
+      logger.info(`Requesting pairing code for ${sessionId}`)
+      
+      const { handlePairing } = await import('../utils/index.js')
+      await handlePairing(sock, sessionId, phoneNumber, new Map(), callbacks)
+
+      // Keep pairing flag for extended period
+      setTimeout(() => {
+        this.pairingInProgress.delete(sessionId)
+      }, 500000)
+
+    } catch (error) {
+      logger.error(`Pairing error for ${sessionId}:`, error)
+      this.pairingInProgress.delete(sessionId)
+      
+      if (callbacks?.onError) {
+        callbacks.onError(error)
+      }
+    }
+  }
+  
+  // Start waiting
+  waitForWebSocketAndPair()
+}
 
   async checkAuthAvailability(sessionId) {
     const availability = {

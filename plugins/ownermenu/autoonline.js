@@ -1,4 +1,4 @@
-import { generateWAMessageFromContent, proto } from '@whiskeysockets/baileys'
+import { generateWAMessageFromContent,WAProto as proto } from '@whiskeysockets/baileys'
 import { UserQueries } from '../../database/query.js'
 import { createComponentLogger } from '../../utils/logger.js'
 import { getPresenceManager } from '../../whatsapp/index.js'

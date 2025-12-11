@@ -1,7 +1,7 @@
 // plugins/download/instagram.js
 
 import downloader, { downloadMedia } from '../../lib/downloaders/index.js';
-import { generateWAMessageFromContent, proto, prepareWAMessageMedia } from '@whiskeysockets/baileys';
+import { generateWAMessageFromContent, WAProto as proto, prepareWAMessageMedia } from '@whiskeysockets/baileys';
 
 export default {
   name: "instagram",

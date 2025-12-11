@@ -29,39 +29,22 @@ const defaultGetMessage = async (key) => {
 }
 
 export const baileysConfig = {
-  logger: baileysLogger,
+  logger: pino({ level: "silent" }),
   printQRInTerminal: false,
-  browser: Browsers.windows("safari"),
-  retryRequestDelayMs: 10,
-  markOnlineOnConnect: true,
-  getMessage: defaultGetMessage,
-  msgRetryCounterCache,
-  version: [2, 3000, 1025190524],
-  syncFullHistory: true,
-  fireInitQueries: true,
-  connectTimeoutMs: 1000,
-  defaultQueryTimeoutMs: 1000,
-  maxMsgRetryCount: 40,
-  keepAliveIntervalMs: KEEPALIVE_INTERVAL,
-  patchMessageBeforeSending: (message) => {
-    const requiresPatch = !!(message.buttonsMessage || message.templateMessage || message.listMessage)
-    if (requiresPatch) {
-      message = {
-        viewOnceMessage: {
-          message: {
-            messageContextInfo: {
-              deviceListMetadataVersion: 2,
-              deviceListMetadata: {},
-            },
-            ...message,
-          },
-        },
-      }
-    }
-    return message
+  msgRetryCounterMap: {},
+  // version: [2, 3000, 1025190524],
+  retryRequestDelayMs: 250,
+  markOnlineOnConnect: false,
+  getMessage: defaultGetMessage,  // Default fallback
+  emitOwnEvents: true,
+  patchMessageBeforeSending: (msg) => {
+    if (msg.contextInfo) delete msg.contextInfo.mentionedJid;
+    return msg;
   },
-  appStateSyncInitialTimeoutMs: 5000,
+  appStateSyncInitialTimeoutMs: 10000,
   generateHighQualityLinkPreview: true,
+  // v7: Don't send ACKs to avoid bans
+  sendAcks: false,
 }
 
 export function getBaileysConfig() {
@@ -75,6 +58,7 @@ export const eventTypes = [
   "messages.update",
   "contacts.update",
   "call",
+  "lid-mapping.update", // v7: New event for LID/PN mappings
 ]
 
 export async function createSessionStore(sessionId) {
@@ -87,7 +71,7 @@ export async function createSessionStore(sessionId) {
 
 export function getSessionStore(sessionId) {
   sessionLastActivity.set(sessionId, Date.now())
-      // Check if store already exists
+  // Check if store already exists
   const existingStore = getFileStore(sessionId)
   if (existingStore) {
     logger.debug(`[Store] Retrieved existing store for ${sessionId}`)
@@ -175,17 +159,36 @@ export function createBaileysSocket(authState, sessionId, getMessage = null) {
 
     setupSocketDefaults(sock)
 
+    // Store original groupMetadata method
     const originalGroupMetadata = sock.groupMetadata.bind(sock)
     sock._originalGroupMetadata = originalGroupMetadata
+    
+    // Override groupMetadata to ALWAYS use cache-first approach
     sock.groupMetadata = async (jid) => {
-      // Always return from cache, never direct call
       return await getGroupMetadata(sock, jid, false)
     }
 
+    // Add refresh method - ONLY for specific scenarios
     sock.groupMetadataRefresh = async (jid) => {
       return await getGroupMetadata(sock, jid, true)
     }
 
+    // v7: Add LID helper methods to socket
+    sock.getLidForPn = async (phoneNumber) => {
+      if (sock.signalRepository?.lidMapping?.getLIDForPN) {
+        return await sock.signalRepository.lidMapping.getLIDForPN(phoneNumber)
+      }
+      return phoneNumber
+    }
+
+    sock.getPnForLid = async (lid) => {
+      if (sock.signalRepository?.lidMapping?.getPNForLID) {
+        return await sock.signalRepository.lidMapping.getPNForLID(lid)
+      }
+      return lid
+    }
+
+    // Override sendMessage with timeout and ephemeral disable
     const originalSendMessage = sock.sendMessage.bind(sock)
     sock.sendMessage = async (jid, content, options = {}) => {
       try {
@@ -196,8 +199,9 @@ export function createBaileysSocket(authState, sessionId, getMessage = null) {
         const timeoutPromise = new Promise((_, reject) =>
           setTimeout(() => reject(new Error('sendMessage timeout after 40s')), 40000)
         )
-        return await Promise.race([sendPromise, timeoutPromise])
-         updateSessionLastMessage(sessionId)
+        const result = await Promise.race([sendPromise, timeoutPromise])
+        updateSessionLastMessage(sessionId)
+        return result
       } catch (error) {
         logger.error(`[Baileys] Error sending message to ${jid}:`, error.message)
         throw error
@@ -227,49 +231,195 @@ export function setupSocketDefaults(sock) {
   }
 }
 
-export const getGroupMetadata = async (sock, jid, forceRefresh = false) => {
-  try {
-    const cacheKey = `group_${jid}`
+/**
+ * Normalize JID - v7 compatible
+ * Handles both LIDs and phone numbers
+ */
+const normalizeJid = (jid) => {
+  if (!jid) return null
+  
+  // If it's already a LID, return as-is
+  if (jid.endsWith('@lid')) return jid
+  
+  // If already has @, return as-is
+  if (jid.includes('@')) return jid
+  
+  // Add default domain for phone numbers
+  return jid.split("@")[0] + "@s.whatsapp.net"
+}
 
+/**
+ * Get effective JID from participant
+ * Priority: jid -> phoneNumber -> id (non-LID) -> id (LID)
+ */
+const getParticipantJid = (participant) => {
+  if (!participant) return null
+  
+  // Priority 1: existing jid field
+  if (participant.jid) return normalizeJid(participant.jid)
+  
+  // Priority 2: phoneNumber field (v7)
+  if (participant.phoneNumber) return normalizeJid(participant.phoneNumber)
+  
+  // Priority 3: id field if it's not a LID
+  if (participant.id && !participant.id.endsWith('@lid')) {
+    return normalizeJid(participant.id)
+  }
+  
+  // Priority 4: id field even if it's a LID
+  if (participant.id) return participant.id
+  
+  return null
+}
+
+/**
+ * Extract phone number from participant
+ * v7: phoneNumber field, fallback to jid/id
+ */
+const getParticipantPhoneNumber = (participant) => {
+  if (!participant) return null
+  
+  // Priority 1: phoneNumber field (v7)
+  if (participant.phoneNumber) return normalizeJid(participant.phoneNumber)
+  
+  // Priority 2: jid if it's a phone number
+  if (participant.jid && participant.jid.endsWith('@s.whatsapp.net')) {
+    return normalizeJid(participant.jid)
+  }
+  
+  // Priority 3: id if it's a phone number (not LID)
+  if (participant.id && !participant.id.endsWith('@lid')) {
+    return normalizeJid(participant.id)
+  }
+  
+  return null
+}
+
+/**
+ * Normalize participant data - ensures jid AND phoneNumber fields exist
+ * v7: phoneNumber is preferred, jid is for backward compatibility
+ */
+const normalizeParticipantData = (participant) => {
+  if (!participant) return null
+  
+  // Get effective JID
+  const effectiveJid = getParticipantJid(participant)
+  const effectivePhoneNumber = getParticipantPhoneNumber(participant)
+  
+  // Ensure jid field exists (backward compatibility)
+  if (!participant.jid || participant.jid === '') {
+    participant.jid = effectiveJid
+  }
+  
+  // Ensure phoneNumber field exists (v7 compatibility)
+  if (!participant.phoneNumber || participant.phoneNumber === '') {
+    participant.phoneNumber = effectivePhoneNumber
+  }
+  
+  // Keep original id field
+  if (!participant.id) {
+    participant.id = effectiveJid
+  }
+  
+  return participant
+}
+
+/**
+ * Normalize metadata - ensures all participants have jid AND phoneNumber fields
+ */
+const normalizeMetadata = (metadata) => {
+  if (!metadata) return null
+  
+  if (metadata.participants && Array.isArray(metadata.participants)) {
+    metadata.participants = metadata.participants
+      .map(p => normalizeParticipantData(p))
+      .filter(Boolean)
+  }
+  
+  return metadata
+}
+
+/**
+ * Get group metadata with caching
+ * v7 compatible: Returns metadata with normalized fields
+ * CACHE-FIRST: Always checks cache before fetching
+ */
+export const getGroupMetadata = async (sock, jid, forceRefresh = false) => {
+  const cacheKey = `group_${jid}`
+
+  try {
+    // ALWAYS check cache first (unless force refresh)
+    if (!forceRefresh) {
+      const cachedMetadata = groupCache.get(cacheKey)
+      if (cachedMetadata) {
+        logger.debug(`[Cache] Returning cached metadata for ${jid}`)
+        return normalizeMetadata(cachedMetadata)
+      }
+    }
+
+    // If force refresh, clear cache first
     if (forceRefresh) {
       groupCache.del(cacheKey)
+      logger.debug(`[Cache] Force refresh - cleared cache for ${jid}`)
     }
 
-    let metadata = groupCache.get(cacheKey)
-    if (metadata) {
-      return metadata
-    }
-
+    // Fetch from WhatsApp
+    logger.debug(`[Baileys] Fetching fresh metadata for ${jid}`)
     const fetchMethod = sock._originalGroupMetadata || sock.groupMetadata
-    metadata = await fetchMethod(jid)
+    let metadata = await fetchMethod(jid)
 
+    // Normalize participant data
+    metadata = normalizeMetadata(metadata)
+
+    // CRITICAL: Cache immediately after successful fetch
     groupCache.set(cacheKey, metadata, 60)
+    logger.debug(`[Cache] Cached fresh metadata for ${jid}`)
 
     return metadata
+
   } catch (error) {
-    // ✅ If rate-limited, return cached data instead of throwing
-    if (error.message?.includes('rate-overlimit')) {
-      const cacheKey = `group_${jid}`
+    // Handle rate limit errors
+    if (error.message?.includes('rate-overlimit') || error.output?.statusCode === 503) {
       const cachedMetadata = groupCache.get(cacheKey)
       
       if (cachedMetadata) {
         logger.warn(`[Baileys] Rate limited for ${jid}, returning cached data`)
-        return cachedMetadata
+        return normalizeMetadata(cachedMetadata)
       }
       
       logger.error(`[Baileys] Rate limited for ${jid} and no cache available`)
-    } else {
-      logger.error(`[Baileys] Error fetching group metadata for ${jid}:`, error.message)
+      
+      // Return minimal fallback structure instead of throwing
+      return {
+        id: jid,
+        subject: 'Unknown Group (Rate Limited)',
+        participants: [],
+        creation: Date.now(),
+        owner: null,
+        desc: null,
+        announce: false,
+        restrict: false
+      }
     }
     
+    // Other errors - log and throw
+    logger.error(`[Baileys] Error fetching group metadata for ${jid}:`, error.message)
     throw error
   }
 }
 
+/**
+ * Refresh group metadata - ONLY use for specific scenarios
+ * (participant updates: add, remove, promote, demote)
+ */
 export const refreshGroupMetadata = async (sock, jid) => {
+  logger.debug(`[Baileys] Explicit refresh requested for ${jid}`)
   return await getGroupMetadata(sock, jid, true)
 }
 
+/**
+ * Update cache from event data
+ */
 export const updateCacheFromEvent = (groupJid, updateData) => {
   try {
     const cacheKey = `group_${groupJid}`
@@ -277,47 +427,59 @@ export const updateCacheFromEvent = (groupJid, updateData) => {
 
     if (existing) {
       const updated = { ...existing, ...updateData }
-      groupCache.set(cacheKey, updated, 60)
+      const normalized = normalizeMetadata(updated)
+      groupCache.set(cacheKey, normalized, 60)
+      logger.debug(`[Cache] Updated cache from event for ${groupJid}`)
       return true
     }
 
     return false
   } catch (error) {
+    logger.error(`[Cache] Error updating from event:`, error.message)
     return false
   }
 }
 
+/**
+ * Update participants in cache - ONLY refreshes for specific actions
+ */
 export const updateParticipantsInCache = async (sock, groupJid, participantUpdate) => {
   try {
     const { action } = participantUpdate
 
-    // ✅ For add, remove, promote, demote - use existing refresh function
+    // ONLY refresh for these specific actions
     if (["add", "remove", "promote", "demote"].includes(action)) {
+      logger.debug(`[Cache] Participant ${action} - refreshing ${groupJid}`)
       await sock.groupMetadataRefresh(groupJid)
       return
     }
 
     // For other actions, just invalidate
-    invalidateGroupCache(groupJid, "update_error")
+    logger.debug(`[Cache] Participant ${action} - invalidating ${groupJid}`)
+    invalidateGroupCache(groupJid, `participant_${action}`)
   } catch (error) {
+    logger.error(`[Cache] Error updating participants:`, error.message)
     invalidateGroupCache(groupJid, "update_error")
   }
 }
 
+/**
+ * Invalidate cache for a group
+ */
 export const invalidateGroupCache = (groupJid, reason = "update") => {
   const cacheKey = `group_${groupJid}`
   if (groupCache.has(cacheKey)) {
     groupCache.del(cacheKey)
+    logger.debug(`[Cache] Invalidated cache for ${groupJid} (reason: ${reason})`)
     return true
   }
   return false
 }
 
-const normalizeJid = (jid) => {
-  if (!jid) return null
-  return jid.split("@")[0] + "@s.whatsapp.net"
-}
-
+/**
+ * Check if user is group admin - v7 compatible
+ * Handles missing jid field by using phoneNumber/id
+ */
 export const isUserGroupAdmin = async (sock, groupJid, userJid) => {
   try {
     const metadata = await getGroupMetadata(sock, groupJid)
@@ -327,9 +489,42 @@ export const isUserGroupAdmin = async (sock, groupJid, userJid) => {
       return false
     }
 
+    // Try to get phone number if userJid is a LID
+    let userPhoneNumber = userJid
+    if (userJid.endsWith('@lid') && sock.getPnForLid) {
+      try {
+        userPhoneNumber = await sock.getPnForLid(userJid)
+      } catch (err) {
+        logger.debug(`[Baileys] Could not resolve LID ${userJid}`)
+      }
+    }
+
     return metadata.participants.some((participant) => {
-      const normalizedParticipantJid = normalizeJid(participant.jid)
-      return normalizedParticipantJid === normalizedUserJid && ["admin", "superadmin"].includes(participant.admin)
+      // Get all possible identifiers
+      const participantJid = getParticipantJid(participant)
+      const participantPhone = getParticipantPhoneNumber(participant)
+      const participantId = participant.id || participantJid
+      
+      if (!participantJid) {
+        logger.debug(`[Baileys] Participant has no valid JID:`, participant)
+        return false
+      }
+      
+      // Normalize all identifiers
+      const normalizedParticipantJid = normalizeJid(participantJid)
+      const normalizedParticipantId = normalizeJid(participantId)
+      const normalizedParticipantPhone = participantPhone ? normalizeJid(participantPhone) : null
+      
+      // Check all possible matches
+      const matches = 
+        normalizedParticipantJid === normalizedUserJid ||
+        normalizedParticipantJid === normalizeJid(userPhoneNumber) ||
+        normalizedParticipantId === normalizedUserJid ||
+        normalizedParticipantId === normalizeJid(userPhoneNumber) ||
+        (normalizedParticipantPhone && normalizedParticipantPhone === normalizedUserJid) ||
+        (normalizedParticipantPhone && normalizedParticipantPhone === normalizeJid(userPhoneNumber))
+      
+      return matches && ["admin", "superadmin"].includes(participant.admin)
     })
   } catch (error) {
     logger.error(`[Baileys] Error checking admin status:`, error.message)
@@ -337,6 +532,9 @@ export const isUserGroupAdmin = async (sock, groupJid, userJid) => {
   }
 }
 
+/**
+ * Check if bot is group admin - v7 compatible
+ */
 export const isBotGroupAdmin = async (sock, groupJid) => {
   try {
     if (!sock.user?.id) {
@@ -352,6 +550,9 @@ export const isBotGroupAdmin = async (sock, groupJid) => {
   }
 }
 
+/**
+ * Setup cache invalidation listeners - v7 compatible
+ */
 export const setupCacheInvalidation = (sock) => {
   try {
     sock.ev.on("group-participants.update", async (update) => {
@@ -376,6 +577,39 @@ export const setupCacheInvalidation = (sock) => {
       })
     })
 
+    // v7: Listen for LID mapping updates
+    if (sock.ev.listenerCount("lid-mapping.update") === 0) {
+      sock.ev.on("lid-mapping.update", (mapping) => {
+        logger.debug(`[Event] LID mapping update received:`, mapping)
+        
+        // Ensure mapping is stored in signalRepository
+        try {
+          if (sock.signalRepository?.lidMapping && mapping) {
+            // Store the mapping if it's not already stored
+            if (mapping.lid && mapping.phoneNumber) {
+              // Ensure the mapping exists in both directions
+              sock.signalRepository.lidMapping.store = sock.signalRepository.lidMapping.store || new Map()
+              
+              logger.debug(`[LID] Storing mapping: ${mapping.lid} <-> ${mapping.phoneNumber}`)
+              
+              // The signalRepository should handle this automatically,
+              // but we log to ensure it's working
+              const storedLid = sock.signalRepository.lidMapping.getLIDForPN?.(mapping.phoneNumber)
+              const storedPn = sock.signalRepository.lidMapping.getPNForLID?.(mapping.lid)
+              
+              if (!storedLid || !storedPn) {
+                logger.warn(`[LID] Mapping not stored automatically, may need manual intervention`)
+              } else {
+                logger.debug(`[LID] Verified mapping stored: ${mapping.lid} <-> ${mapping.phoneNumber}`)
+              }
+            }
+          }
+        } catch (error) {
+          logger.error(`[LID] Error processing LID mapping:`, error.message)
+        }
+      })
+    }
+
     logger.info("[Cache] Setup group cache invalidation listeners")
   } catch (error) {
     logger.error("[Cache] Error setting up cache invalidation:", error.message)
@@ -386,7 +620,8 @@ export const setupCacheInvalidation = (sock) => {
 export const updateGroupCache = (jid, metadata) => {
   try {
     const cacheKey = `group_${jid}`
-    groupCache.set(cacheKey, metadata, 60)
+    const normalized = normalizeMetadata(metadata)
+    groupCache.set(cacheKey, normalized, 60)
     logger.debug(`[Cache] Manually updated group cache for ${jid}`)
     return true
   } catch (error) {
@@ -397,7 +632,8 @@ export const updateGroupCache = (jid, metadata) => {
 
 export const getGroupCache = (jid) => {
   const cacheKey = `group_${jid}`
-  return groupCache.get(cacheKey)
+  const cached = groupCache.get(cacheKey)
+  return cached ? normalizeMetadata(cached) : null
 }
 
 export const clearGroupCache = (jid) => {

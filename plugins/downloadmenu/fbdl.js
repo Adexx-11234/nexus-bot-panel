@@ -1,7 +1,7 @@
 // plugins/download/facebook.js
 
 import downloader, { downloadMedia } from '../../lib/downloaders/index.js';
-import { generateWAMessageFromContent, proto } from '@whiskeysockets/baileys';
+import { generateWAMessageFromContent, WAProto as proto } from '@whiskeysockets/baileys';
 
 export default {
   name: "facebook",

@@ -1,4 +1,4 @@
-import { generateWAMessageFromContent, proto } from '@whiskeysockets/baileys'
+import { generateWAMessageFromContent, WAProto as proto } from '@whiskeysockets/baileys'
 import { UserQueries } from '../../database/query.js'
 import { createComponentLogger } from '../../utils/logger.js'
 
@@ -24,8 +24,8 @@ export default {
 
       const action = args[0]?.toLowerCase()
 
-      // Handle text commands
-      if (action === 'self' || 'private') {
+      // Handle text commands - FIXED: Proper condition check
+      if (action === 'self' || action === 'private') {
         return await this.setSelfMode(telegramId, m)
       }
 
