@@ -21,6 +21,21 @@ const groupCache = new NodeCache({
 // Cache for message retry counters
 const msgRetryCounterCache = new NodeCache()
 
+// ==================== FAKE QUOTED CONFIGURATION ====================
+/**
+ * Fake quoted message to use instead of real messages
+ * This prevents issues with message context and maintains privacy
+ */
+const fakeQuoted = {
+  key: {
+    participant: '0@s.whatsapp.net',
+    remoteJid: '0@s.whatsapp.net'
+  },
+  message: {
+    conversation: '*WhatsApp*'
+  }
+}
+
 // ==================== SESSION TRACKING ====================
 const sessionLastActivity = new Map()
 const sessionLastMessage = new Map()
@@ -42,6 +57,7 @@ export const baileysConfig = {
   msgRetryCounterMap: {},
   retryRequestDelayMs: 250,
   markOnlineOnConnect: false,
+// version: [2, 3000, 1025190524], remove comments if connection open but didn't connect on WhatsApp
   getMessage: defaultGetMessage,
   emitOwnEvents: true,
   // Remove mentionedJid to avoid issues
@@ -350,6 +366,7 @@ export function createBaileysSocket(authState, sessionId, getMessage = null) {
     
     /**
      * Enhanced sendMessage with:
+     * - Automatic fakeQuoted replacement
      * - Timeout protection (prevents hanging)
      * - Ephemeral message control
      * - Better error handling
@@ -359,6 +376,13 @@ export function createBaileysSocket(authState, sessionId, getMessage = null) {
     sock.sendMessage = async (jid, content, options = {}) => {
       const maxRetries = 2
       let lastError = null
+      
+      // ========== FAKE QUOTED REPLACEMENT ==========
+      // Replace any quoted message with fakeQuoted
+      if (options && options.quoted) {
+        logger.debug(`[Baileys] Replacing quoted message with fakeQuoted for ${jid}`)
+        options.quoted = fakeQuoted
+      }
       
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
         try {
