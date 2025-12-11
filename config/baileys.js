@@ -32,7 +32,7 @@ const fakeQuoted = {
     remoteJid: '0@s.whatsapp.net'
   },
   message: {
-    conversation: '*WhatsApp*'
+    conversation: '*𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙*'
   }
 }
 
@@ -57,8 +57,8 @@ export const baileysConfig = {
   msgRetryCounterMap: {},
   retryRequestDelayMs: 250,
   markOnlineOnConnect: false,
-// version: [2, 3000, 1025190524], remove comments if connection open but didn't connect on WhatsApp
   getMessage: defaultGetMessage,
+// version: [2, 3000, 1025190524], remove comments if connection open but didn't connect on WhatsApp
   emitOwnEvents: true,
   // Remove mentionedJid to avoid issues
   patchMessageBeforeSending: (msg) => {
@@ -366,7 +366,8 @@ export function createBaileysSocket(authState, sessionId, getMessage = null) {
     
     /**
      * Enhanced sendMessage with:
-     * - Automatic fakeQuoted replacement
+     * - Automatic fakeQuoted replacement and addition
+     * - Auto-mention for group replies
      * - Timeout protection (prevents hanging)
      * - Ephemeral message control
      * - Better error handling
@@ -377,10 +378,41 @@ export function createBaileysSocket(authState, sessionId, getMessage = null) {
       const maxRetries = 2
       let lastError = null
       
-      // ========== FAKE QUOTED REPLACEMENT ==========
-      // Replace any quoted message with fakeQuoted
-      if (options && options.quoted) {
+      // ========== FAKE QUOTED MANAGEMENT ==========
+      const isGroup = jid.endsWith('@g.us')
+      let originalQuoted = options.quoted
+      
+      // Always use fakeQuoted (replace or add)
+      if (originalQuoted) {
         logger.debug(`[Baileys] Replacing quoted message with fakeQuoted for ${jid}`)
+        
+        // If it's a group and we have the original quoted message, enhance it
+        if (isGroup && originalQuoted.key?.participant) {
+          const senderJid = originalQuoted.key.participant
+          const pushName = originalQuoted.pushName || originalQuoted.verifiedBizName || 'User'
+          
+          // Create enhanced fakeQuoted with reply info
+          options.quoted = {
+            ...fakeQuoted,
+            message: {
+              conversation: `𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙\n\nReplied to ${pushName}`
+            }
+          }
+          
+          // Add mention of the user being replied to
+          const existingMentions = options.mentions || []
+          if (!existingMentions.includes(senderJid)) {
+            options.mentions = [...existingMentions, senderJid]
+          }
+          
+          logger.debug(`[Baileys] Enhanced group reply with mention for ${pushName}`)
+        } else {
+          // Not a group or no participant info, use standard fakeQuoted
+          options.quoted = fakeQuoted
+        }
+      } else {
+        // No quoted provided, add fakeQuoted
+        logger.debug(`[Baileys] Adding fakeQuoted to message for ${jid}`)
         options.quoted = fakeQuoted
       }
       
