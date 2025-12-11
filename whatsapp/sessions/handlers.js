@@ -259,7 +259,7 @@ export class SessionEventHandlers {
 
         this.sessionManager.sessions515Restart.delete(sessionId)
 
-        await new Promise((resolve) => setTimeout(resolve, 5000))
+        await new Promise((resolve) => setTimeout(resolve, 3000))
 
         await this.sessionManager._cleanupSocket(sessionId, sock)
         this.sessionManager.activeSockets.delete(sessionId)
@@ -272,7 +272,7 @@ export class SessionEventHandlers {
           connectionStatus: "disconnected",
         })
 
-        await new Promise((resolve) => setTimeout(resolve, 5000))
+        await new Promise((resolve) => setTimeout(resolve, 2000))
 
         // Use coordinator
         const rawSessionData = await this.sessionManager.storage.getSession(sessionId)
@@ -298,7 +298,7 @@ export class SessionEventHandlers {
           detected: rawSessionData.detected !== false,
         }
 
-        await new Promise((resolve) => setTimeout(resolve, 8000))
+        await new Promise((resolve) => setTimeout(resolve, 4000))
 
         const success = await this.sessionManager._initializeSession(formattedSessionData)
 
@@ -307,7 +307,7 @@ export class SessionEventHandlers {
 
           // ✅ WAIT for new connection to fully establish and decrypt
           logger.info(`[515 Flow] ⏳ Waiting for new connection to stabilize...`)
-          await new Promise((resolve) => setTimeout(resolve, 8000))
+          await new Promise((resolve) => setTimeout(resolve, 3000))
 
           // ✅ Get the NEW socket instance after reinitialization
           const newSock = this.sessionManager.activeSockets.get(sessionId)
