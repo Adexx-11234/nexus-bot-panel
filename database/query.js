@@ -1,7 +1,7 @@
 // Database query utilities
-// queries/index.js - Optimized and Fixed Database Query Abstraction Layer
+// queries/index.js - Enhanced with Circuit Breaker-Aware Caching
 
-import { pool } from "../config/database.js"
+import { pool, checkCircuitBreaker, circuitBreaker } from "../config/database.js"
 import { logger } from "../utils/logger.js"
 
 class QueryManager {
@@ -12,7 +12,16 @@ class QueryManager {
     this.isProcessing = false
     this.maxQueueSize = 50
     this.cleanupInterval = 15 * 1000 // 15 seconds
-    this.maxCacheSize = 200
+    this.maxCacheSize = 500
+    
+    // Group settings cache with longer TTL
+    this.groupSettingsCache = new Map()
+    this.groupSettingsTTL = 60 * 1000 // 60 seconds for group settings
+    
+    // Circuit breaker fallback cache - used when circuit is OPEN
+    this.fallbackCache = new Map()
+    this.fallbackCacheTTL = 5 * 60 * 1000 // 5 minutes for fallback data
+    
     this.initCleanup()
   }
 
@@ -26,9 +35,26 @@ class QueryManager {
     const now = Date.now()
     let removed = 0
 
+    // Clean general cache
     for (const [key, value] of this.cache.entries()) {
       if (now - value.timestamp > this.cacheTimeout) {
         this.cache.delete(key)
+        removed++
+      }
+    }
+
+    // Clean group settings cache
+    for (const [key, value] of this.groupSettingsCache.entries()) {
+      if (now - value.timestamp > this.groupSettingsTTL) {
+        this.groupSettingsCache.delete(key)
+        removed++
+      }
+    }
+
+    // Clean fallback cache
+    for (const [key, value] of this.fallbackCache.entries()) {
+      if (now - value.timestamp > this.fallbackCacheTTL) {
+        this.fallbackCache.delete(key)
         removed++
       }
     }
@@ -41,17 +67,28 @@ class QueryManager {
     }
 
     if (removed > 0) {
-      logger.debug(`[QueryManager] Cleaned ${removed} cache entries (remaining: ${this.cache.size})`)
+      logger.debug(`[QueryManager] Cleaned ${removed} cache entries (remaining: ${this.cache.size + this.groupSettingsCache.size + this.fallbackCache.size})`)
     }
   }
 
   async execute(query, params = []) {
+    // Check circuit breaker before executing
+    if (!checkCircuitBreaker()) {
+      logger.warn('[QueryManager] Circuit breaker is OPEN - query blocked')
+      throw new Error('Database circuit breaker is open')
+    }
+
     try {
       return await pool.query(query, params)
     } catch (error) {
-      logger.error(`[QueryManager] Database error: ${error.message}`)
-      logger.error(`[QueryManager] Query: ${query}`)
-      logger.error(`[QueryManager] Params: ${JSON.stringify(params)}`)
+      // Don't log timeout errors as ERROR if circuit breaker is handling it
+      if (error.message?.includes('timeout') || error.code === 'CIRCUIT_OPEN') {
+        logger.debug(`[QueryManager] Database timeout/circuit: ${error.message}`)
+      } else {
+        logger.error(`[QueryManager] Database error: ${error.message}`)
+        logger.error(`[QueryManager] Query: ${query}`)
+        logger.error(`[QueryManager] Params: ${JSON.stringify(params)}`)
+      }
       throw error
     }
   }
@@ -65,6 +102,17 @@ class QueryManager {
       this.cache.delete(cacheKey)
     }
 
+    // Check circuit breaker
+    if (!checkCircuitBreaker()) {
+      // Try to return fallback cache if available
+      if (this.fallbackCache.has(cacheKey)) {
+        const fallback = this.fallbackCache.get(cacheKey)
+        logger.debug(`[QueryManager] Using fallback cache for: ${cacheKey}`)
+        return fallback.data
+      }
+      throw new Error('Database circuit breaker is open and no fallback data available')
+    }
+
     const result = await this.execute(query, params)
 
     if (this.cache.size < this.maxCacheSize) {
@@ -74,15 +122,74 @@ class QueryManager {
         ttl: ttl,
       })
 
+      // Also store in fallback cache for circuit breaker scenarios
+      this.fallbackCache.set(cacheKey, {
+        data: result,
+        timestamp: Date.now()
+      })
+
       setTimeout(() => this.cache.delete(cacheKey), ttl)
     }
 
     return result
   }
 
+  // Smart cache for group settings - returns cached or fetches and caches
+  async getGroupSettingsCached(groupJid) {
+    const cacheKey = `group_settings_${groupJid}`
+    
+    if (this.groupSettingsCache.has(cacheKey)) {
+      const cached = this.groupSettingsCache.get(cacheKey)
+      if (Date.now() - cached.timestamp < this.groupSettingsTTL) {
+        return cached.data
+      }
+      this.groupSettingsCache.delete(cacheKey)
+    }
+
+    // If circuit is open, try fallback cache
+    if (!checkCircuitBreaker()) {
+      if (this.fallbackCache.has(cacheKey)) {
+        const fallback = this.fallbackCache.get(cacheKey)
+        logger.debug(`[QueryManager] Using fallback cache for group settings: ${groupJid}`)
+        return fallback.data
+      }
+      // Return null to indicate cache miss
+      return null
+    }
+
+    // If not cached, return null to indicate cache miss
+    return null
+  }
+
+  // Update group settings cache
+  setGroupSettingsCache(groupJid, settings) {
+    const cacheKey = `group_settings_${groupJid}`
+    this.groupSettingsCache.set(cacheKey, {
+      data: settings,
+      timestamp: Date.now()
+    })
+    // Also update fallback cache
+    this.fallbackCache.set(cacheKey, {
+      data: settings,
+      timestamp: Date.now()
+    })
+  }
+
+  // Invalidate group settings cache (called on updates)
+  invalidateGroupSettings(groupJid) {
+    const cacheKey = `group_settings_${groupJid}`
+    this.groupSettingsCache.delete(cacheKey)
+    // Don't delete fallback cache - keep it for circuit breaker scenarios
+    logger.debug(`[QueryManager] Invalidated cache for group: ${groupJid}`)
+  }
+
   invalidateCache(key) {
     if (key) {
       this.cache.delete(key)
+      // Also check group settings cache
+      if (key.startsWith('group_settings_')) {
+        this.groupSettingsCache.delete(key)
+      }
     }
   }
 
@@ -92,17 +199,30 @@ class QueryManager {
         this.cache.delete(key)
       }
     }
+    for (const key of this.groupSettingsCache.keys()) {
+      if (key.includes(pattern)) {
+        this.groupSettingsCache.delete(key)
+      }
+    }
   }
 
   clearCache() {
     this.cache.clear()
+    this.groupSettingsCache.clear()
+    // Don't clear fallback cache - keep it for emergencies
   }
 
   getCacheStats() {
     return {
-      size: this.cache.size,
+      generalCacheSize: this.cache.size,
+      groupSettingsCacheSize: this.groupSettingsCache.size,
+      fallbackCacheSize: this.fallbackCache.size,
+      totalCacheSize: this.cache.size + this.groupSettingsCache.size + this.fallbackCache.size,
       maxSize: this.maxCacheSize,
       maxTimeout: this.cacheTimeout,
+      groupSettingsTTL: this.groupSettingsTTL,
+      fallbackCacheTTL: this.fallbackCacheTTL,
+      circuitBreakerState: circuitBreaker.state
     }
   }
 }
@@ -110,12 +230,18 @@ class QueryManager {
 const queryManager = new QueryManager()
 
 // ==========================================
-// GROUP QUERIES
+// GROUP QUERIES - Enhanced with Circuit Breaker-Aware Caching
 // ==========================================
 
 export const GroupQueries = {
   async ensureGroupExists(groupJid, groupName = null) {
     if (!groupJid) return null
+
+    // Check circuit breaker - if open, return cached or default
+    if (!checkCircuitBreaker()) {
+      logger.warn(`[GroupQueries] Circuit open, skipping ensureGroupExists for ${groupJid}`)
+      return { id: null } // Return minimal valid response
+    }
 
     try {
       const result = await queryManager.execute(
@@ -128,17 +254,38 @@ export const GroupQueries = {
          RETURNING id`,
         [groupJid, groupName],
       )
+      
+      // Invalidate cache when group is created/updated
+      queryManager.invalidateGroupSettings(groupJid)
+      
       return result.rows[0]
     } catch (error) {
       logger.error(`[GroupQueries] Error ensuring group exists: ${error.message}`)
-      throw error
+      return { id: null }
     }
   },
 
   async getSettings(groupJid) {
     try {
+      // Try cache first
+      const cached = await queryManager.getGroupSettingsCached(groupJid)
+      if (cached) return cached
+
+      // Circuit breaker check
+      if (!checkCircuitBreaker()) {
+        logger.warn(`[GroupQueries] Circuit open, returning default settings for ${groupJid}`)
+        return null
+      }
+
       const result = await queryManager.execute(`SELECT * FROM groups WHERE jid = $1`, [groupJid])
-      return result.rows[0] || null
+      const settings = result.rows[0] || null
+      
+      // Cache the result
+      if (settings) {
+        queryManager.setGroupSettingsCache(groupJid, settings)
+      }
+      
+      return settings
     } catch (error) {
       logger.error(`[GroupQueries] Error getting settings: ${error.message}`)
       return null
@@ -146,9 +293,15 @@ export const GroupQueries = {
   },
 
   async deleteGroup(groupJid) {
+    // Skip if circuit is open
+    if (!checkCircuitBreaker()) {
+      logger.warn(`[GroupQueries] Circuit open, skipping deleteGroup for ${groupJid}`)
+      return
+    }
+
     try {
       await queryManager.execute(`DELETE FROM groups WHERE jid = $1`, [groupJid])
-      queryManager.clearCache(`group_settings_${groupJid}`)
+      queryManager.invalidateGroupSettings(groupJid)
     } catch (error) {
       logger.error(`[GroupQueries] Error deleting group: ${error.message}`)
       throw error
@@ -156,6 +309,12 @@ export const GroupQueries = {
   },
 
   async updateGroupMeta(groupJid, metadata = {}) {
+    // Skip if circuit is open
+    if (!checkCircuitBreaker()) {
+      logger.warn(`[GroupQueries] Circuit open, skipping updateGroupMeta for ${groupJid}`)
+      return
+    }
+
     try {
       const { name, description, participantsCount, isBotAdmin } = metadata
       await queryManager.execute(
@@ -168,7 +327,9 @@ export const GroupQueries = {
          WHERE jid = $1`,
         [groupJid, name, description, participantsCount, isBotAdmin],
       )
-      queryManager.clearCache(`group_settings_${groupJid}`)
+      
+      // Invalidate cache after update
+      queryManager.invalidateGroupSettings(groupJid)
     } catch (error) {
       logger.error(`[GroupQueries] Error updating group meta: ${error.message}`)
     }
@@ -176,6 +337,48 @@ export const GroupQueries = {
 
   async getGroupSettings(groupJid) {
     try {
+      // Try cache first
+      const cached = await queryManager.getGroupSettingsCached(groupJid)
+      if (cached) {
+        return {
+          grouponly_enabled: cached.grouponly_enabled || false,
+          public_mode: cached.public_mode !== false,
+          antilink_enabled: cached.antilink_enabled || false,
+          is_bot_admin: cached.is_bot_admin || false,
+          anticall_enabled: cached.anticall_enabled || false,
+          antiimage_enabled: cached.antiimage_enabled || false,
+          antivideo_enabled: cached.antivideo_enabled || false,
+          antiaudio_enabled: cached.antiaudio_enabled || false,
+          antidocument_enabled: cached.antidocument_enabled || false,
+          antisticker_enabled: cached.antisticker_enabled || false,
+          antigroupmention_enabled: cached.antigroupmention_enabled || false,
+          antidelete_enabled: cached.antidelete_enabled || false,
+          antiviewonce_enabled: cached.antiviewonce_enabled || false,
+          antibot_enabled: cached.antibot_enabled || false,
+          antispam_enabled: cached.antispam_enabled || false,
+          antiraid_enabled: cached.antiraid_enabled || false,
+          autowelcome_enabled: cached.autowelcome_enabled || false,
+          autokick_enabled: cached.autokick_enabled || false,
+          welcome_enabled: cached.welcome_enabled || false,
+          goodbye_enabled: cached.goodbye_enabled || false,
+          telegram_id: cached.telegram_id,
+          scheduled_close_time: cached.scheduled_close_time,
+          scheduled_open_time: cached.scheduled_open_time,
+          is_closed: cached.is_closed || false,
+        }
+      }
+
+      // Circuit breaker check - return defaults if open
+      if (!checkCircuitBreaker()) {
+        logger.warn(`[GroupQueries] Circuit open, returning default settings for ${groupJid}`)
+        return {
+          grouponly_enabled: false,
+          public_mode: true,
+          antilink_enabled: false,
+          is_bot_admin: false,
+        }
+      }
+
       const result = await queryManager.execute(
         `SELECT grouponly_enabled, public_mode, antilink_enabled, is_bot_admin,
                 anticall_enabled, antiimage_enabled, antivideo_enabled,
@@ -189,15 +392,21 @@ export const GroupQueries = {
       )
 
       if (result.rows.length === 0) {
+        // Create default settings and cache them (only if circuit is closed)
         await this.ensureGroupExists(groupJid)
-        return {
+        const defaultSettings = {
           grouponly_enabled: false,
           public_mode: true,
           antilink_enabled: false,
           is_bot_admin: false,
         }
+        queryManager.setGroupSettingsCache(groupJid, defaultSettings)
+        return defaultSettings
       }
 
+      // Cache the fetched settings
+      queryManager.setGroupSettingsCache(groupJid, result.rows[0])
+      
       return result.rows[0]
     } catch (error) {
       logger.error(`[GroupQueries] Error getting group settings: ${error.message}`)
@@ -211,6 +420,12 @@ export const GroupQueries = {
   },
 
   async updateGroupSettings(groupJid, settings) {
+    // Skip if circuit is open
+    if (!checkCircuitBreaker()) {
+      logger.warn(`[GroupQueries] Circuit open, skipping updateGroupSettings for ${groupJid}`)
+      throw new Error('Database unavailable, settings not updated')
+    }
+
     try {
       await this.ensureGroupExists(groupJid)
 
@@ -263,7 +478,10 @@ export const GroupQueries = {
 
       const query = `UPDATE groups SET ${updates.join(", ")} WHERE jid = $1 RETURNING *`
       const result = await queryManager.execute(query, values)
-      queryManager.clearCache(`group_settings_${groupJid}`)
+      
+      // Invalidate cache after update
+      queryManager.invalidateGroupSettings(groupJid)
+      
       return result.rows[0]
     } catch (error) {
       logger.error(`[GroupQueries] Error updating group settings: ${error.message}`)
@@ -272,6 +490,12 @@ export const GroupQueries = {
   },
 
   async upsertSettings(groupJid, settings = {}) {
+    // Skip if circuit is open
+    if (!checkCircuitBreaker()) {
+      logger.warn(`[GroupQueries] Circuit open, skipping upsertSettings for ${groupJid}`)
+      throw new Error('Database unavailable, settings not updated')
+    }
+
     try {
       if (Object.keys(settings).length === 0) {
         const result = await queryManager.execute(
@@ -282,6 +506,7 @@ export const GroupQueries = {
            RETURNING *`,
           [groupJid],
         )
+        queryManager.invalidateGroupSettings(groupJid)
         return result.rows[0]
       }
 
@@ -299,7 +524,10 @@ export const GroupQueries = {
       `
 
       const result = await queryManager.execute(query, [groupJid, ...values])
-      queryManager.clearCache(`group_settings_${groupJid}`)
+      
+      // Invalidate cache after upsert
+      queryManager.invalidateGroupSettings(groupJid)
+      
       return result.rows[0]
     } catch (error) {
       logger.error(`[GroupQueries] Error in upsertSettings: ${error.message}`)
@@ -308,6 +536,11 @@ export const GroupQueries = {
   },
 
   async setScheduledCloseTime(groupJid, time) {
+    if (!checkCircuitBreaker()) {
+      logger.warn(`[GroupQueries] Circuit open, skipping setScheduledCloseTime`)
+      throw new Error('Database unavailable')
+    }
+
     try {
       const result = await queryManager.execute(
         `UPDATE groups 
@@ -316,7 +549,8 @@ export const GroupQueries = {
          RETURNING scheduled_close_time, auto_schedule_enabled`,
         [time, groupJid],
       )
-      queryManager.clearCache(`group_schedule_${groupJid}`)
+      
+      queryManager.invalidateGroupSettings(groupJid)
       return result.rows[0]
     } catch (error) {
       logger.error(`[GroupQueries] Error setting scheduled close time: ${error.message}`)
@@ -325,6 +559,11 @@ export const GroupQueries = {
   },
 
   async setScheduledOpenTime(groupJid, time) {
+    if (!checkCircuitBreaker()) {
+      logger.warn(`[GroupQueries] Circuit open, skipping setScheduledOpenTime`)
+      throw new Error('Database unavailable')
+    }
+
     try {
       const result = await queryManager.execute(
         `UPDATE groups 
@@ -333,7 +572,8 @@ export const GroupQueries = {
          RETURNING scheduled_open_time, auto_schedule_enabled`,
         [time, groupJid],
       )
-      queryManager.clearCache(`group_schedule_${groupJid}`)
+      
+      queryManager.invalidateGroupSettings(groupJid)
       return result.rows[0]
     } catch (error) {
       logger.error(`[GroupQueries] Error setting scheduled open time: ${error.message}`)
@@ -342,6 +582,11 @@ export const GroupQueries = {
   },
 
   async removeScheduledTimes(groupJid, type = "both") {
+    if (!checkCircuitBreaker()) {
+      logger.warn(`[GroupQueries] Circuit open, skipping removeScheduledTimes`)
+      return false
+    }
+
     try {
       let query
       if (type === "close") {
@@ -353,15 +598,20 @@ export const GroupQueries = {
       }
 
       await queryManager.execute(query, [groupJid])
-      queryManager.clearCache(`group_schedule_${groupJid}`)
+      queryManager.invalidateGroupSettings(groupJid)
       return true
     } catch (error) {
       logger.error(`[GroupQueries] Error removing scheduled times: ${error.message}`)
-      throw error
+      return false
     }
   },
 
   async getGroupsWithScheduledTimes() {
+    if (!checkCircuitBreaker()) {
+      logger.warn(`[GroupQueries] Circuit open, returning empty scheduled times list`)
+      return []
+    }
+
     try {
       const result = await queryManager.execute(
         `SELECT jid, scheduled_close_time, scheduled_open_time, is_closed, timezone
@@ -378,6 +628,22 @@ export const GroupQueries = {
 
   async getGroupSchedule(groupJid) {
     try {
+      // Try to use cache first
+      const cached = await queryManager.getGroupSettingsCached(groupJid)
+      if (cached) {
+        return {
+          scheduled_close_time: cached.scheduled_close_time,
+          scheduled_open_time: cached.scheduled_open_time,
+          auto_schedule_enabled: cached.auto_schedule_enabled,
+          is_closed: cached.is_closed,
+          timezone: cached.timezone
+        }
+      }
+
+      if (!checkCircuitBreaker()) {
+        return null
+      }
+
       const result = await queryManager.execute(
         `SELECT scheduled_close_time, scheduled_open_time, auto_schedule_enabled, is_closed, timezone
          FROM groups WHERE jid = $1`,
@@ -391,6 +657,11 @@ export const GroupQueries = {
   },
 
   async setGroupOnly(groupJid, enabled) {
+    if (!checkCircuitBreaker()) {
+      logger.warn(`[GroupQueries] Circuit open, skipping setGroupOnly`)
+      throw new Error('Database unavailable')
+    }
+
     try {
       const result = await queryManager.execute(
         `INSERT INTO groups (jid, grouponly_enabled, updated_at)
@@ -400,7 +671,8 @@ export const GroupQueries = {
          RETURNING grouponly_enabled`,
         [groupJid, enabled],
       )
-      queryManager.clearCache(`group_settings_${groupJid}`)
+      
+      queryManager.invalidateGroupSettings(groupJid)
       return result.rows[0]?.grouponly_enabled || false
     } catch (error) {
       logger.error(`[GroupQueries] Error setting grouponly: ${error.message}`)
@@ -412,13 +684,9 @@ export const GroupQueries = {
     if (!groupJid) return false
 
     try {
-      await queryManager.execute(
-        `INSERT INTO groups (jid, updated_at) VALUES ($1, CURRENT_TIMESTAMP) ON CONFLICT (jid) DO NOTHING`,
-        [groupJid],
-      )
-
-      const result = await queryManager.execute(`SELECT grouponly_enabled FROM groups WHERE jid = $1`, [groupJid])
-      return result.rows.length > 0 && result.rows[0].grouponly_enabled === true
+      // Use cached settings
+      const settings = await this.getGroupSettings(groupJid)
+      return settings.grouponly_enabled === true
     } catch (error) {
       logger.error(`[GroupQueries] Error checking grouponly: ${error.message}`)
       return false
@@ -436,6 +704,11 @@ export const GroupQueries = {
   },
 
   async setAntiCommand(groupJid, commandType, enabled) {
+    if (!checkCircuitBreaker()) {
+      logger.warn(`[GroupQueries] Circuit open, skipping setAntiCommand`)
+      throw new Error('Database unavailable')
+    }
+
     const columnName = `${commandType}_enabled`
     try {
       const result = await queryManager.execute(
@@ -446,7 +719,8 @@ export const GroupQueries = {
          RETURNING ${columnName}`,
         [groupJid, enabled],
       )
-      queryManager.clearCache(`group_settings_${groupJid}`)
+      
+      queryManager.invalidateGroupSettings(groupJid)
       return result.rows[0]?.[columnName] || false
     } catch (error) {
       logger.error(`[GroupQueries] Error setting ${commandType}: ${error.message}`)
@@ -459,13 +733,9 @@ export const GroupQueries = {
 
     const columnName = `${commandType}_enabled`
     try {
-      await queryManager.execute(
-        `INSERT INTO groups (jid, updated_at) VALUES ($1, CURRENT_TIMESTAMP) ON CONFLICT (jid) DO NOTHING`,
-        [groupJid],
-      )
-
-      const result = await queryManager.execute(`SELECT ${columnName} FROM groups WHERE jid = $1`, [groupJid])
-      return result.rows.length > 0 && result.rows[0][columnName] === true
+      // Use cached settings
+      const settings = await this.getGroupSettings(groupJid)
+      return settings[columnName] === true
     } catch (error) {
       logger.error(`[GroupQueries] Error checking ${commandType}: ${error.message}`)
       return false
@@ -474,24 +744,15 @@ export const GroupQueries = {
 
   async getEnabledAntiCommands(groupJid) {
     try {
-      const result = await queryManager.execute(
-        `SELECT antilink_enabled, anticall_enabled, antiimage_enabled, antivideo_enabled,
-                antiaudio_enabled, antidocument_enabled, antisticker_enabled, 
-                antigroupmention_enabled, antidelete_enabled, antiviewonce_enabled,
-                antibot_enabled, antispam_enabled, antiraid_enabled,
-                autowelcome_enabled, autokick_enabled, welcome_enabled, goodbye_enabled,
-                grouponly_enabled, public_mode
-         FROM groups WHERE jid = $1`,
-        [groupJid],
-      )
+      // Use cached settings
+      const settings = await this.getGroupSettings(groupJid)
+      
+      if (!settings) return {}
 
-      if (result.rows.length === 0) return {}
-
-      const settings = result.rows[0]
       const enabled = {}
 
       Object.keys(settings).forEach((key) => {
-        if (settings[key] === true) {
+        if (key.endsWith('_enabled') && settings[key] === true) {
           enabled[key.replace("_enabled", "")] = true
         }
       })
@@ -504,6 +765,11 @@ export const GroupQueries = {
   },
 
   async logAdminPromotion(groupJid, userJid, promotedBy) {
+    if (!checkCircuitBreaker()) {
+      logger.debug(`[GroupQueries] Circuit open, skipping logAdminPromotion`)
+      return
+    }
+
     try {
       await queryManager.execute(
         `INSERT INTO admin_promotions (group_jid, user_jid, promoted_by, promoted_at) 
@@ -518,6 +784,10 @@ export const GroupQueries = {
   },
 
   async getUserPromoteTime(groupJid, userJid) {
+    if (!checkCircuitBreaker()) {
+      return null
+    }
+
     try {
       const result = await queryManager.execute(
         `SELECT promoted_at FROM admin_promotions 
@@ -533,6 +803,11 @@ export const GroupQueries = {
   },
 
   async logMemberAddition(groupJid, addedUserJid, addedByJid) {
+    if (!checkCircuitBreaker()) {
+      logger.debug(`[GroupQueries] Circuit open, skipping logMemberAddition`)
+      return
+    }
+
     try {
       await queryManager.execute(
         `INSERT INTO group_member_additions (group_jid, added_user_jid, added_by_jid) 
@@ -545,6 +820,10 @@ export const GroupQueries = {
   },
 
   async setTagLimit(groupJid, limit) {
+    if (!checkCircuitBreaker()) {
+      throw new Error('Database unavailable')
+    }
+
     try {
       const result = await queryManager.execute(
         `INSERT INTO groups (jid, tag_limit, updated_at)
@@ -554,7 +833,8 @@ export const GroupQueries = {
          RETURNING tag_limit`,
         [groupJid, limit],
       )
-      queryManager.invalidateCache(`group_settings_${groupJid}`)
+      
+      queryManager.invalidateGroupSettings(groupJid)
       return result.rows[0]?.tag_limit || limit
     } catch (error) {
       logger.error(`[GroupQueries] Error setting tag limit: ${error.message}`)
@@ -564,6 +844,13 @@ export const GroupQueries = {
 
   async getTagLimit(groupJid) {
     try {
+      const cached = await queryManager.getGroupSettingsCached(groupJid)
+      if (cached?.tag_limit) return cached.tag_limit
+
+      if (!checkCircuitBreaker()) {
+        return 5
+      }
+
       const result = await queryManager.execute(`SELECT tag_limit FROM groups WHERE jid = $1`, [groupJid])
       return result.rows[0]?.tag_limit || 5
     } catch (error) {
@@ -573,6 +860,10 @@ export const GroupQueries = {
   },
 
   async setGroupClosed(groupJid, isClosed) {
+    if (!checkCircuitBreaker()) {
+      throw new Error('Database unavailable')
+    }
+
     try {
       const result = await queryManager.execute(
         `INSERT INTO groups (jid, is_closed, updated_at)
@@ -582,7 +873,8 @@ export const GroupQueries = {
          RETURNING is_closed`,
         [groupJid, isClosed],
       )
-      queryManager.invalidateCache(`group_settings_${groupJid}`)
+      
+      queryManager.invalidateGroupSettings(groupJid)
       return result.rows[0]?.is_closed || isClosed
     } catch (error) {
       logger.error(`[GroupQueries] Error setting group closed: ${error.message}`)
@@ -592,6 +884,13 @@ export const GroupQueries = {
 
   async getGroupClosed(groupJid) {
     try {
+      const cached = await queryManager.getGroupSettingsCached(groupJid)
+      if (cached) return cached.is_closed || false
+
+      if (!checkCircuitBreaker()) {
+        return false
+      }
+
       const result = await queryManager.execute(`SELECT is_closed FROM groups WHERE jid = $1`, [groupJid])
       return result.rows[0]?.is_closed || false
     } catch (error) {
@@ -607,6 +906,10 @@ export const GroupQueries = {
 
 export const VIPQueries = {
   async isVIP(telegramId) {
+    if (!checkCircuitBreaker()) {
+      return { isVIP: false, level: 0, isDefault: false }
+    }
+
     try {
       const result = await queryManager.execute(
         `SELECT vip_level, is_default_vip FROM whatsapp_users WHERE telegram_id = $1`,
@@ -628,6 +931,10 @@ export const VIPQueries = {
   },
 
   async getUserByTelegramId(telegramId) {
+    if (!checkCircuitBreaker()) {
+      return null
+    }
+
     try {
       const result = await queryManager.execute(
         `SELECT telegram_id, first_name, phone_number, is_connected, connection_status 
@@ -642,6 +949,11 @@ export const VIPQueries = {
   },
 
   async ensureWhatsAppUser(telegramId, jid, phone = null) {
+    if (!checkCircuitBreaker()) {
+      logger.warn(`[VIPQueries] Circuit open, skipping ensureWhatsAppUser`)
+      return false
+    }
+
     try {
       await queryManager.execute(
         `INSERT INTO whatsapp_users (telegram_id, jid, phone, created_at, updated_at)
@@ -660,6 +972,10 @@ export const VIPQueries = {
   },
 
   async promoteToVIP(telegramId, level = 1) {
+    if (!checkCircuitBreaker()) {
+      throw new Error('Database unavailable')
+    }
+
     try {
       const result = await queryManager.execute(
         `INSERT INTO whatsapp_users (telegram_id, vip_level, created_at, updated_at)
@@ -677,6 +993,10 @@ export const VIPQueries = {
   },
 
   async demoteVIP(telegramId) {
+    if (!checkCircuitBreaker()) {
+      throw new Error('Database unavailable')
+    }
+
     try {
       await queryManager.execute(
         `UPDATE whatsapp_users SET vip_level = 0, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = $1`,
@@ -690,6 +1010,10 @@ export const VIPQueries = {
   },
 
   async setDefaultVIP(telegramId, isDefaultVIP = true, sessionManager = null) {
+    if (!checkCircuitBreaker()) {
+      throw new Error('Database unavailable')
+    }
+
     try {
       if (!telegramId) throw new Error("telegram_id is required")
 
@@ -732,6 +1056,10 @@ export const VIPQueries = {
   },
 
   async getUserByPhone(phone) {
+    if (!checkCircuitBreaker()) {
+      return null
+    }
+
     try {
       const cleanPhone = phone.replace(/[@\s\-+]/g, "")
       const result = await queryManager.execute(
@@ -749,6 +1077,10 @@ export const VIPQueries = {
   },
 
   async claimUser(vipTelegramId, targetTelegramId, targetPhone = null, targetJid = null) {
+    if (!checkCircuitBreaker()) {
+      throw new Error('Database unavailable')
+    }
+
     try {
       const existing = await queryManager.execute(
         `SELECT vip_telegram_id FROM vip_owned_users 
@@ -781,6 +1113,10 @@ export const VIPQueries = {
   },
 
   async unclaimUser(targetTelegramId, vipTelegramId = null) {
+    if (!checkCircuitBreaker()) {
+      throw new Error('Database unavailable')
+    }
+
     try {
       let query, params
 
@@ -804,6 +1140,10 @@ export const VIPQueries = {
   },
 
   async ownsUser(vipTelegramId, targetTelegramId) {
+    if (!checkCircuitBreaker()) {
+      return false
+    }
+
     try {
       const result = await queryManager.execute(
         `SELECT id FROM vip_owned_users 
@@ -818,6 +1158,10 @@ export const VIPQueries = {
   },
 
   async getOwnedUsers(vipTelegramId) {
+    if (!checkCircuitBreaker()) {
+      return []
+    }
+
     try {
       const result = await queryManager.execute(
         `SELECT vou.*, wu.jid, wu.name, wu.phone 
@@ -835,6 +1179,10 @@ export const VIPQueries = {
   },
 
   async reassignUser(targetTelegramId, newVipTelegramId) {
+    if (!checkCircuitBreaker()) {
+      throw new Error('Database unavailable')
+    }
+
     try {
       await queryManager.execute(`UPDATE vip_owned_users SET is_active = false WHERE owned_telegram_id = $1`, [
         targetTelegramId,
@@ -858,6 +1206,11 @@ export const VIPQueries = {
   },
 
   async logActivity(vipTelegramId, actionType, targetUserTelegramId = null, targetGroupJid = null, details = {}) {
+    if (!checkCircuitBreaker()) {
+      logger.debug(`[VIPQueries] Circuit open, skipping logActivity`)
+      return
+    }
+
     try {
       await queryManager.execute(
         `INSERT INTO vip_activity_log (vip_telegram_id, action_type, target_user_telegram_id, target_group_jid, details)
@@ -879,6 +1232,10 @@ export const VIPQueries = {
   },
 
   async getAllVIPs() {
+    if (!checkCircuitBreaker()) {
+      return []
+    }
+
     try {
       const result = await queryManager.execute(
         `SELECT wu.telegram_id, wu.jid, wu.name, wu.phone, wu.vip_level, wu.is_default_vip,
@@ -897,6 +1254,10 @@ export const VIPQueries = {
   },
 
   async getVIPDetails(vipTelegramId) {
+    if (!checkCircuitBreaker()) {
+      return null
+    }
+
     try {
       const vipInfo = await queryManager.execute(`SELECT * FROM whatsapp_users WHERE telegram_id = $1`, [vipTelegramId])
 
@@ -927,6 +1288,11 @@ export const VIPQueries = {
 
 export const WarningQueries = {
   async addWarning(groupJid, userJid, warningType, reason = null) {
+    if (!checkCircuitBreaker()) {
+      logger.debug(`[WarningQueries] Circuit open, skipping addWarning`)
+      return 1 // Return default warning count
+    }
+
     try {
       const result = await queryManager.execute(
         `INSERT INTO warnings (user_jid, group_jid, warning_type, warning_count, reason, last_warning_at, created_at)
@@ -943,11 +1309,16 @@ export const WarningQueries = {
       return result.rows[0]?.warning_count || 1
     } catch (error) {
       logger.error(`[WarningQueries] Error adding warning: ${error.message}`)
-      throw error
+      return 1
     }
   },
 
   async resetUserWarnings(groupJid, userJid, warningType = null) {
+    if (!checkCircuitBreaker()) {
+      logger.debug(`[WarningQueries] Circuit open, skipping resetUserWarnings`)
+      return 0
+    }
+
     try {
       let query, params
 
@@ -963,18 +1334,43 @@ export const WarningQueries = {
       return result.rowCount
     } catch (error) {
       logger.error(`[WarningQueries] Error resetting warnings: ${error.message}`)
-      throw error
+      return 0
     }
   },
 
   async getWarningCount(groupJid, userJid, warningType) {
     try {
+      const cacheKey = `warning_${groupJid}_${userJid}_${warningType}`
+      
+      // Try cache first
+      if (queryManager.cache.has(cacheKey)) {
+        const cached = queryManager.cache.get(cacheKey)
+        if (Date.now() - cached.timestamp < 30000) {
+          return cached.data
+        }
+      }
+
+      if (!checkCircuitBreaker()) {
+        // Try fallback cache
+        if (queryManager.fallbackCache.has(cacheKey)) {
+          return queryManager.fallbackCache.get(cacheKey).data
+        }
+        return 0
+      }
+
       const result = await queryManager.execute(
         `SELECT warning_count FROM warnings
          WHERE group_jid = $1 AND user_jid = $2 AND warning_type = $3`,
         [groupJid, userJid, warningType],
       )
-      return result.rows[0]?.warning_count || 0
+      
+      const count = result.rows[0]?.warning_count || 0
+      
+      // Cache the result
+      queryManager.cache.set(cacheKey, { data: count, timestamp: Date.now() })
+      queryManager.fallbackCache.set(cacheKey, { data: count, timestamp: Date.now() })
+      
+      return count
     } catch (error) {
       logger.error(`[WarningQueries] Error getting warning count: ${error.message}`)
       return 0
@@ -982,6 +1378,10 @@ export const WarningQueries = {
   },
 
   async getWarningStats(groupJid, warningType = null) {
+    if (!checkCircuitBreaker()) {
+      return { totalUsers: 0, totalWarnings: 0, avgWarnings: 0, maxWarnings: 0 }
+    }
+
     try {
       let query, params
 
@@ -1024,6 +1424,10 @@ export const WarningQueries = {
   },
 
   async getWarningList(groupJid, warningType = null, limit = 10) {
+    if (!checkCircuitBreaker()) {
+      return []
+    }
+
     try {
       let query, params
 
@@ -1069,6 +1473,11 @@ export const ViolationQueries = {
     warningNumber,
     messageId,
   ) {
+    if (!checkCircuitBreaker()) {
+      logger.debug(`[ViolationQueries] Circuit open, skipping logViolation`)
+      return
+    }
+
     try {
       await queryManager.execute(
         `INSERT INTO violations (
@@ -1094,6 +1503,10 @@ export const ViolationQueries = {
   },
 
   async getViolationStats(groupJid, violationType = null, days = 30) {
+    if (!checkCircuitBreaker()) {
+      return []
+    }
+
     try {
       let query, params
 
@@ -1135,11 +1548,16 @@ export const ViolationQueries = {
 }
 
 // ==========================================
-// MESSAGE QUERIES
+// MESSAGE QUERIES  
 // ==========================================
 
 export const MessageQueries = {
   async storeMessage(messageData) {
+    if (!checkCircuitBreaker()) {
+      logger.debug(`[MessageQueries] Circuit open, skipping storeMessage`)
+      return null
+    }
+
     try {
       const {
         id,
@@ -1183,12 +1601,19 @@ export const MessageQueries = {
       )
       return insertResult.rows[0]?.id
     } catch (error) {
-      logger.error(`[MessageQueries] Error storing message: ${error.message}`)
-      throw error
+      // Silently fail for message storage during database issues
+      if (!error.message?.includes('timeout') && error.code !== 'CIRCUIT_OPEN') {
+        logger.error(`[MessageQueries] Error storing message: ${error.message}`)
+      }
+      return null
     }
   },
 
   async getRecentMessages(chatJid, sessionId, limit = 50) {
+    if (!checkCircuitBreaker()) {
+      return []
+    }
+
     try {
       const result = await queryManager.execute(
         `SELECT * FROM messages
@@ -1204,6 +1629,11 @@ export const MessageQueries = {
   },
 
   async markDeleted(messageId, sessionId) {
+    if (!checkCircuitBreaker()) {
+      logger.debug(`[MessageQueries] Circuit open, skipping markDeleted`)
+      return
+    }
+
     try {
       await queryManager.execute(
         `UPDATE messages 
@@ -1217,6 +1647,10 @@ export const MessageQueries = {
   },
 
   async searchMessages(chatJid, sessionId, searchTerm, limit = 20) {
+    if (!checkCircuitBreaker()) {
+      return []
+    }
+
     try {
       const result = await queryManager.execute(
         `SELECT * FROM messages
@@ -1233,6 +1667,10 @@ export const MessageQueries = {
   },
 
   async findMessageById(messageId, sessionId = null) {
+    if (!checkCircuitBreaker()) {
+      return null
+    }
+
     try {
       const params = [messageId]
       let queryText = `
@@ -1275,6 +1713,11 @@ export const MessageQueries = {
   },
 
   async deleteMessageById(messageId, sessionId = null) {
+    if (!checkCircuitBreaker()) {
+      logger.debug(`[MessageQueries] Circuit open, skipping deleteMessageById`)
+      return { success: false, error: 'Database unavailable' }
+    }
+
     try {
       const params = [messageId]
       let queryText = "DELETE FROM messages WHERE id = $1"
@@ -1324,10 +1767,15 @@ export const MessageQueries = {
 
 export const AnalyticsQueries = {
   async updateGroupAnalytics(groupJid, updates) {
+    if (!checkCircuitBreaker()) {
+      logger.debug(`[AnalyticsQueries] Circuit open, skipping updateGroupAnalytics`)
+      return
+    }
+
     try {
       const columns = Object.keys(updates)
       const values = Object.values(updates)
-      const placeholders = columns.map((_, i) => `${i + 3}`).join(", ")
+      const placeholders = columns.map((_, i) => `$${i + 3}`).join(", ")
       const updateSet = columns.map((col, i) => `${col} = ${col} + $${i + 3}`).join(", ")
 
       await queryManager.execute(
@@ -1338,11 +1786,18 @@ export const AnalyticsQueries = {
         [groupJid, new Date().toISOString().split("T")[0], ...values],
       )
     } catch (error) {
-      logger.error(`[AnalyticsQueries] Error updating analytics: ${error.message}`)
+      // Silently fail for analytics during database issues
+      if (!error.message?.includes('timeout') && error.code !== 'CIRCUIT_OPEN') {
+        logger.error(`[AnalyticsQueries] Error updating analytics: ${error.message}`)
+      }
     }
   },
 
   async getGroupAnalytics(groupJid, days = 30) {
+    if (!checkCircuitBreaker()) {
+      return []
+    }
+
     try {
       const result = await queryManager.execute(
         `SELECT * FROM group_analytics
@@ -1364,6 +1819,10 @@ export const AnalyticsQueries = {
 
 export const UserQueries = {
   async getUserByTelegramId(telegramId) {
+    if (!checkCircuitBreaker()) {
+      return null
+    }
+
     try {
       const result = await queryManager.execute(`SELECT * FROM users WHERE telegram_id = $1`, [telegramId])
       return result.rows[0] || null
@@ -1374,6 +1833,10 @@ export const UserQueries = {
   },
 
   async getUserBySessionId(sessionId) {
+    if (!checkCircuitBreaker()) {
+      return null
+    }
+
     try {
       const sessionIdMatch = sessionId.match(/session_(-?\d+)/)
       if (!sessionIdMatch) return null
@@ -1388,6 +1851,10 @@ export const UserQueries = {
   },
 
   async setBotMode(telegramId, mode) {
+    if (!checkCircuitBreaker()) {
+      throw new Error('Database unavailable')
+    }
+
     try {
       if (!telegramId) throw new Error("telegram_id is required")
 
@@ -1400,7 +1867,7 @@ export const UserQueries = {
         [telegramId, mode],
       )
 
-      queryManager.clearCache(`bot_mode_${telegramId}`)
+      queryManager.invalidateCache(`bot_mode_${telegramId}`)
       return result.rows[0]?.bot_mode || "public"
     } catch (error) {
       logger.error(`[UserQueries] Error setting bot mode: ${error.message}`)
@@ -1410,10 +1877,35 @@ export const UserQueries = {
 
   async getBotMode(telegramId) {
     try {
+      const cacheKey = `bot_mode_${telegramId}`
+      
+      // Try cache first
+      if (queryManager.cache.has(cacheKey)) {
+        const cached = queryManager.cache.get(cacheKey)
+        if (Date.now() - cached.timestamp < 60000) { // 1 minute cache
+          return { mode: cached.data }
+        }
+      }
+
+      if (!checkCircuitBreaker()) {
+        // Try fallback cache
+        if (queryManager.fallbackCache.has(cacheKey)) {
+          return { mode: queryManager.fallbackCache.get(cacheKey).data }
+        }
+        return { mode: "public" }
+      }
+
       const result = await queryManager.execute(`SELECT bot_mode FROM whatsapp_users WHERE telegram_id = $1`, [
         telegramId,
       ])
-      return { mode: result.rows[0]?.bot_mode || "public" }
+      
+      const mode = result.rows[0]?.bot_mode || "public"
+      
+      // Cache the result
+      queryManager.cache.set(cacheKey, { data: mode, timestamp: Date.now() })
+      queryManager.fallbackCache.set(cacheKey, { data: mode, timestamp: Date.now() })
+      
+      return { mode }
     } catch (error) {
       logger.error(`[UserQueries] Error getting bot mode: ${error.message}`)
       return { mode: "public" }
@@ -1421,6 +1913,10 @@ export const UserQueries = {
   },
 
   async createWebUser(telegramId, phoneNumber = null) {
+    if (!checkCircuitBreaker()) {
+      throw new Error('Database unavailable')
+    }
+
     try {
       const result = await queryManager.execute(
         `INSERT INTO users (telegram_id, phone_number, is_active, created_at, updated_at)
@@ -1440,6 +1936,11 @@ export const UserQueries = {
   },
 
   async ensureUserInUsersTable(telegramId, userData = {}) {
+    if (!checkCircuitBreaker()) {
+      logger.warn(`[UserQueries] Circuit open, skipping ensureUserInUsersTable`)
+      return null
+    }
+
     try {
       const result = await queryManager.execute(
         `INSERT INTO users (telegram_id, username, first_name, last_name, phone_number, is_active, created_at, updated_at)
@@ -1470,6 +1971,10 @@ export const UserQueries = {
   },
 
   async getSettings(userJid) {
+    if (!checkCircuitBreaker()) {
+      return null
+    }
+
     try {
       const result = await queryManager.execute(`SELECT * FROM whatsapp_users WHERE jid = $1`, [userJid])
       return result.rows[0] || null
@@ -1481,15 +1986,35 @@ export const UserQueries = {
 
   async getUserSettings(telegramId) {
     try {
+      const cacheKey = `user_settings_${telegramId}`
+      
+      // Try cache
+      if (queryManager.cache.has(cacheKey)) {
+        const cached = queryManager.cache.get(cacheKey)
+        if (Date.now() - cached.timestamp < 60000) {
+          return cached.data
+        }
+      }
+
+      if (!checkCircuitBreaker()) {
+        // Try fallback
+        if (queryManager.fallbackCache.has(cacheKey)) {
+          return queryManager.fallbackCache.get(cacheKey).data
+        }
+        return { custom_prefix: "." }
+      }
+
       const result = await queryManager.execute(`SELECT custom_prefix FROM whatsapp_users WHERE telegram_id = $1`, [
         telegramId,
       ])
 
-      if (result.rows.length === 0) {
-        return { custom_prefix: "." }
-      }
-
-      return result.rows[0]
+      const settings = result.rows.length === 0 ? { custom_prefix: "." } : result.rows[0]
+      
+      // Cache it
+      queryManager.cache.set(cacheKey, { data: settings, timestamp: Date.now() })
+      queryManager.fallbackCache.set(cacheKey, { data: settings, timestamp: Date.now() })
+      
+      return settings
     } catch (error) {
       logger.error(`[UserQueries] Error getting user settings: ${error.message}`)
       return { custom_prefix: "." }
@@ -1497,6 +2022,10 @@ export const UserQueries = {
   },
 
   async updateUserPrefix(telegramId, prefix) {
+    if (!checkCircuitBreaker()) {
+      throw new Error('Database unavailable')
+    }
+
     try {
       if (!telegramId) throw new Error("telegram_id is required")
       if (prefix && prefix.length > 10) throw new Error("Prefix cannot be longer than 10 characters")
@@ -1512,7 +2041,7 @@ export const UserQueries = {
         [telegramId, normalizedPrefix],
       )
 
-      queryManager.clearCache(`user_settings_${telegramId}`)
+      queryManager.invalidateCache(`user_settings_${telegramId}`)
       return result.rows[0]?.custom_prefix
     } catch (error) {
       logger.error(`[UserQueries] Error updating prefix: ${error.message}`)
@@ -1521,6 +2050,10 @@ export const UserQueries = {
   },
 
   async upsertSettings(telegramId, userJid = null, settings = {}) {
+    if (!checkCircuitBreaker()) {
+      throw new Error('Database unavailable')
+    }
+
     try {
       if (!telegramId) throw new Error("telegram_id is required")
 
@@ -1540,7 +2073,7 @@ export const UserQueries = {
 
       const columns = Object.keys(settings)
       const values = Object.values(settings)
-      const placeholders = columns.map((_, i) => `${i + 2}`).join(", ")
+      const placeholders = columns.map((_, i) => `$${i + 2}`).join(", ")
       const updateSet = columns.map((col) => `${col} = COALESCE(EXCLUDED.${col}, whatsapp_users.${col})`).join(", ")
 
       const query = `
@@ -1552,7 +2085,7 @@ export const UserQueries = {
       `
 
       const result = await queryManager.execute(query, [telegramId, ...values])
-      queryManager.clearCache(`user_settings_${telegramId}`)
+      queryManager.invalidateCache(`user_settings_${telegramId}`)
       return result.rows[0]
     } catch (error) {
       logger.error(`[UserQueries] Error in upsertSettings: ${error.message}`)
@@ -1561,6 +2094,10 @@ export const UserQueries = {
   },
 
   async setAntiViewOnce(userJid, enabled, telegramId = null) {
+    if (!checkCircuitBreaker()) {
+      throw new Error('Database unavailable')
+    }
+
     try {
       if (!telegramId) throw new Error("telegram_id is required")
 
@@ -1578,7 +2115,7 @@ export const UserQueries = {
         [telegramId, normalizedJid, enabled],
       )
 
-      queryManager.clearCache(`user_settings_${telegramId}`)
+      queryManager.invalidateCache(`user_settings_${telegramId}`)
       return result.rows[0]?.antiviewonce_enabled || false
     } catch (error) {
       logger.error(`[UserQueries] Error setting antiviewonce: ${error.message}`)
@@ -1601,6 +2138,10 @@ export const UserQueries = {
         params = [normalizedJid]
       }
 
+      if (!checkCircuitBreaker()) {
+        return false
+      }
+
       const result = await queryManager.execute(query, params)
       return result.rows.length > 0 && result.rows[0].antiviewonce_enabled === true
     } catch (error) {
@@ -1610,6 +2151,10 @@ export const UserQueries = {
   },
 
   async getAntiViewOnceUsers() {
+    if (!checkCircuitBreaker()) {
+      return []
+    }
+
     try {
       const result = await queryManager.execute(
         `SELECT wu.jid, wu.telegram_id 
@@ -1631,6 +2176,10 @@ export const UserQueries = {
   },
 
   async getAntiDeleteUsers() {
+    if (!checkCircuitBreaker()) {
+      return []
+    }
+
     try {
       const result = await queryManager.execute(
         `SELECT wu.jid, wu.telegram_id 
@@ -1653,6 +2202,10 @@ export const UserQueries = {
 
   async isAntiDeletedEnabled(jid, telegramId) {
     try {
+      if (!checkCircuitBreaker()) {
+        return false
+      }
+
       const result = await queryManager.execute(
         `SELECT antideleted_enabled FROM whatsapp_users 
          WHERE telegram_id = $1`,
@@ -1670,6 +2223,10 @@ export const UserQueries = {
   },
 
   async setAntiDeleted(jid, enabled, telegramId) {
+    if (!checkCircuitBreaker()) {
+      throw new Error('Database unavailable')
+    }
+
     try {
       if (!telegramId) throw new Error("telegram_id is required")
 
@@ -1691,6 +2248,10 @@ export const UserQueries = {
   },
 
   async getWhatsAppUserByTelegramId(telegramId) {
+    if (!checkCircuitBreaker()) {
+      return null
+    }
+
     try {
       const result = await queryManager.execute(
         `SELECT jid, telegram_id, antideleted_enabled, antiviewonce_enabled
@@ -1716,6 +2277,11 @@ export const UserQueries = {
   async ensureUserExists(userJid, userName = null) {
     if (!userJid) return null
 
+    if (!checkCircuitBreaker()) {
+      logger.warn(`[UserQueries] Circuit open, skipping ensureUserExists`)
+      return null
+    }
+
     try {
       const result = await queryManager.execute(
         `INSERT INTO whatsapp_users (jid, name, created_at, updated_at)
@@ -1735,6 +2301,10 @@ export const UserQueries = {
   },
 
   async setAutoOnline(telegramId, enabled) {
+    if (!checkCircuitBreaker()) {
+      throw new Error('Database unavailable')
+    }
+
     try {
       if (!telegramId) throw new Error("telegram_id is required")
 
@@ -1747,7 +2317,7 @@ export const UserQueries = {
         [telegramId, enabled],
       )
 
-      queryManager.clearCache(`presence_${telegramId}`)
+      queryManager.invalidateCache(`presence_${telegramId}`)
       return result.rows[0]?.auto_online || false
     } catch (error) {
       logger.error(`[UserQueries] Error setting auto-online: ${error.message}`)
@@ -1756,6 +2326,10 @@ export const UserQueries = {
   },
 
   async setAutoTyping(telegramId, enabled) {
+    if (!checkCircuitBreaker()) {
+      throw new Error('Database unavailable')
+    }
+
     try {
       if (!telegramId) throw new Error("telegram_id is required")
 
@@ -1768,7 +2342,7 @@ export const UserQueries = {
         [telegramId, enabled],
       )
 
-      queryManager.clearCache(`presence_${telegramId}`)
+      queryManager.invalidateCache(`presence_${telegramId}`)
       return result.rows[0]?.auto_typing || false
     } catch (error) {
       logger.error(`[UserQueries] Error setting auto-typing: ${error.message}`)
@@ -1777,6 +2351,10 @@ export const UserQueries = {
   },
 
   async setAutoRecording(telegramId, enabled) {
+    if (!checkCircuitBreaker()) {
+      throw new Error('Database unavailable')
+    }
+
     try {
       if (!telegramId) throw new Error("telegram_id is required")
 
@@ -1789,7 +2367,7 @@ export const UserQueries = {
         [telegramId, enabled],
       )
 
-      queryManager.clearCache(`presence_${telegramId}`)
+      queryManager.invalidateCache(`presence_${telegramId}`)
       return result.rows[0]?.auto_recording || false
     } catch (error) {
       logger.error(`[UserQueries] Error setting auto-recording: ${error.message}`)
@@ -1798,6 +2376,10 @@ export const UserQueries = {
   },
 
   async setAutoStatusView(telegramId, enabled) {
+    if (!checkCircuitBreaker()) {
+      throw new Error('Database unavailable')
+    }
+
     try {
       if (!telegramId) throw new Error("telegram_id is required")
 
@@ -1810,7 +2392,7 @@ export const UserQueries = {
         [telegramId, enabled],
       )
 
-      queryManager.clearCache(`presence_${telegramId}`)
+      queryManager.invalidateCache(`presence_${telegramId}`)
       return result.rows[0]?.auto_status_view || false
     } catch (error) {
       logger.error(`[UserQueries] Error setting auto-status-view: ${error.message}`)
@@ -1819,6 +2401,10 @@ export const UserQueries = {
   },
 
   async setAutoStatusLike(telegramId, enabled) {
+    if (!checkCircuitBreaker()) {
+      throw new Error('Database unavailable')
+    }
+
     try {
       if (!telegramId) throw new Error("telegram_id is required")
 
@@ -1831,7 +2417,7 @@ export const UserQueries = {
         [telegramId, enabled],
       )
 
-      queryManager.clearCache(`presence_${telegramId}`)
+      queryManager.invalidateCache(`presence_${telegramId}`)
       return result.rows[0]?.auto_status_like || false
     } catch (error) {
       logger.error(`[UserQueries] Error setting auto-status-like: ${error.message}`)
@@ -1842,8 +2428,29 @@ export const UserQueries = {
   async getPresenceSettings(telegramId) {
     try {
       const cacheKey = `presence_${telegramId}`
-      const cached = queryManager.cache.get(cacheKey)
-      if (cached) return cached.data
+      
+      // Try cache
+      if (queryManager.cache.has(cacheKey)) {
+        const cached = queryManager.cache.get(cacheKey)
+        if (Date.now() - cached.timestamp < 60000) {
+          return cached.data
+        }
+      }
+
+      if (!checkCircuitBreaker()) {
+        // Try fallback
+        if (queryManager.fallbackCache.has(cacheKey)) {
+          return queryManager.fallbackCache.get(cacheKey).data
+        }
+        return {
+          auto_online: false,
+          auto_typing: false,
+          auto_recording: false,
+          auto_status_view: false,
+          auto_status_like: false,
+          default_presence: "unavailable",
+        }
+      }
 
       const result = await queryManager.execute(
         `SELECT auto_online, auto_typing, auto_recording, 
@@ -1861,7 +2468,10 @@ export const UserQueries = {
         default_presence: "unavailable",
       }
 
+      // Cache it
       queryManager.cache.set(cacheKey, { data: settings, timestamp: Date.now() })
+      queryManager.fallbackCache.set(cacheKey, { data: settings, timestamp: Date.now() })
+      
       return settings
     } catch (error) {
       logger.error(`[UserQueries] Error getting presence settings: ${error.message}`)
@@ -1883,6 +2493,11 @@ export const UserQueries = {
 
 export const Utils = {
   async cleanupOldData(days = 90) {
+    if (!checkCircuitBreaker()) {
+      logger.warn(`[Utils] Circuit open, skipping cleanupOldData`)
+      return 0
+    }
+
     try {
       const result = await queryManager.execute(`SELECT cleanup_old_data($1)`, [days])
       return result.rows[0]?.cleanup_old_data || 0
@@ -1893,6 +2508,10 @@ export const Utils = {
   },
 
   async getDatabaseStats() {
+    if (!checkCircuitBreaker()) {
+      return {}
+    }
+
     const stats = {}
     const tables = ["users", "messages", "groups", "warnings", "settings", "group_analytics", "whatsapp_users"]
 
@@ -1920,10 +2539,13 @@ export const Utils = {
   },
 
   async verifyConstraints() {
+    if (!checkCircuitBreaker()) {
+      return []
+    }
+
     try {
       const result = await queryManager.execute(`
-        SELECT 
-          conname as constraint_name,
+        SELECT conname as constraint_name,
           conrelid::regclass as table_name,
           contype as constraint_type
         FROM pg_constraint 
