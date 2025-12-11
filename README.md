@@ -79,14 +79,14 @@
 │                           NEXUS BOT PLATFORM                                │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│   ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐         │
-│   │    TELEGRAM      │  │       WEB        │  │    WHATSAPP      │         │
-│   │      BOT         │  │   INTERFACE      │  │    SESSIONS      │         │
-│   │                  │  │                  │  │                  │         │
-│   │  • /start        │  │  • Register      │  │  • Multi-Device  │         │
-│   │  • /session      │  │  • Login         │  │  • Pairing Code  │         │
-│   │  • Pairing Code  │  │  • Dashboard     │  │  • Auto-Reconnect│         │
-│   └────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘         │
+│   ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐          │
+│   │    TELEGRAM      │  │       WEB        │  │    WHATSAPP      │          │
+│   │      BOT         │  │   INTERFACE      │  │    SESSIONS      │          │
+│   │                  │  │                  │  │                  │          │
+│   │  • /start        │  │  • Register      │  │  • Multi-Device  │          │
+│   │  • /session      │  │  • Login         │  │  • Pairing Code  │          │
+│   │  • Pairing Code  │  │  • Dashboard     │  │  • Auto-Reconnect│          │
+│   └────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘          │
 │            │                     │                     │                    │
 │            └─────────────────────┼─────────────────────┘                    │
 │                                  │                                          │
@@ -101,14 +101,14 @@
 │                                  │                                          │
 │            ┌─────────────────────┼─────────────────────┐                    │
 │            │                     │                     │                    │
-│   ┌────────▼────────┐   ┌────────▼────────┐   ┌────────▼────────┐          │
-│   │    MONGODB      │   │   POSTGRESQL    │   │     PLUGIN      │          │
-│   │                 │   │                 │   │     SYSTEM      │          │
-│   │  • Auth State   │   │  • Users        │   │                 │          │
-│   │  • Pre-Keys     │   │  • Groups       │   │  • 130+ Plugins │          │
-│   │  • Identity     │   │  • Messages     │   │  • Hot-Reload   │          │
-│   │  • App Sync     │   │  • VIP Data     │   │  • Categories   │          │
-│   └─────────────────┘   └─────────────────┘   └─────────────────┘          │
+│   ┌────────▼────────┐   ┌────────▼────────┐   ┌────────▼────────┐           │
+│   │    MONGODB      │   │   POSTGRESQL    │   │     PLUGIN      │           │
+│   │                 │   │                 │   │     SYSTEM      │           │
+│   │  • Auth State   │   │  • Users        │   │                 │           │
+│   │  • Pre-Keys     │   │  • Groups       │   │  • 130+ Plugins │           │
+│   │  • Identity     │   │  • Messages     │   │  • Hot-Reload   │           │
+│   │  • App Sync     │   │  • VIP Data     │   │  • Categories   │           │
+│   └─────────────────┘   └─────────────────┘   └─────────────────┘           │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
