@@ -395,7 +395,7 @@ export function createBaileysSocket(authState, sessionId, getMessage = null) {
           options.quoted = {
             ...fakeQuoted,
             message: {
-              conversation: `𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙\n\nReplied to ${pushName}`
+              conversation: `*𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙\n\nReplied to ${pushName}*`
             }
           }
           
