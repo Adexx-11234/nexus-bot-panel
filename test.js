@@ -16,7 +16,7 @@ const logger = {
  */
 const CONFIG = {
   // Global settings
-  DRY_RUN: false, // Master switch - set false to execute
+  DRY_RUN: true, // Master switch - set false to execute
   BATCH_SIZE: 50,
   MONGODB_URI: process.env.MONGODB_URI,
   

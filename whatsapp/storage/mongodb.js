@@ -4,8 +4,8 @@ import { createComponentLogger } from "../../utils/logger.js"
 const logger = createComponentLogger("MONGODB_STORAGE")
 
 /**
- * MongoDBStorage - Pure MongoDB operations
- * NO business logic, only database operations
+ * MongoDBStorage - Pure MongoDB operations with robust auto-reconnection
+ * Handles connection drops gracefully without disrupting active sessions
  */
 export class MongoDBStorage {
   constructor() {
@@ -14,33 +14,63 @@ export class MongoDBStorage {
     this.sessions = null
     this.isConnected = false
     this.retryCount = 0
-    this.maxRetries = 4
+    this.maxRetries = Infinity // Never give up retrying
     this.connectionTimeout = 30000
+    this.reconnectInterval = null
+    this.healthCheckInterval = null
+    this.isReconnecting = false
+    this.lastSuccessfulConnection = null
+    this.connectionAttempts = 0
 
     this._initConnection()
+    this._startHealthCheck()
   }
 
   /**
-   * Initialize MongoDB connection
+   * Initialize MongoDB connection with auto-reconnect
    * @private
    */
   async _initConnection() {
+    // Prevent multiple simultaneous reconnection attempts
+    if (this.isReconnecting) {
+      logger.debug("Reconnection already in progress, skipping...")
+      return
+    }
+
+    this.isReconnecting = true
+    this.connectionAttempts++
+
     try {
       const mongoUrl = process.env.MONGODB_URI || "mongodb://localhost:27017/whatsapp_bot"
 
       const options = {
         maxPoolSize: 90,
-        minPoolSize: 2,
-        maxIdleTimeMS: 60000,
+        minPoolSize: 5, // Keep minimum connections alive
+        maxIdleTimeMS: 300000, // 5 minutes idle before closing
         serverSelectionTimeoutMS: 30000,
-        socketTimeoutMS: 45000,
+        socketTimeoutMS: 300000, // 5 minutes socket timeout
         connectTimeoutMS: 30000,
         retryWrites: true,
         retryReads: true,
+        heartbeatFrequencyMS: 10000, // Ping every 10 seconds
+        // Critical: Auto-reconnection settings
+        autoReconnect: true,
+        reconnectTries: Number.MAX_VALUE,
+        reconnectInterval: 5000,
+      }
+
+      // Close existing connection if any
+      if (this.client) {
+        try {
+          await this.client.close()
+        } catch (err) {
+          logger.debug("Error closing old client:", err.message)
+        }
       }
 
       this.client = new MongoClient(mongoUrl, options)
 
+      // Connect with timeout
       await Promise.race([
         this.client.connect(),
         new Promise((_, reject) =>
@@ -48,7 +78,7 @@ export class MongoDBStorage {
         ),
       ])
 
-      // Verify connection
+      // Verify connection with ping
       await this.client.db("admin").command({ ping: 1 })
 
       this.db = this.client.db()
@@ -56,22 +86,123 @@ export class MongoDBStorage {
 
       await this._createIndexes()
 
+      // Setup connection event listeners
+      this._setupConnectionEvents()
+
       this.isConnected = true
       this.retryCount = 0
+      this.lastSuccessfulConnection = new Date()
+      this.isReconnecting = false
 
-      logger.info("MongoDB connected successfully")
+      if (this.connectionAttempts > 1) {
+        logger.info(`🔄 MongoDB reconnected successfully (attempt ${this.connectionAttempts})`)
+      } else {
+        logger.info("✅ MongoDB connected successfully")
+      }
+
+      // Clear any pending reconnection interval
+      if (this.reconnectInterval) {
+        clearInterval(this.reconnectInterval)
+        this.reconnectInterval = null
+      }
+
     } catch (error) {
       this.isConnected = false
-      logger.error("MongoDB connection failed:", error.message)
+      this.isReconnecting = false
+      
+      const logLevel = this.connectionAttempts <= 3 ? 'error' : 'warn'
+      logger[logLevel](`MongoDB connection failed (attempt ${this.connectionAttempts}):`, error.message)
 
-      // Retry with exponential backoff
-      if (this.retryCount < this.maxRetries) {
-        this.retryCount++
-        const delay = Math.min(30000, 5000 * Math.pow(2, this.retryCount - 1))
-        logger.info(`Retrying MongoDB connection in ${delay}ms (attempt ${this.retryCount}/${this.maxRetries})`)
-        setTimeout(() => this._initConnection(), delay)
-      }
+      // Schedule reconnection with exponential backoff (max 30 seconds)
+      this._scheduleReconnection()
     }
+  }
+
+  /**
+   * Setup MongoDB connection event listeners
+   * @private
+   */
+  _setupConnectionEvents() {
+    if (!this.client) return
+
+    // Connection closed
+    this.client.on('close', () => {
+      logger.warn("⚠️ MongoDB connection closed")
+      this.isConnected = false
+      this._scheduleReconnection()
+    })
+
+    // Connection error
+    this.client.on('error', (error) => {
+      logger.error("❌ MongoDB connection error:", error.message)
+      this.isConnected = false
+      this._scheduleReconnection()
+    })
+
+    // Timeout
+    this.client.on('timeout', () => {
+      logger.warn("⏱️ MongoDB connection timeout")
+      this.isConnected = false
+      this._scheduleReconnection()
+    })
+
+    // Reconnected
+    this.client.on('reconnect', () => {
+      logger.info("🔄 MongoDB automatically reconnected")
+      this.isConnected = true
+    })
+  }
+
+  /**
+   * Schedule reconnection with exponential backoff
+   * @private
+   */
+  _scheduleReconnection() {
+    // Don't schedule if already scheduled
+    if (this.reconnectInterval) return
+
+    // Calculate backoff delay (5s, 10s, 20s, max 30s)
+    const delay = Math.min(30000, 5000 * Math.pow(2, Math.min(this.retryCount, 3)))
+    this.retryCount++
+
+    logger.info(`🔄 Scheduling MongoDB reconnection in ${delay / 1000}s (attempt ${this.retryCount})`)
+
+    this.reconnectInterval = setInterval(() => {
+      if (!this.isConnected && !this.isReconnecting) {
+        this._initConnection()
+      }
+    }, delay)
+  }
+
+  /**
+   * Start health check to detect stale connections
+   * @private
+   */
+  _startHealthCheck() {
+    this.healthCheckInterval = setInterval(async () => {
+      // Skip if reconnecting
+      if (this.isReconnecting) return
+
+      if (this.isConnected && this.client) {
+        try {
+          // Ping to verify connection is alive
+          await this.client.db("admin").command({ ping: 1 })
+          
+          // Connection is healthy
+          if (this.retryCount > 0) {
+            logger.debug("MongoDB health check passed")
+            this.retryCount = 0
+          }
+        } catch (error) {
+          logger.warn("⚠️ MongoDB health check failed:", error.message)
+          this.isConnected = false
+          this._scheduleReconnection()
+        }
+      } else if (!this.isConnected && !this.reconnectInterval) {
+        // Not connected and no reconnection scheduled - try now
+        this._scheduleReconnection()
+      }
+    }, 30000) // Every 30 seconds
   }
 
   /**
@@ -103,16 +234,64 @@ export class MongoDBStorage {
       }
     }
 
-    logger.debug("MongoDB indexes created")
+    logger.debug("MongoDB indexes verified")
   }
 
   /**
-   * Save session (PURE operation - no business logic)
+   * Execute operation with automatic reconnection
+   * @private
    */
-  async saveSession(sessionId, sessionData) {
-    if (!this.isConnected) return false
+  async _executeWithReconnect(operation, operationName) {
+    if (!this.isConnected) {
+      // Try to reconnect immediately if not already reconnecting
+      if (!this.isReconnecting && !this.reconnectInterval) {
+        this._scheduleReconnection()
+      }
+      logger.debug(`${operationName}: MongoDB not connected, operation skipped`)
+      return null
+    }
 
     try {
+      return await operation()
+    } catch (error) {
+      // Check if it's a connection error
+      if (this._isConnectionError(error)) {
+        logger.warn(`${operationName}: Connection error, triggering reconnection`)
+        this.isConnected = false
+        this._scheduleReconnection()
+      } else {
+        logger.error(`${operationName}: Operation error:`, error.message)
+      }
+      return null
+    }
+  }
+
+  /**
+   * Check if error is a connection-related error
+   * @private
+   */
+  _isConnectionError(error) {
+    const connectionErrors = [
+      'connection',
+      'disconnected',
+      'topology',
+      'ECONNREFUSED',
+      'ETIMEDOUT',
+      'pool destroyed',
+      'server selection',
+      'MongoNetworkError',
+      'MongoServerSelectionError'
+    ]
+    
+    const errorMessage = error.message?.toLowerCase() || ''
+    return connectionErrors.some(msg => errorMessage.includes(msg.toLowerCase()))
+  }
+
+  /**
+   * Save session (PURE operation with auto-reconnect)
+   */
+  async saveSession(sessionId, sessionData) {
+    return await this._executeWithReconnect(async () => {
       const document = {
         sessionId,
         telegramId: sessionData.telegramId || sessionData.userId,
@@ -127,21 +306,15 @@ export class MongoDBStorage {
       }
 
       await this.sessions.replaceOne({ sessionId }, document, { upsert: true })
-
       return true
-    } catch (error) {
-      logger.error(`MongoDB save error for ${sessionId}:`, error.message)
-      return false
-    }
+    }, `saveSession(${sessionId})`) || false
   }
 
   /**
-   * Get session (PURE operation)
+   * Get session (PURE operation with auto-reconnect)
    */
   async getSession(sessionId) {
-    if (!this.isConnected) return null
-
-    try {
+    return await this._executeWithReconnect(async () => {
       const session = await this.sessions.findOne({ sessionId })
       if (!session) return null
 
@@ -158,19 +331,14 @@ export class MongoDBStorage {
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
       }
-    } catch (error) {
-      logger.error(`MongoDB get error for ${sessionId}:`, error.message)
-      return null
-    }
+    }, `getSession(${sessionId})`)
   }
 
   /**
-   * Update session (PURE operation)
+   * Update session (PURE operation with auto-reconnect)
    */
   async updateSession(sessionId, updates) {
-    if (!this.isConnected) return false
-
-    try {
+    return await this._executeWithReconnect(async () => {
       const updateDoc = { updatedAt: new Date() }
       const allowedFields = [
         "isConnected",
@@ -188,53 +356,37 @@ export class MongoDBStorage {
       }
 
       const result = await this.sessions.updateOne({ sessionId }, { $set: updateDoc })
-
       return result.modifiedCount > 0 || result.matchedCount > 0
-    } catch (error) {
-      logger.error(`MongoDB update error for ${sessionId}:`, error.message)
-      return false
-    }
+    }, `updateSession(${sessionId})`) || false
   }
 
   /**
-   * Delete session (PURE operation)
+   * Delete session (PURE operation with auto-reconnect)
    */
   async deleteSession(sessionId) {
-    if (!this.isConnected) return false
-
-    try {
+    return await this._executeWithReconnect(async () => {
       const result = await this.sessions.deleteOne({ sessionId })
       return result.deletedCount > 0
-    } catch (error) {
-      logger.error(`MongoDB delete error for ${sessionId}:`, error.message)
-      return false
-    }
+    }, `deleteSession(${sessionId})`) || false
   }
 
   /**
-   * Delete auth state from auth_baileys collection (PURE operation)
+   * Delete auth state from auth_baileys collection (PURE operation with auto-reconnect)
    */
   async deleteAuthState(sessionId) {
-    if (!this.isConnected) return false
-
-    try {
+    return await this._executeWithReconnect(async () => {
       const authCollection = this.db.collection("auth_baileys")
       const result = await authCollection.deleteMany({ sessionId })
       logger.info(`Deleted ${result.deletedCount} auth documents for ${sessionId}`)
       return result.deletedCount > 0
-    } catch (error) {
-      logger.error(`MongoDB auth delete error for ${sessionId}:`, error.message)
-      return false
-    }
+    }, `deleteAuthState(${sessionId})`) || false
   }
 
   /**
-   * Get all sessions (PURE operation)
+   * Get all sessions (PURE operation with auto-reconnect)
    */
   async getAllSessions() {
-    if (!this.isConnected) return []
-
-    try {
+    const result = await this._executeWithReconnect(async () => {
       const sessions = await this.sessions.find({}).sort({ updatedAt: -1 }).toArray()
 
       return sessions.map((session) => ({
@@ -250,19 +402,16 @@ export class MongoDBStorage {
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
       }))
-    } catch (error) {
-      logger.error("MongoDB get all sessions error:", error.message)
-      return []
-    }
+    }, 'getAllSessions()')
+
+    return result || []
   }
 
   /**
-   * Get undetected web sessions (PURE operation)
+   * Get undetected web sessions (PURE operation with auto-reconnect)
    */
   async getUndetectedWebSessions() {
-    if (!this.isConnected) return []
-
-    try {
+    const result = await this._executeWithReconnect(async () => {
       const sessions = await this.sessions
         .find({
           source: "web",
@@ -283,9 +432,21 @@ export class MongoDBStorage {
         source: session.source,
         detected: session.detected || false,
       }))
-    } catch (error) {
-      logger.error("MongoDB get undetected web sessions error:", error.message)
-      return []
+    }, 'getUndetectedWebSessions()')
+
+    return result || []
+  }
+
+  /**
+   * Get connection status
+   */
+  getConnectionStatus() {
+    return {
+      isConnected: this.isConnected,
+      isReconnecting: this.isReconnecting,
+      lastSuccessfulConnection: this.lastSuccessfulConnection,
+      connectionAttempts: this.connectionAttempts,
+      retryCount: this.retryCount,
     }
   }
 
@@ -294,10 +455,22 @@ export class MongoDBStorage {
    */
   async close() {
     try {
+      // Clear intervals
+      if (this.healthCheckInterval) {
+        clearInterval(this.healthCheckInterval)
+        this.healthCheckInterval = null
+      }
+
+      if (this.reconnectInterval) {
+        clearInterval(this.reconnectInterval)
+        this.reconnectInterval = null
+      }
+
+      // Close client
       if (this.client && this.isConnected) {
         await this.client.close()
         this.isConnected = false
-        logger.info("MongoDB connection closed")
+        logger.info("MongoDB connection closed gracefully")
       }
     } catch (error) {
       logger.error("MongoDB close error:", error.message)

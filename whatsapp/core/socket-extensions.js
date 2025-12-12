@@ -3,19 +3,204 @@ import { downloadMediaMessage } from "@whiskeysockets/baileys"
 import { image2webp, video2webp, getTempFilePath, cleanupTempFile } from "../../lib/converters/media-converter.js"
 import { fileTypeFromBuffer } from "file-type"
 import axios from "axios"
-import crypto from "crypto"
 import fs from "fs"
 
 const logger = createComponentLogger("SOCKET_EXTENSIONS")
 
+// ==================== FAKE QUOTED CONFIGURATION ====================
 /**
- * Extend a Baileys socket with helper methods for common operations
+ * Fake quoted message to use instead of real messages
+ * This prevents issues with message context and maintains privacy
+ */
+const fakeQuoted = {
+  key: {
+    participant: '0@s.whatsapp.net',
+    remoteJid: '0@s.whatsapp.net'
+  },
+  message: {
+    conversation: '*𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙*'
+  }
+}
+
+/**
+ * Extend a Baileys socket with ALL helper methods and overrides
+ * This includes: media helpers, sendMessage override, groupMetadata override, and LID helpers
  */
 export function extendSocket(sock) {
   if (!sock || sock._extended) {
     return sock
   }
 
+  logger.debug("Extending socket with all helper methods and overrides")
+
+  // ==================== SEND MESSAGE OVERRIDE ====================
+  const originalSendMessage = sock.sendMessage.bind(sock)
+  
+  /**
+   * Enhanced sendMessage with:
+   * - Automatic fakeQuoted replacement and addition
+   * - Auto-mention for group replies
+   * - Timeout protection (prevents hanging)
+   * - Ephemeral message control
+   * - Better error handling
+   * - Automatic retry on specific errors
+   * - Session activity tracking
+   */
+  sock.sendMessage = async (jid, content, options = {}) => {
+    const maxRetries = 2
+    let lastError = null
+    
+    // ========== FAKE QUOTED MANAGEMENT ==========
+    const isGroup = jid.endsWith('@g.us')
+    let originalQuoted = options.quoted
+    
+    // Always use fakeQuoted (replace or add)
+    if (originalQuoted) {
+      logger.debug(`[SendMessage] Replacing quoted message with fakeQuoted for ${jid}`)
+      
+      // If it's a group and we have the original quoted message, enhance it
+      if (isGroup && originalQuoted.key?.participant) {
+        const senderJid = originalQuoted.key.participant
+        const pushName = originalQuoted.pushName || originalQuoted.verifiedBizName || 'User'
+        
+        // Create enhanced fakeQuoted with reply info
+        options.quoted = {
+          ...fakeQuoted,
+          message: {
+            conversation: `*𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙\n\nReplied to ${pushName}*`
+          }
+        }
+        
+        // Add mention of the user being replied to
+        const existingMentions = options.mentions || []
+        if (!existingMentions.includes(senderJid)) {
+          options.mentions = [...existingMentions, senderJid]
+        }
+        
+        logger.debug(`[SendMessage] Enhanced group reply with mention for ${pushName}`)
+      } else {
+        // Not a group or no participant info, use standard fakeQuoted
+        options.quoted = fakeQuoted
+      }
+    } else {
+      // No quoted provided, add fakeQuoted
+      logger.debug(`[SendMessage] Adding fakeQuoted to message for ${jid}`)
+      options.quoted = fakeQuoted
+    }
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        // Disable ephemeral messages by default
+        if (!options.ephemeralExpiration) {
+          options.ephemeralExpiration = 0
+        }
+        
+        // Create send promise
+        const sendPromise = originalSendMessage(jid, content, options)
+        
+        // Create timeout promise (40 seconds)
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('sendMessage timeout after 40s')), 40000)
+        )
+        
+        // Race between send and timeout
+        const result = await Promise.race([sendPromise, timeoutPromise])
+        
+        // Update session activity on success
+        if (sock.sessionId) {
+          const { updateSessionLastMessage } = await import('../core/config.js')
+          updateSessionLastMessage(sock.sessionId)
+        }
+        
+        logger.debug(`[SendMessage] Message sent successfully to ${jid}`)
+        return result
+        
+      } catch (error) {
+        lastError = error
+        
+        // Don't retry on specific errors
+        const noRetryErrors = [
+          'forbidden',
+          'not-authorized',
+          'invalid-jid',
+          'recipient-not-found'
+        ]
+        
+        const shouldNotRetry = noRetryErrors.some(err => 
+          error.message?.toLowerCase().includes(err)
+        )
+        
+        if (shouldNotRetry) {
+          logger.error(`[SendMessage] Non-retryable error sending to ${jid}: ${error.message}`)
+          throw error
+        }
+        
+        // Retry on timeout or temporary errors
+        if (attempt < maxRetries) {
+          const delay = (attempt + 1) * 1000 // 1s, 2s
+          logger.warn(`[SendMessage] Send failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms: ${error.message}`)
+          await sleep(delay)
+          continue
+        }
+        
+        // All retries exhausted
+        logger.error(`[SendMessage] Failed to send message to ${jid} after ${maxRetries + 1} attempts: ${error.message}`)
+        throw error
+      }
+    }
+    
+    // Should never reach here, but just in case
+    throw lastError || new Error('Unknown error in sendMessage')
+  }
+
+  // ==================== GROUP METADATA OVERRIDE ====================
+  // Store original groupMetadata method
+  const originalGroupMetadata = sock.groupMetadata?.bind(sock)
+  sock._originalGroupMetadata = originalGroupMetadata
+  
+  /**
+   * Override groupMetadata to ALWAYS use cache-first approach
+   * This reduces API calls and prevents rate limiting
+   */
+  if (originalGroupMetadata) {
+    sock.groupMetadata = async (jid) => {
+      const { getGroupMetadata } = await import('../core/config.js')
+      return await getGroupMetadata(sock, jid, false)
+    }
+
+    /**
+     * Add refresh method - ONLY for specific scenarios
+     * Use this when you know metadata has changed (participant add/remove/promote/demote)
+     */
+    sock.groupMetadataRefresh = async (jid) => {
+      const { getGroupMetadata } = await import('../core/config.js')
+      return await getGroupMetadata(sock, jid, true)
+    }
+  }
+
+  // ==================== LID HELPER METHODS (v7) ====================
+  /**
+   * Get LID (Linked Identifier) for a phone number
+   */
+  sock.getLidForPn = async (phoneNumber) => {
+    if (sock.signalRepository?.lidMapping?.getLIDForPN) {
+      return await sock.signalRepository.lidMapping.getLIDForPN(phoneNumber)
+    }
+    return phoneNumber
+  }
+
+  /**
+   * Get phone number for a LID
+   */
+  sock.getPnForLid = async (lid) => {
+    if (sock.signalRepository?.lidMapping?.getPNForLID) {
+      return await sock.signalRepository.lidMapping.getPNForLID(lid)
+    }
+    return lid
+  }
+
+  // ==================== MEDIA HELPERS ====================
+  
   /**
    * Send an image as a sticker
    */
@@ -31,7 +216,6 @@ export function extendSocket(sock) {
 
       const stickerBuffer = await image2webp(buffer)
       
-      // Save to temp
       tempFilePath = getTempFilePath('sendImageAsSticker', '.webp')
       fs.writeFileSync(tempFilePath, stickerBuffer)
 
@@ -67,7 +251,6 @@ export function extendSocket(sock) {
 
       const stickerBuffer = await video2webp(buffer)
       
-      // Save to temp
       tempFilePath = getTempFilePath('sendVideoAsSticker', '.webp')
       fs.writeFileSync(tempFilePath, stickerBuffer)
 
@@ -111,7 +294,6 @@ export function extendSocket(sock) {
         stickerBuffer = await image2webp(buffer)
       }
 
-      // Save to temp
       tempFilePath = getTempFilePath('sendMediaAsSticker', '.webp')
       fs.writeFileSync(tempFilePath, stickerBuffer)
 
@@ -134,8 +316,6 @@ export function extendSocket(sock) {
 
   /**
    * Send multiple stickers in batches
-   * NOTE: Baileys does NOT support native sticker pack messages
-   * This sends stickers individually with delays
    */
   sock.sendStickerPack = async function (jid, sources, options = {}) {
     const {
@@ -158,7 +338,6 @@ export function extendSocket(sock) {
           const source = sources[i]
           let buffer = source.buffer || source
 
-          // Download if URL
           if (source.url) {
             const response = await axios.get(source.url, { responseType: "arraybuffer" })
             buffer = Buffer.from(response.data)
@@ -167,7 +346,6 @@ export function extendSocket(sock) {
             buffer = Buffer.from(response.data)
           }
 
-          // Detect type and convert
           const fileType = await fileTypeFromBuffer(buffer)
           const mime = fileType?.mime || ""
           const isVideo = source.isVideo || mime.startsWith("video/") || mime === "image/gif"
@@ -179,12 +357,10 @@ export function extendSocket(sock) {
             stickerBuffer = await image2webp(buffer)
           }
 
-          // Save to temp
           tempFilePath = getTempFilePath('stickerPack', '.webp')
           fs.writeFileSync(tempFilePath, stickerBuffer)
           tempFiles.push(tempFilePath)
 
-          // Send sticker
           const result = await this.sendMessage(
             jid,
             { sticker: fs.readFileSync(tempFilePath) },
@@ -193,12 +369,10 @@ export function extendSocket(sock) {
 
           results.push({ success: true, index: i, result })
 
-          // Progress callback
           if (onProgress) {
             onProgress(i + 1, total)
           }
 
-          // Delays
           if ((i + 1) % batchSize !== 0 && i < sources.length - 1) {
             await sleep(itemDelay)
           } else if ((i + 1) % batchSize === 0 && i < sources.length - 1) {
@@ -216,7 +390,6 @@ export function extendSocket(sock) {
 
       return results
     } finally {
-      // Clean up all temp files
       for (const tempFile of tempFiles) {
         cleanupTempFile(tempFile)
       }
@@ -236,7 +409,6 @@ export function extendSocket(sock) {
         buffer = Buffer.from(response.data)
       }
 
-      // Save to temp
       tempFilePath = getTempFilePath('sendImage', '.jpg')
       fs.writeFileSync(tempFilePath, buffer)
 
@@ -273,7 +445,6 @@ export function extendSocket(sock) {
         buffer = Buffer.from(response.data)
       }
 
-      // Save to temp
       tempFilePath = getTempFilePath('sendVideo', '.mp4')
       fs.writeFileSync(tempFilePath, buffer)
 
@@ -311,7 +482,6 @@ export function extendSocket(sock) {
         buffer = Buffer.from(response.data)
       }
 
-      // Save to temp
       tempFilePath = getTempFilePath('sendAudio', '.mp3')
       fs.writeFileSync(tempFilePath, buffer)
 
@@ -351,7 +521,6 @@ export function extendSocket(sock) {
 
       const fileType = await fileTypeFromBuffer(buffer)
       
-      // Save to temp
       tempFilePath = getTempFilePath('sendDocument', `.${fileType?.ext || 'bin'}`)
       fs.writeFileSync(tempFilePath, buffer)
 
@@ -423,7 +592,7 @@ export function extendSocket(sock) {
   // Mark socket as extended
   sock._extended = true
 
-  logger.debug("Socket extended with helper methods")
+  logger.info("✅ Socket fully extended with all helper methods and overrides")
   return sock
 }
 

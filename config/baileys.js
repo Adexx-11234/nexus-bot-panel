@@ -21,21 +21,6 @@ const groupCache = new NodeCache({
 // Cache for message retry counters
 const msgRetryCounterCache = new NodeCache()
 
-// ==================== FAKE QUOTED CONFIGURATION ====================
-/**
- * Fake quoted message to use instead of real messages
- * This prevents issues with message context and maintains privacy
- */
-const fakeQuoted = {
-  key: {
-    participant: '0@s.whatsapp.net',
-    remoteJid: '0@s.whatsapp.net'
-  },
-  message: {
-    conversation: '*𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙*'
-  }
-}
-
 // ==================== SESSION TRACKING ====================
 const sessionLastActivity = new Map()
 const sessionLastMessage = new Map()
@@ -58,7 +43,7 @@ export const baileysConfig = {
   retryRequestDelayMs: 250,
   markOnlineOnConnect: false,
   getMessage: defaultGetMessage,
-// version: [2, 3000, 1025190524], remove comments if connection open but didn't connect on WhatsApp
+  // version: [2, 3000, 1025190524], // remove comments if connection open but didn't connect on WhatsApp
   emitOwnEvents: true,
   // Remove mentionedJid to avoid issues
   patchMessageBeforeSending: (msg) => {
@@ -306,7 +291,7 @@ const normalizeMetadata = (metadata) => {
 
 // ==================== SOCKET CREATION ====================
 /**
- * Create Baileys socket with enhanced error handling and features
+ * Create Baileys socket - extensions are applied via extendSocket in connection manager
  */
 export function createBaileysSocket(authState, sessionId, getMessage = null) {
   try {
@@ -319,164 +304,8 @@ export function createBaileysSocket(authState, sessionId, getMessage = null) {
 
     setupSocketDefaults(sock)
 
-    // ========== GROUP METADATA OVERRIDE ==========
-    // Store original groupMetadata method
-    const originalGroupMetadata = sock.groupMetadata.bind(sock)
-    sock._originalGroupMetadata = originalGroupMetadata
-    
-    /**
-     * Override groupMetadata to ALWAYS use cache-first approach
-     * This reduces API calls and prevents rate limiting
-     */
-    sock.groupMetadata = async (jid) => {
-      return await getGroupMetadata(sock, jid, false)
-    }
-
-    /**
-     * Add refresh method - ONLY for specific scenarios
-     * Use this when you know metadata has changed (participant add/remove/promote/demote)
-     */
-    sock.groupMetadataRefresh = async (jid) => {
-      return await getGroupMetadata(sock, jid, true)
-    }
-
-    // ========== LID HELPER METHODS (v7) ==========
-    /**
-     * Get LID (Linked Identifier) for a phone number
-     */
-    sock.getLidForPn = async (phoneNumber) => {
-      if (sock.signalRepository?.lidMapping?.getLIDForPN) {
-        return await sock.signalRepository.lidMapping.getLIDForPN(phoneNumber)
-      }
-      return phoneNumber
-    }
-
-    /**
-     * Get phone number for a LID
-     */
-    sock.getPnForLid = async (lid) => {
-      if (sock.signalRepository?.lidMapping?.getPNForLID) {
-        return await sock.signalRepository.lidMapping.getPNForLID(lid)
-      }
-      return lid
-    }
-
-    // ========== SEND MESSAGE OVERRIDE ==========
-    const originalSendMessage = sock.sendMessage.bind(sock)
-    
-    /**
-     * Enhanced sendMessage with:
-     * - Automatic fakeQuoted replacement and addition
-     * - Auto-mention for group replies
-     * - Timeout protection (prevents hanging)
-     * - Ephemeral message control
-     * - Better error handling
-     * - Automatic retry on specific errors
-     * - Session activity tracking
-     */
-    sock.sendMessage = async (jid, content, options = {}) => {
-      const maxRetries = 2
-      let lastError = null
-      
-      // ========== FAKE QUOTED MANAGEMENT ==========
-      const isGroup = jid.endsWith('@g.us')
-      let originalQuoted = options.quoted
-      
-      // Always use fakeQuoted (replace or add)
-      if (originalQuoted) {
-        logger.debug(`[Baileys] Replacing quoted message with fakeQuoted for ${jid}`)
-        
-        // If it's a group and we have the original quoted message, enhance it
-        if (isGroup && originalQuoted.key?.participant) {
-          const senderJid = originalQuoted.key.participant
-          const pushName = originalQuoted.pushName || originalQuoted.verifiedBizName || 'User'
-          
-          // Create enhanced fakeQuoted with reply info
-          options.quoted = {
-            ...fakeQuoted,
-            message: {
-              conversation: `*𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙\n\nReplied to ${pushName}*`
-            }
-          }
-          
-          // Add mention of the user being replied to
-          const existingMentions = options.mentions || []
-          if (!existingMentions.includes(senderJid)) {
-            options.mentions = [...existingMentions, senderJid]
-          }
-          
-          logger.debug(`[Baileys] Enhanced group reply with mention for ${pushName}`)
-        } else {
-          // Not a group or no participant info, use standard fakeQuoted
-          options.quoted = fakeQuoted
-        }
-      } else {
-        // No quoted provided, add fakeQuoted
-        logger.debug(`[Baileys] Adding fakeQuoted to message for ${jid}`)
-        options.quoted = fakeQuoted
-      }
-      
-      for (let attempt = 0; attempt <= maxRetries; attempt++) {
-        try {
-          // Disable ephemeral messages by default
-          if (!options.ephemeralExpiration) {
-            options.ephemeralExpiration = 0
-          }
-          
-          // Create send promise
-          const sendPromise = originalSendMessage(jid, content, options)
-          
-          // Create timeout promise (40 seconds)
-          const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('sendMessage timeout after 40s')), 40000)
-          )
-          
-          // Race between send and timeout
-          const result = await Promise.race([sendPromise, timeoutPromise])
-          
-          // Update session activity on success
-          updateSessionLastMessage(sessionId)
-          
-          logger.debug(`[Baileys] Message sent successfully to ${jid}`)
-          return result
-          
-        } catch (error) {
-          lastError = error
-          
-          // Don't retry on specific errors
-          const noRetryErrors = [
-            'forbidden',
-            'not-authorized',
-            'invalid-jid',
-            'recipient-not-found'
-          ]
-          
-          const shouldNotRetry = noRetryErrors.some(err => 
-            error.message?.toLowerCase().includes(err)
-          )
-          
-          if (shouldNotRetry) {
-            logger.error(`[Baileys] Non-retryable error sending to ${jid}: ${error.message}`)
-            throw error
-          }
-          
-          // Retry on timeout or temporary errors
-          if (attempt < maxRetries) {
-            const delay = (attempt + 1) * 1000 // 1s, 2s
-            logger.warn(`[Baileys] Send failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms: ${error.message}`)
-            await new Promise(resolve => setTimeout(resolve, delay))
-            continue
-          }
-          
-          // All retries exhausted
-          logger.error(`[Baileys] Failed to send message to ${jid} after ${maxRetries + 1} attempts: ${error.message}`)
-          throw error
-        }
-      }
-      
-      // Should never reach here, but just in case
-      throw lastError || new Error('Unknown error in sendMessage')
-    }
+    // Socket extensions (sendMessage override, groupMetadata, LID helpers, media helpers)
+    // are applied in connection manager via extendSocket()
 
     return sock
   } catch (error) {
@@ -563,7 +392,6 @@ export const getGroupMetadata = async (sock, jid, forceRefresh = false) => {
       groupCache.del(cacheKey)
       
       // Return null to indicate bot is not in group
-      // Don't throw error, let caller handle gracefully
       return null
     }
     
@@ -599,7 +427,6 @@ export const getGroupMetadata = async (sock, jid, forceRefresh = false) => {
 
 /**
  * Refresh group metadata - ONLY use for specific scenarios
- * Use cases: participant add/remove/promote/demote
  */
 export const refreshGroupMetadata = async (sock, jid) => {
   logger.debug(`[Baileys] Explicit refresh requested for ${jid}`)
@@ -607,7 +434,7 @@ export const refreshGroupMetadata = async (sock, jid) => {
 }
 
 /**
- * Update cache from event data (groups.update events)
+ * Update cache from event data
  */
 export const updateCacheFromEvent = (groupJid, updateData) => {
   try {
@@ -630,8 +457,7 @@ export const updateCacheFromEvent = (groupJid, updateData) => {
 }
 
 /**
- * Update participants in cache - ONLY refreshes for specific actions
- * Actions that require refresh: add, remove, promote, demote
+ * Update participants in cache
  */
 export const updateParticipantsInCache = async (sock, groupJid, participantUpdate) => {
   try {
@@ -654,7 +480,7 @@ export const updateParticipantsInCache = async (sock, groupJid, participantUpdat
 }
 
 /**
- * Invalidate (delete) cache for a specific group
+ * Invalidate cache for a specific group
  */
 export const invalidateGroupCache = (groupJid, reason = "update") => {
   const cacheKey = `group_${groupJid}`
@@ -669,15 +495,11 @@ export const invalidateGroupCache = (groupJid, reason = "update") => {
 // ==================== ADMIN CHECKING ====================
 /**
  * Check if a user is a group admin (v7 compatible)
- * Handles LID resolution and multiple identifier formats
- * 
- * @returns {boolean} - true if user is admin/superadmin, false otherwise
  */
 export const isUserGroupAdmin = async (sock, groupJid, userJid) => {
   try {
     const metadata = await getGroupMetadata(sock, groupJid)
     
-    // If metadata is null, bot is not in group
     if (!metadata || !metadata.participants) {
       logger.warn(`[Baileys] Cannot check admin - bot not in group ${groupJid}`)
       return false
@@ -701,22 +523,18 @@ export const isUserGroupAdmin = async (sock, groupJid, userJid) => {
 
     // Check all participants
     return metadata.participants.some((participant) => {
-      // Get all possible identifiers
       const participantJid = getParticipantJid(participant)
       const participantPhone = getParticipantPhoneNumber(participant)
       const participantId = participant.id || participantJid
       
       if (!participantJid) {
-        logger.debug(`[Baileys] Participant has no valid JID:`, participant)
         return false
       }
       
-      // Normalize all identifiers
       const normalizedParticipantJid = normalizeJid(participantJid)
       const normalizedParticipantId = normalizeJid(participantId)
       const normalizedParticipantPhone = participantPhone ? normalizeJid(participantPhone) : null
       
-      // Check all possible matches
       const matches = 
         normalizedParticipantJid === normalizedUserJid ||
         normalizedParticipantJid === normalizeJid(userPhoneNumber) ||
@@ -725,7 +543,6 @@ export const isUserGroupAdmin = async (sock, groupJid, userJid) => {
         (normalizedParticipantPhone && normalizedParticipantPhone === normalizedUserJid) ||
         (normalizedParticipantPhone && normalizedParticipantPhone === normalizeJid(userPhoneNumber))
       
-      // Must match AND be admin or superadmin
       return matches && ["admin", "superadmin"].includes(participant.admin)
     })
   } catch (error) {
@@ -735,7 +552,7 @@ export const isUserGroupAdmin = async (sock, groupJid, userJid) => {
 }
 
 /**
- * Check if bot is a group admin (v7 compatible)
+ * Check if bot is a group admin
  */
 export const isBotGroupAdmin = async (sock, groupJid) => {
   try {
@@ -754,62 +571,36 @@ export const isBotGroupAdmin = async (sock, groupJid) => {
 
 // ==================== EVENT LISTENERS ====================
 /**
- * Setup cache invalidation listeners (v7 compatible)
- * Automatically updates cache when WhatsApp events occur
+ * Setup cache invalidation listeners
  */
 export const setupCacheInvalidation = (sock) => {
   try {
-    // ========== GROUP PARTICIPANT UPDATES ==========
     sock.ev.on("group-participants.update", async (update) => {
       const { id, participants, action } = update
       logger.debug(`[Event] Group participants ${action}: ${id}`)
 
-      // Only refresh cache for actions that change metadata
       if (["add", "remove", "promote", "demote"].includes(action)) {
         await updateParticipantsInCache(sock, id, update)
       }
     })
 
-    // ========== GROUP UPDATES ==========
     sock.ev.on("groups.update", (updates) => {
       updates.forEach((update) => {
         if (update.id) {
           logger.debug(`[Event] Group update: ${update.id}`)
           
-          // Invalidate cache for setting changes
           if (update.announce !== undefined || update.restrict !== undefined) {
             invalidateGroupCache(update.id, "settings_change")
-          } 
-          // Update cache for other changes
-          else if (Object.keys(update).length > 1) {
+          } else if (Object.keys(update).length > 1) {
             updateCacheFromEvent(update.id, update)
           }
         }
       })
     })
 
-    // ========== LID MAPPING UPDATES (v7) ==========
     if (sock.ev.listenerCount("lid-mapping.update") === 0) {
       sock.ev.on("lid-mapping.update", (mapping) => {
         logger.debug(`[Event] LID mapping update received:`, mapping)
-        
-        try {
-          if (sock.signalRepository?.lidMapping && mapping) {
-            if (mapping.lid && mapping.phoneNumber) {
-              // Verify mapping is stored
-              const storedLid = sock.signalRepository.lidMapping.getLIDForPN?.(mapping.phoneNumber)
-              const storedPn = sock.signalRepository.lidMapping.getPNForLID?.(mapping.lid)
-              
-              if (!storedLid || !storedPn) {
-                logger.warn(`[LID] Mapping not stored automatically`)
-              } else {
-                logger.debug(`[LID] Verified mapping: ${mapping.lid} <-> ${mapping.phoneNumber}`)
-              }
-            }
-          }
-        } catch (error) {
-          logger.error(`[LID] Error processing LID mapping:`, error.message)
-        }
       })
     }
 
@@ -819,10 +610,7 @@ export const setupCacheInvalidation = (sock) => {
   }
 }
 
-// ==================== CACHE MANAGEMENT UTILITIES ====================
-/**
- * Manually update group cache
- */
+// ==================== CACHE UTILITIES ====================
 export const updateGroupCache = (jid, metadata) => {
   try {
     const cacheKey = `group_${jid}`
@@ -836,25 +624,16 @@ export const updateGroupCache = (jid, metadata) => {
   }
 }
 
-/**
- * Get cached group metadata (doesn't fetch)
- */
 export const getGroupCache = (jid) => {
   const cacheKey = `group_${jid}`
   const cached = groupCache.get(cacheKey)
   return cached ? normalizeMetadata(cached) : null
 }
 
-/**
- * Clear cache for specific group
- */
 export const clearGroupCache = (jid) => {
   return invalidateGroupCache(jid, "manual_clear")
 }
 
-/**
- * Clear all group cache
- */
 export const clearAllGroupCache = () => {
   try {
     const keys = groupCache.keys().filter((key) => key.startsWith("group_"))
@@ -867,9 +646,6 @@ export const clearAllGroupCache = () => {
   }
 }
 
-/**
- * Get cache statistics
- */
 export const getCacheStats = () => {
   try {
     const stats = groupCache.getStats()

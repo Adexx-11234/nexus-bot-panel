@@ -287,18 +287,45 @@ function setupMaintenanceTasks() {
 // MongoDB connection monitor - never throws
 function setupConnectionMonitor() {
   let consecutiveErrors = 0
+  let lastErrorLog = 0
+  let lastSuccessLog = 0
+  const ERROR_LOG_INTERVAL = 300000 // Log error every 5 minutes max
+  const SUCCESS_LOG_INTERVAL = 60000 // Log success every 1 minute max
 
   setInterval(async () => {
     try {
+      const now = Date.now()
+      
       if (sessionManager?.storage?.isMongoConnected) {
+        // MongoDB is connected
         if (consecutiveErrors > 0) {
-          logger.info("✅ MongoDB connection recovered")
+          // Recovery detected
+          if (now - lastSuccessLog > SUCCESS_LOG_INTERVAL) {
+            logger.info(`✅ MongoDB connection recovered after ${consecutiveErrors} failures (${Math.round(consecutiveErrors * 30 / 60)} minutes)`)
+            lastSuccessLog = now
+          }
           consecutiveErrors = 0
         }
       } else {
+        // MongoDB is disconnected
         consecutiveErrors++
-        if (consecutiveErrors >= 9) {
-          logger.error(`❌ MongoDB disconnected (${consecutiveErrors} consecutive failures)`)
+        
+        // Smart logging: Log immediately at 3 failures, then every 5 minutes
+        const shouldLog = 
+          consecutiveErrors === 3 || // First real warning
+          (consecutiveErrors >= 10 && now - lastErrorLog > ERROR_LOG_INTERVAL) // Then periodically
+        
+        if (shouldLog) {
+          const minutes = Math.round(consecutiveErrors * 30 / 60)
+          const storageStatus = sessionManager?.storage?.getConnectionStatus?.()
+          
+          logger.warn(`⚠️ MongoDB disconnected for ${minutes} minutes (${consecutiveErrors} checks)`)
+          
+          if (storageStatus) {
+            logger.info(`📊 Storage fallback: PostgreSQL=${storageStatus.postgresql}, Files=${storageStatus.fileManager}`)
+          }
+          
+          lastErrorLog = now
         }
       }
     } catch (error) {
