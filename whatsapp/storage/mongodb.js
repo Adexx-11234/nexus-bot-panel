@@ -53,10 +53,6 @@ export class MongoDBStorage {
         retryWrites: true,
         retryReads: true,
         heartbeatFrequencyMS: 10000, // Ping every 10 seconds
-        // Critical: Auto-reconnection settings
-        autoReconnect: true,
-        reconnectTries: Number.MAX_VALUE,
-        reconnectInterval: 5000,
       }
 
       // Close existing connection if any
