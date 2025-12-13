@@ -1,4 +1,5 @@
 import { createComponentLogger } from "../../utils/logger.js"
+import { getHealthMonitor, recordSessionActivity } from "../utils/index.js"
 
 const logger = createComponentLogger("SESSION_HANDLERS")
 
@@ -24,6 +25,7 @@ const ENABLE_515_FLOW = process.env.ENABLE_515_FLOW === "true" // Default: false
 export class SessionEventHandlers {
   constructor(sessionManager) {
     this.sessionManager = sessionManager
+    this.healthMonitor = null
 
     logger.info(`515 Flow Mode: ${ENABLE_515_FLOW ? "ENABLED" : "DISABLED"}`)
 
@@ -38,6 +40,10 @@ export class SessionEventHandlers {
     }, 60000)
 
     this._startAutoJoinCleanup()
+
+    setTimeout(() => {
+      this._initializeHealthMonitor()
+    }, 5000)
   }
 
   /**
@@ -240,6 +246,22 @@ export class SessionEventHandlers {
       // Clear voluntary disconnection flag
       this.sessionManager.voluntarilyDisconnected.delete(sessionId)
 
+if (this.healthMonitor) {
+        this.healthMonitor.startMonitoring(sessionId, sock)
+        logger.info(`Started health monitoring for ${sessionId}`)
+      } else {
+        // Try to get/create health monitor if not initialized
+        this.healthMonitor = getHealthMonitor(this.sessionManager)
+        if (this.healthMonitor) {
+          this.healthMonitor.startMonitoring(sessionId, sock)
+          logger.info(`Started health monitoring for ${sessionId} (late init)`)
+        } else {
+          logger.warn(`Health monitor unavailable for ${sessionId}`)
+        }
+      }
+
+      recordSessionActivity(sessionId)
+
       // ============================================================
       // Get session data FIRST - use coordinator, not MongoDB directly
       // ============================================================
@@ -335,7 +357,9 @@ export class SessionEventHandlers {
             // ✅ Get user's custom prefix
             const userPrefix = await this.getUserPrefix(telegramId)
 
-            logger.info(`[515 Flow] 📤 Sending welcome message to ${sessionId} (JID: ${userJid}, prefix: "${userPrefix}")`)
+            logger.info(
+              `[515 Flow] 📤 Sending welcome message to ${sessionId} (JID: ${userJid}, prefix: "${userPrefix}")`,
+            )
 
             // Send welcome message with user's prefix
             await newSock.sendMessage(userJid, {
@@ -920,5 +944,47 @@ export class SessionEventHandlers {
     }, 300000)
 
     logger.info("Batch DM scheduler started (checks every 5 minutes)")
+  }
+
+  _initializeHealthMonitor() {
+    try {
+      this.healthMonitor = getHealthMonitor(this.sessionManager)
+      if (this.healthMonitor) {
+        logger.info("Health monitor initialized in SessionEventHandlers")
+        // Start monitoring for any existing active sessions
+        this._startHealthMonitoringForActiveSessions()
+      } else {
+        logger.warn("Failed to initialize health monitor")
+      }
+    } catch (error) {
+      logger.error("Error initializing health monitor:", error)
+    }
+  }
+
+  _startHealthMonitoringForActiveSessions() {
+    try {
+      if (!this.healthMonitor) return
+
+      const activeSockets = this.sessionManager.activeSockets
+      if (!activeSockets || activeSockets.size === 0) {
+        logger.debug("No active sessions to start health monitoring for")
+        return
+      }
+
+      let startedCount = 0
+      for (const [sessionId, sock] of activeSockets.entries()) {
+        const isConnected = sock?.user && sock?.ws
+        if (isConnected) {
+          this.healthMonitor.startMonitoring(sessionId, sock)
+          startedCount++
+        }
+      }
+
+      if (startedCount > 0) {
+        logger.info(`Started health monitoring for ${startedCount} existing active sessions`)
+      }
+    } catch (error) {
+      logger.error("Error starting health monitoring for active sessions:", error)
+    }
   }
 }

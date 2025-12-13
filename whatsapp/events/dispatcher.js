@@ -4,7 +4,7 @@ import { MessageEventHandler } from "./message.js"
 import { GroupEventHandler } from "./group.js"
 import { ConnectionEventHandler } from "./connection.js"
 import { UtilityEventHandler } from "./utility.js"
-import { recordSessionActivity } from "../utils/index.js"
+import { recordSessionActivity, getHealthMonitor } from "../utils/index.js"
 
 const logger = createComponentLogger("EVENT_DISPATCHER")
 
@@ -25,10 +25,12 @@ export class EventDispatcher {
     this.connectionHandler = new ConnectionEventHandler(sessionManager)
     this.utilityHandler = new UtilityEventHandler()
 
+    this.healthMonitor = getHealthMonitor(sessionManager)
+
     logger.info("Event dispatcher initialized")
   }
 
-  /**
+/**
    * Setup all event listeners for a session
    * NOTE: Connection events are handled by SessionEventHandlers
    */
@@ -52,6 +54,21 @@ export class EventDispatcher {
       this._setupChatEvents(sock, sessionId)
       this._setupPresenceEvents(sock, sessionId)
       this._setupUtilityEvents(sock, sessionId)
+
+      // Log socket state for debugging
+      logger.info(`Socket state for ${sessionId}: ws=${!!sock.ws}, readyState=${sock.ws?.readyState}, user=${!!sock.user}`)
+
+      // Start health monitoring - remove the readyState check, just check if ws exists
+      if (this.healthMonitor && sock.ws) {
+        try {
+          this.healthMonitor.startMonitoring(sessionId, sock)
+          logger.info(`Health monitoring started for ${sessionId}`)
+        } catch (monitorError) {
+          logger.error(`Failed to start health monitoring for ${sessionId}:`, monitorError.message)
+        }
+      } else {
+        logger.warn(`Health monitor not available or socket not ready for ${sessionId} - healthMonitor=${!!this.healthMonitor}, sock.ws=${!!sock.ws}`)
+      }
 
       sock.eventHandlersSetup = true
 
