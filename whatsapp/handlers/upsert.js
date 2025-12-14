@@ -24,9 +24,8 @@ export async function getMessageProcessor() {
  */
 export async function handleMessagesUpsert(sessionId, messageUpdate, sock) {
   try {
-    recordSessionActivity(sessionId)
-    updateSessionLastMessage(sessionId)
 
+    updateSessionLastMessage(sessionId)  // This should NOT call recordActivity anymore
     const processor = await getMessageProcessor()
 
     // Process each message in the batch

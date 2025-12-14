@@ -40,11 +40,14 @@ export class EventDispatcher {
       return false
     }
 
+
+      // CRITICAL FIX: Check if already setup
+  if (sock.eventHandlersSetup) {
+    logger.debug(`Event handlers already setup for ${sessionId} - skipping`)
+    return true
+  }
+
     try {
-      if (sock.eventHandlersSetup) {
-        logger.warn(`Event handlers already setup for ${sessionId}`)
-        return true
-      }
 
       logger.info(`Setting up event handlers for ${sessionId}`)
 
@@ -129,8 +132,6 @@ export class EventDispatcher {
           }
         }
 
-        recordSessionActivity(sessionId)
-
         // Fire and forget
         this.messageHandler
           .handleMessagesUpdate(sock, sessionId, updates)
@@ -143,7 +144,6 @@ export class EventDispatcher {
     // ============= MESSAGES_DELETE =============
     sock.ev.on(EventTypes.MESSAGES_DELETE, async (deletions) => {
       try {
-        recordSessionActivity(sessionId)
 
         // Fire and forget
         this.messageHandler
@@ -157,7 +157,6 @@ export class EventDispatcher {
     // ============= MESSAGES_REACTION =============
     sock.ev.on(EventTypes.MESSAGES_REACTION, async (reactions) => {
       try {
-        recordSessionActivity(sessionId)
 
         // Fire and forget
         this.messageHandler
@@ -181,14 +180,12 @@ export class EventDispatcher {
     })
 
     sock.ev.on(EventTypes.GROUPS_UPDATE, async (updates) => {
-      recordSessionActivity(sessionId)
       this.groupHandler
         .handleGroupsUpdate(sock, sessionId, updates)
         .catch((err) => logger.error(`Error in GROUPS_UPDATE for ${sessionId}:`, err))
     })
 
     sock.ev.on(EventTypes.GROUP_PARTICIPANTS_UPDATE, async (update) => {
-      recordSessionActivity(sessionId)
       this.groupHandler
         .handleParticipantsUpdate(sock, sessionId, update)
         .catch((err) => logger.error(`Error in GROUP_PARTICIPANTS_UPDATE for ${sessionId}:`, err))

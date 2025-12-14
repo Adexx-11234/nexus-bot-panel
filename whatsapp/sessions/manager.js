@@ -348,7 +348,7 @@ export class SessionManager {
       if (!this.eventDispatcher) {
         this.eventDispatcher = new EventDispatcher(this)
       }
-
+       // ✅ This will call health monitoring ONCE inside setupEventHandlers
       this.eventDispatcher.setupEventHandlers(sock, sessionId)
       sock.eventHandlersSetup = true
 

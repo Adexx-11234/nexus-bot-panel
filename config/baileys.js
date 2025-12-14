@@ -112,7 +112,6 @@ export async function deleteSessionStore(sessionId) {
  */
 export function updateSessionLastMessage(sessionId) {
   sessionLastMessage.set(sessionId, Date.now())
-  recordSessionActivity(sessionId)
 }
 
 /**

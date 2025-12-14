@@ -246,20 +246,6 @@ export class SessionEventHandlers {
       // Clear voluntary disconnection flag
       this.sessionManager.voluntarilyDisconnected.delete(sessionId)
 
-if (this.healthMonitor) {
-        this.healthMonitor.startMonitoring(sessionId, sock)
-        logger.info(`Started health monitoring for ${sessionId}`)
-      } else {
-        // Try to get/create health monitor if not initialized
-        this.healthMonitor = getHealthMonitor(this.sessionManager)
-        if (this.healthMonitor) {
-          this.healthMonitor.startMonitoring(sessionId, sock)
-          logger.info(`Started health monitoring for ${sessionId} (late init)`)
-        } else {
-          logger.warn(`Health monitor unavailable for ${sessionId}`)
-        }
-      }
-
       recordSessionActivity(sessionId)
 
       // ============================================================
@@ -951,8 +937,6 @@ if (this.healthMonitor) {
       this.healthMonitor = getHealthMonitor(this.sessionManager)
       if (this.healthMonitor) {
         logger.info("Health monitor initialized in SessionEventHandlers")
-        // Start monitoring for any existing active sessions
-        this._startHealthMonitoringForActiveSessions()
       } else {
         logger.warn("Failed to initialize health monitor")
       }
@@ -961,30 +945,4 @@ if (this.healthMonitor) {
     }
   }
 
-  _startHealthMonitoringForActiveSessions() {
-    try {
-      if (!this.healthMonitor) return
-
-      const activeSockets = this.sessionManager.activeSockets
-      if (!activeSockets || activeSockets.size === 0) {
-        logger.debug("No active sessions to start health monitoring for")
-        return
-      }
-
-      let startedCount = 0
-      for (const [sessionId, sock] of activeSockets.entries()) {
-        const isConnected = sock?.user && sock?.ws
-        if (isConnected) {
-          this.healthMonitor.startMonitoring(sessionId, sock)
-          startedCount++
-        }
-      }
-
-      if (startedCount > 0) {
-        logger.info(`Started health monitoring for ${startedCount} existing active sessions`)
-      }
-    } catch (error) {
-      logger.error("Error starting health monitoring for active sessions:", error)
-    }
-  }
 }
