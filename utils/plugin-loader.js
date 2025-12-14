@@ -515,6 +515,8 @@ class PluginLoader {
         sessionId,
         reply: m.reply,
         prefix: m.prefix || ".",
+        pluginCategory: plugin.category, // ← ADD THIS LINE
+        commandName: commandName.toLowerCase() // ← OPTIONAL: Also add this
       }
 
       const [modeAllowed, permissionCheck] = await Promise.all([

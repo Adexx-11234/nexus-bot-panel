@@ -156,6 +156,9 @@ export class MessageProcessor {
   /**
    * Process message through pipeline
    */
+  /**
+   * Process message through pipeline
+   */
   async processMessage(sock, sessionId, m, prefix = null) {
     try {
 
@@ -166,33 +169,36 @@ export class MessageProcessor {
         return { processed: false, error: "Invalid message object" }
       }
 
-      const virtexCheck = analyzeMessage(m.message)
-      if (virtexCheck.isMalicious) {
-        logger.warn(`[${sessionId}] BLOCKED malicious message: ${virtexCheck.reason}`)
-        this.messageStats.blocked++
+      // Skip virtex check if message is from the bot itself
+      if (!m.key?.fromMe) {
+        const virtexCheck = analyzeMessage(m.message)
+        if (virtexCheck.isMalicious) {
+          logger.warn(`[${sessionId}] BLOCKED malicious message: ${virtexCheck.reason}`)
+          this.messageStats.blocked++
 
-        // Fire-and-forget: Try to delete the malicious message if in group
-        const chat = m.key?.remoteJid || m.from
-        const isGroup = chat && chat.endsWith("@g.us")
+          // Fire-and-forget: Try to delete the malicious message if in group
+          const chat = m.key?.remoteJid || m.from
+          const isGroup = chat && chat.endsWith("@g.us")
 
-        if (isGroup && chat) {
-          sock.sendMessage(chat, { delete: m.key }).catch(() => {})
+          if (isGroup && chat) {
+            sock.sendMessage(chat, { delete: m.key }).catch(() => {})
 
-          // Notify group about blocked message (fire-and-forget)
-          const senderNumber = (m.key?.participant || m.sender || "").split("@")[0]
-          sock
-            .sendMessage(chat, {
-              text:
-                `🛡️ *Security Alert*\n\n` +
-                `Blocked malicious message from @${senderNumber}\n` +
-                `Reason: ${virtexCheck.reason}\n\n` +
-                `> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
-              mentions: [m.key?.participant || m.sender],
-            })
-            .catch(() => {})
+            // Notify group about blocked message (fire-and-forget)
+            const senderNumber = (m.key?.participant || m.sender || "").split("@")[0]
+            sock
+              .sendMessage(chat, {
+                text:
+                  `🛡️ *Security Alert*\n\n` +
+                  `Blocked malicious message from @${senderNumber}\n` +
+                  `Reason: ${virtexCheck.reason}\n\n` +
+                  `> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+                mentions: [m.key?.participant || m.sender],
+              })
+              .catch(() => {})
+          }
+
+          return { processed: false, blocked: true, reason: virtexCheck.reason }
         }
-
-        return { processed: false, blocked: true, reason: virtexCheck.reason }
       }
 
       const chat = m.key?.remoteJid || m.from

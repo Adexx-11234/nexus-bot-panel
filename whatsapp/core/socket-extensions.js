@@ -4,71 +4,398 @@ import { image2webp, video2webp, getTempFilePath, cleanupTempFile } from "../../
 import { fileTypeFromBuffer } from "file-type"
 import axios from "axios"
 import fs from "fs"
+import path from "path"
+import { fileURLToPath } from "url"
+import sharp from "sharp"
 
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 const logger = createComponentLogger("SOCKET_EXTENSIONS")
 
-// ==================== FAKE QUOTED CONFIGURATION ====================
+// ==================== DYNAMIC FAKE QUOTED SYSTEM ====================
+
 /**
- * Fake quoted message to use instead of real messages
- * This prevents issues with message context and maintains privacy
+ * Load and process bot logo as thumbnail
+ * Uses sharp to resize to 48x48 for WhatsApp thumbnails
  */
-const fakeQuoted = {
-  key: {
-    participant: '0@s.whatsapp.net',
-    remoteJid: '0@s.whatsapp.net'
-  },
-  message: {
-    conversation: '*𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙*'
+async function loadBotLogoThumbnail() {
+  try {
+    const possiblePaths = [
+      path.resolve(process.cwd(), "Defaults", "images", "menu.png"),
+      path.resolve(process.cwd(), "defaults", "images", "menu.png"),
+      path.resolve(process.cwd(), "assets", "images", "menu.png"),
+      path.resolve(process.cwd(), "Defaults", "images", "logo.png"),
+      path.resolve(process.cwd(), "assets", "logo.png")
+    ]
+
+    for (const imagePath of possiblePaths) {
+      if (fs.existsSync(imagePath)) {
+        logger.debug(`Loading bot logo from: ${imagePath}`)
+        
+        // Resize to 48x48 for thumbnail
+        const thumbnail = await sharp(imagePath)
+          .resize(48, 48, {
+            fit: 'cover',
+            position: 'center'
+          })
+          .jpeg({ quality: 70 })
+          .toBuffer()
+        
+        // Convert to base64
+        const base64Thumbnail = thumbnail.toString('base64')
+        logger.info("✅ Bot logo thumbnail loaded and processed successfully")
+        return base64Thumbnail
+      }
+    }
+    
+    logger.warn("⚠️ No bot logo found, using text-only fake quoted")
+    return null
+  } catch (error) {
+    logger.error("Error loading bot logo thumbnail:", error.message)
+    return null
+  }
+}
+
+// Load thumbnail on module initialization
+let BOT_LOGO_THUMBNAIL = null
+loadBotLogoThumbnail().then(thumb => {
+  BOT_LOGO_THUMBNAIL = thumb
+}).catch(err => {
+  logger.error("Failed to load bot logo:", err)
+})
+
+/**
+ * Fake quoted presets for different categories
+ */
+function getFakeQuotedPresets() {
+  const hasLogo = !!BOT_LOGO_THUMBNAIL
+  
+  // If we have a logo, use imageMessage style with thumbnail
+  if (hasLogo) {
+    return {
+      ownermenu: {
+        key: {
+          participant: '0@s.whatsapp.net',
+          remoteJid: '0@s.whatsapp.net'
+        },
+        message: {
+          imageMessage: {
+            caption: '*👑 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Owner Panel*',
+            jpegThumbnail: BOT_LOGO_THUMBNAIL
+          }
+        }
+      },
+
+      vipmenu: {
+        key: {
+          participant: '0@s.whatsapp.net',
+          remoteJid: '0@s.whatsapp.net'
+        },
+        message: {
+          imageMessage: {
+            caption: '*💎 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - VIP Access*',
+            jpegThumbnail: BOT_LOGO_THUMBNAIL
+          }
+        }
+      },
+
+      groupmenu: {
+        key: {
+          participant: '0@s.whatsapp.net',
+          remoteJid: '0@s.whatsapp.net'
+        },
+        message: {
+          imageMessage: {
+            caption: '*🛡️ 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Group Control*',
+            jpegThumbnail: BOT_LOGO_THUMBNAIL
+          }
+        }
+      },
+
+      downloadmenu: {
+        key: {
+          participant: '0@s.whatsapp.net',
+          remoteJid: '0@s.whatsapp.net'
+        },
+        message: {
+          imageMessage: {
+            caption: '*📥 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Media Downloader*',
+            jpegThumbnail: BOT_LOGO_THUMBNAIL
+          }
+        }
+      },
+
+      aimenu: {
+        key: {
+          participant: '0@s.whatsapp.net',
+          remoteJid: '0@s.whatsapp.net'
+        },
+        message: {
+          imageMessage: {
+            caption: '*🤖 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - AI Assistant*',
+            jpegThumbnail: BOT_LOGO_THUMBNAIL
+          }
+        }
+      },
+
+      gamemenu: {
+        key: {
+          participant: '0@s.whatsapp.net',
+          remoteJid: '0@s.whatsapp.net'
+        },
+        message: {
+          imageMessage: {
+            caption: '*🎮 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Game Center*',
+            jpegThumbnail: BOT_LOGO_THUMBNAIL
+          }
+        }
+      },
+
+      convertmenu: {
+        key: {
+          participant: '0@s.whatsapp.net',
+          remoteJid: '0@s.whatsapp.net'
+        },
+        message: {
+          imageMessage: {
+            caption: '*🔄 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Media Converter*',
+            jpegThumbnail: BOT_LOGO_THUMBNAIL
+          }
+        }
+      },
+
+      mainmenu: {
+        key: {
+          participant: '0@s.whatsapp.net',
+          remoteJid: '0@s.whatsapp.net'
+        },
+        message: {
+          imageMessage: {
+            caption: '*✨ 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙*',
+            jpegThumbnail: BOT_LOGO_THUMBNAIL
+          }
+        }
+      },
+
+      default: {
+        key: {
+          participant: '0@s.whatsapp.net',
+          remoteJid: '0@s.whatsapp.net'
+        },
+        message: {
+          imageMessage: {
+            caption: '*🤖 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙*',
+            jpegThumbnail: BOT_LOGO_THUMBNAIL
+          }
+        }
+      }
+    }
+  }
+  
+  // Fallback to text-only if no logo
+  return {
+    ownermenu: {
+      key: {
+        participant: '0@s.whatsapp.net',
+        remoteJid: '0@s.whatsapp.net'
+      },
+      message: {
+        conversation: '*👑 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Owner Panel*'
+      }
+    },
+
+    vipmenu: {
+      key: {
+        participant: '0@s.whatsapp.net',
+        remoteJid: '0@s.whatsapp.net'
+      },
+      message: {
+        conversation: '*💎 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - VIP Access*'
+      }
+    },
+
+    groupmenu: {
+      key: {
+        participant: '0@s.whatsapp.net',
+        remoteJid: '0@s.whatsapp.net'
+      },
+      message: {
+        conversation: '*🛡️ 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Group Control*'
+      }
+    },
+
+    downloadmenu: {
+      key: {
+        participant: '0@s.whatsapp.net',
+        remoteJid: '0@s.whatsapp.net'
+      },
+      message: {
+        conversation: '*📥 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Media Downloader*'
+      }
+    },
+
+    aimenu: {
+      key: {
+        participant: '0@s.whatsapp.net',
+        remoteJid: '0@s.whatsapp.net'
+      },
+      message: {
+        conversation: '*🤖 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - AI Assistant*'
+      }
+    },
+
+    gamemenu: {
+      key: {
+        participant: '0@s.whatsapp.net',
+        remoteJid: '0@s.whatsapp.net'
+      },
+      message: {
+        conversation: '*🎮 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Game Center*'
+      }
+    },
+
+    convertmenu: {
+      key: {
+        participant: '0@s.whatsapp.net',
+        remoteJid: '0@s.whatsapp.net'
+      },
+      message: {
+        conversation: '*🔄 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Media Converter*'
+      }
+    },
+
+    mainmenu: {
+      key: {
+        participant: '0@s.whatsapp.net',
+        remoteJid: '0@s.whatsapp.net'
+      },
+      message: {
+        conversation: '*✨ 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙*'
+      }
+    },
+
+    default: {
+      key: {
+        participant: '0@s.whatsapp.net',
+        remoteJid: '0@s.whatsapp.net'
+      },
+      message: {
+        conversation: '*🤖 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙*'
+      }
+    }
+  }
+}
+
+/**
+ * Determine which fake quoted preset to use based on message context
+ */
+function getFakeQuotedForContext(m, options = {}) {
+  try {
+    const PRESETS = getFakeQuotedPresets()
+    
+    // Priority 1: Manual override via options
+    if (options.fakeQuotedType && PRESETS[options.fakeQuotedType]) {
+      logger.debug(`Using manual fake quoted type: ${options.fakeQuotedType}`)
+      return PRESETS[options.fakeQuotedType]
+    }
+
+    // Priority 2: Use plugin category from message object
+    if (m.pluginCategory && PRESETS[m.pluginCategory]) {
+      logger.debug(`Using fake quoted for category: ${m.pluginCategory}`)
+      return PRESETS[m.pluginCategory]
+    }
+
+    // Priority 3: Detect from command name if available
+    if (m.commandName) {
+      const cmd = m.commandName.toLowerCase()
+      
+      // Check if command name contains category hints
+      if (cmd.includes('owner') || cmd.includes('eval') || cmd.includes('exec')) {
+        return PRESETS.ownermenu
+      }
+      if (cmd.includes('vip')) {
+        return PRESETS.vipmenu
+      }
+      if (cmd.includes('group') || cmd.includes('anti') || cmd.includes('kick') || cmd.includes('promote')) {
+        return PRESETS.groupmenu
+      }
+      if (cmd.includes('download') || cmd.includes('dl') || cmd.includes('video') || cmd.includes('song')) {
+        return PRESETS.downloadmenu
+      }
+      if (cmd.includes('ai') || cmd.includes('gpt') || cmd.includes('chat')) {
+        return PRESETS.aimenu
+      }
+      if (cmd.includes('game') || cmd.includes('play')) {
+        return PRESETS.gamemenu
+      }
+      if (cmd.includes('sticker') || cmd.includes('convert')) {
+        return PRESETS.convertmenu
+      }
+    }
+
+    // Priority 4: Use user role
+    if (m.isCreator || m.isOwner) {
+      return PRESETS.ownermenu
+    }
+
+    // Priority 5: Check if in group for group-related
+    if (m.isGroup) {
+      return PRESETS.groupmenu
+    }
+
+    // Fallback to default
+    return PRESETS.default
+
+  } catch (error) {
+    logger.error('Error determining fake quoted preset:', error)
+    return getFakeQuotedPresets().default
   }
 }
 
 /**
  * Extend a Baileys socket with ALL helper methods and overrides
- * This includes: media helpers, sendMessage override, groupMetadata override, and LID helpers
  */
 export function extendSocket(sock) {
   if (!sock || sock._extended) {
     return sock
   }
 
-  logger.debug("Extending socket with all helper methods and overrides")
+  logger.debug("Extending socket with dynamic fake quoted system")
 
   // ==================== SEND MESSAGE OVERRIDE ====================
   const originalSendMessage = sock.sendMessage.bind(sock)
   
-  /**
-   * Enhanced sendMessage with:
-   * - Automatic fakeQuoted replacement and addition
-   * - Auto-mention for group replies
-   * - Timeout protection (prevents hanging)
-   * - Ephemeral message control
-   * - Better error handling
-   * - Automatic retry on specific errors
-   * - Session activity tracking
-   */
   sock.sendMessage = async (jid, content, options = {}) => {
     const maxRetries = 2
     let lastError = null
     
-    // ========== FAKE QUOTED MANAGEMENT ==========
+    // ========== DYNAMIC FAKE QUOTED MANAGEMENT ==========
     const isGroup = jid.endsWith('@g.us')
     let originalQuoted = options.quoted
     
-    // Always use fakeQuoted (replace or add)
+    // Determine which fake quoted to use
+    const PRESETS = getFakeQuotedPresets()
+    let fakeQuoted = PRESETS.default
+    
     if (originalQuoted) {
-      logger.debug(`[SendMessage] Replacing quoted message with fakeQuoted for ${jid}`)
+      // Get context-aware fake quoted
+      fakeQuoted = getFakeQuotedForContext(originalQuoted, options)
       
-      // If it's a group and we have the original quoted message, enhance it
+      logger.debug(`[SendMessage] Using fake quoted type: ${originalQuoted.pluginCategory || 'default'}`)
+      
+      // If it's a group and we have the original quoted message, enhance with mention
       if (isGroup && originalQuoted.key?.participant) {
         const senderJid = originalQuoted.key.participant
         const pushName = originalQuoted.pushName || originalQuoted.verifiedBizName || 'User'
         
-        // Create enhanced fakeQuoted with reply info
-        options.quoted = {
-          ...fakeQuoted,
-          message: {
-            conversation: `*𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙\n\nReplied to ${pushName}*`
-          }
+        // Clone the fake quoted and enhance it for group replies
+        fakeQuoted = JSON.parse(JSON.stringify(fakeQuoted)) // Deep clone
+        
+        // Update the caption/conversation to show reply info
+        if (fakeQuoted.message.imageMessage) {
+          fakeQuoted.message.imageMessage.caption += `\n\n*Replied to ${pushName}*`
+        } else if (fakeQuoted.message.conversation) {
+          fakeQuoted.message.conversation += `\n\n*Replied to ${pushName}*`
         }
         
         // Add mention of the user being replied to
@@ -78,14 +405,14 @@ export function extendSocket(sock) {
         }
         
         logger.debug(`[SendMessage] Enhanced group reply with mention for ${pushName}`)
-      } else {
-        // Not a group or no participant info, use standard fakeQuoted
-        options.quoted = fakeQuoted
       }
-    } else {
-      // No quoted provided, add fakeQuoted
-      logger.debug(`[SendMessage] Adding fakeQuoted to message for ${jid}`)
+      
+      // Replace original quoted with our fake quoted
       options.quoted = fakeQuoted
+    } else {
+      // No quoted provided, add default fake quoted
+      logger.debug(`[SendMessage] Adding default fake quoted to message for ${jid}`)
+      options.quoted = PRESETS.default
     }
     
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -154,34 +481,22 @@ export function extendSocket(sock) {
   }
 
   // ==================== GROUP METADATA OVERRIDE ====================
-  // Store original groupMetadata method
   const originalGroupMetadata = sock.groupMetadata?.bind(sock)
   sock._originalGroupMetadata = originalGroupMetadata
   
-  /**
-   * Override groupMetadata to ALWAYS use cache-first approach
-   * This reduces API calls and prevents rate limiting
-   */
   if (originalGroupMetadata) {
     sock.groupMetadata = async (jid) => {
       const { getGroupMetadata } = await import('../core/config.js')
       return await getGroupMetadata(sock, jid, false)
     }
 
-    /**
-     * Add refresh method - ONLY for specific scenarios
-     * Use this when you know metadata has changed (participant add/remove/promote/demote)
-     */
     sock.groupMetadataRefresh = async (jid) => {
       const { getGroupMetadata } = await import('../core/config.js')
       return await getGroupMetadata(sock, jid, true)
     }
   }
 
-  // ==================== LID HELPER METHODS (v7) ====================
-  /**
-   * Get LID (Linked Identifier) for a phone number
-   */
+  // ==================== LID HELPER METHODS ====================
   sock.getLidForPn = async (phoneNumber) => {
     if (sock.signalRepository?.lidMapping?.getLIDForPN) {
       return await sock.signalRepository.lidMapping.getLIDForPN(phoneNumber)
@@ -189,9 +504,6 @@ export function extendSocket(sock) {
     return phoneNumber
   }
 
-  /**
-   * Get phone number for a LID
-   */
   sock.getPnForLid = async (lid) => {
     if (sock.signalRepository?.lidMapping?.getPNForLID) {
       return await sock.signalRepository.lidMapping.getPNForLID(lid)
@@ -201,9 +513,6 @@ export function extendSocket(sock) {
 
   // ==================== MEDIA HELPERS ====================
   
-  /**
-   * Send an image as a sticker
-   */
   sock.sendImageAsSticker = async function (jid, source, options = {}) {
     let tempFilePath = null
     try {
@@ -236,9 +545,6 @@ export function extendSocket(sock) {
     }
   }
 
-  /**
-   * Send a video as an animated sticker
-   */
   sock.sendVideoAsSticker = async function (jid, source, options = {}) {
     let tempFilePath = null
     try {
@@ -271,9 +577,6 @@ export function extendSocket(sock) {
     }
   }
 
-  /**
-   * Send media as sticker - auto-detects image or video
-   */
   sock.sendMediaAsSticker = async function (jid, source, options = {}) {
     let tempFilePath = null
     try {
@@ -314,9 +617,6 @@ export function extendSocket(sock) {
     }
   }
 
-  /**
-   * Send multiple stickers in batches
-   */
   sock.sendStickerPack = async function (jid, sources, options = {}) {
     const {
       batchSize = 5,
@@ -396,9 +696,6 @@ export function extendSocket(sock) {
     }
   }
 
-  /**
-   * Send image with optional caption
-   */
   sock.sendImage = async function (jid, source, caption = "", options = {}) {
     let tempFilePath = null
     try {
@@ -432,9 +729,6 @@ export function extendSocket(sock) {
     }
   }
 
-  /**
-   * Send video with optional caption
-   */
   sock.sendVideo = async function (jid, source, caption = "", options = {}) {
     let tempFilePath = null
     try {
@@ -469,9 +763,6 @@ export function extendSocket(sock) {
     }
   }
 
-  /**
-   * Send audio
-   */
   sock.sendAudio = async function (jid, source, options = {}) {
     let tempFilePath = null
     try {
@@ -506,9 +797,6 @@ export function extendSocket(sock) {
     }
   }
 
-  /**
-   * Send document/file
-   */
   sock.sendDocument = async function (jid, source, filename, options = {}) {
     let tempFilePath = null
     try {
@@ -545,9 +833,6 @@ export function extendSocket(sock) {
     }
   }
 
-  /**
-   * Reply with text
-   */
   sock.reply = async function (m, text) {
     return await this.sendMessage(
       m.chat || m.key.remoteJid,
@@ -556,9 +841,6 @@ export function extendSocket(sock) {
     )
   }
 
-  /**
-   * React to a message
-   */
   sock.react = async function (m, emoji) {
     return await this.sendMessage(m.chat || m.key.remoteJid, {
       react: {
@@ -568,9 +850,6 @@ export function extendSocket(sock) {
     })
   }
 
-  /**
-   * Download media from a message
-   */
   sock.downloadMedia = async (m) => {
     try {
       const buffer = await downloadMediaMessage(
@@ -592,7 +871,7 @@ export function extendSocket(sock) {
   // Mark socket as extended
   sock._extended = true
 
-  logger.info("✅ Socket fully extended with all helper methods and overrides")
+  logger.info("✅ Socket fully extended with dynamic fake quoted system")
   return sock
 }
 

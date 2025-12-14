@@ -1,5 +1,4 @@
 import { createComponentLogger } from "../../utils/logger.js"
-import { updateSessionLastMessage } from "../../config/baileys.js"
 
 const logger = createComponentLogger("MESSAGE_UPSERT")
 
@@ -23,7 +22,6 @@ export async function getMessageProcessor() {
  */
 export async function handleMessagesUpsert(sessionId, messageUpdate, sock) {
   try {
-    updateSessionLastMessage(sessionId)
 
     const processor = await getMessageProcessor()
 
