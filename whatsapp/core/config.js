@@ -26,7 +26,8 @@ export {
   getGroupCache,
   clearGroupCache,
   clearAllGroupCache,
-  getCacheStats
+  getCacheStats,
+  updateSessionLastMessage
 } from '../../config/baileys.js'
 
 // No logging needed - this is just a re-export module

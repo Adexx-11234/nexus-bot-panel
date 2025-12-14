@@ -128,7 +128,7 @@ export class SessionEventHandlers {
 
       for (const [sessionId, sock] of activeSockets) {
         try {
-          const isConnected = sock?.user && sock?.readyState === sock?.ws?.OPEN
+          const isConnected = sock?.user && sock?.ws?.readyState === 1
 
           if (!isConnected) {
             continue
@@ -319,7 +319,7 @@ export class SessionEventHandlers {
           }
 
           // ✅ Verify socket is connected and ready
-          const isConnected = newSock?.user?.id && newSock?.readyState === newSock?.ws?.OPEN
+          const isConnected = newSock?.user?.id && newSock?.ws?.readyState === 1
 
           if (!isConnected) {
             logger.error(`[515 Flow] ❌ New socket not connected for ${sessionId}`)
@@ -472,6 +472,21 @@ export class SessionEventHandlers {
         }
       }
 
+      // ============================================================
+      // START HEALTH MONITORING
+      // ============================================================
+      try {
+        const { getHealthMonitor } = await import("../utils/index.js")
+        const healthMonitor = getHealthMonitor(this.sessionManager)
+        
+        if (healthMonitor) {
+          healthMonitor.startMonitoring(sessionId, sock)
+          logger.info(`✅ Health monitoring started for ${sessionId}`)
+        }
+      } catch (error) {
+        logger.error(`Failed to start health monitoring for ${sessionId}:`, error)
+      }
+
       logger.info(`Session ${sessionId} fully initialized`)
     } catch (error) {
       logger.error(`Connection open handler error for ${sessionId}:`, error)
@@ -533,7 +548,7 @@ export class SessionEventHandlers {
 
         for (const item of batch) {
           try {
-            const isStillConnected = item.sock?.user && item.sock?.readyState === item.sock?.ws?.OPEN
+            const isStillConnected = item.sock?.user && item.sock?.ws?.readyState === 1
 
             if (!isStillConnected) {
               logger.warn(`Skipping ${item.sessionId} - no longer connected`)
@@ -841,7 +856,7 @@ export class SessionEventHandlers {
 
         for (const [sessionId, sock] of batch) {
           try {
-            const isConnected = sock?.user && sock?.readyState === sock?.ws?.OPEN
+            const isConnected = sock?.user && sock?.ws?.readyState === 1
 
             if (!isConnected) {
               failedCount++

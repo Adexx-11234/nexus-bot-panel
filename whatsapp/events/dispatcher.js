@@ -112,7 +112,7 @@ export class EventDispatcher {
           }
         }
 
-        recordSessionActivity(sessionId)
+       // recordSessionActivity(sessionId)
 
         // Fire and forget
         this.messageHandler
@@ -126,7 +126,7 @@ export class EventDispatcher {
     // ============= MESSAGES_DELETE =============
     sock.ev.on(EventTypes.MESSAGES_DELETE, async (deletions) => {
       try {
-        recordSessionActivity(sessionId)
+      //  recordSessionActivity(sessionId)
 
         // Fire and forget
         this.messageHandler
@@ -140,7 +140,7 @@ export class EventDispatcher {
     // ============= MESSAGES_REACTION =============
     sock.ev.on(EventTypes.MESSAGES_REACTION, async (reactions) => {
       try {
-        recordSessionActivity(sessionId)
+      //  recordSessionActivity(sessionId)
 
         // Fire and forget
         this.messageHandler
@@ -157,21 +157,21 @@ export class EventDispatcher {
    */
   _setupGroupEvents(sock, sessionId) {
     sock.ev.on(EventTypes.GROUPS_UPSERT, async (groups) => {
-      recordSessionActivity(sessionId)
+     // recordSessionActivity(sessionId)
       this.groupHandler
         .handleGroupsUpsert(sock, sessionId, groups)
         .catch((err) => logger.error(`Error in GROUPS_UPSERT for ${sessionId}:`, err))
     })
 
     sock.ev.on(EventTypes.GROUPS_UPDATE, async (updates) => {
-      recordSessionActivity(sessionId)
+    //  recordSessionActivity(sessionId)
       this.groupHandler
         .handleGroupsUpdate(sock, sessionId, updates)
         .catch((err) => logger.error(`Error in GROUPS_UPDATE for ${sessionId}:`, err))
     })
 
     sock.ev.on(EventTypes.GROUP_PARTICIPANTS_UPDATE, async (update) => {
-      recordSessionActivity(sessionId)
+    //  recordSessionActivity(sessionId)
       this.groupHandler
         .handleParticipantsUpdate(sock, sessionId, update)
         .catch((err) => logger.error(`Error in GROUP_PARTICIPANTS_UPDATE for ${sessionId}:`, err))
@@ -223,7 +223,7 @@ export class EventDispatcher {
    */
   _setupPresenceEvents(sock, sessionId) {
     sock.ev.on(EventTypes.PRESENCE_UPDATE, async (update) => {
-      recordSessionActivity(sessionId)
+     // recordSessionActivity(sessionId)
       this.connectionHandler
         .handlePresenceUpdate(sock, sessionId, update)
         .catch((err) => logger.error(`Error in PRESENCE_UPDATE for ${sessionId}:`, err))

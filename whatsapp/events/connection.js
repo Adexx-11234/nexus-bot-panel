@@ -12,17 +12,17 @@ import {
   getUserAction,
 } from "./types.js"
 import { Boom } from "@hapi/boom"
-import { getHealthMonitor, recordSessionActivity } from "../utils/index.js"
+import { getHealthMonitor } from "../utils/index.js"
 
 const logger = createComponentLogger("CONNECTION_EVENTS")
 
-// Toggle for 515 complex flow - Set this directly here
-const ENABLE_515_FLOW = process.env.ENABLE_515_FLOW === "true" // Default: false
+// Toggle for 515 complex flow
+const ENABLE_515_FLOW = process.env.ENABLE_515_FLOW === "true"
 
 /**
  * ConnectionEventHandler
- * Handles reconnection logic and disconnect handling
- * All disconnect handling is now configuration-driven from types.js
+ * Single source of truth for all connection state management
+ * Handles all disconnect reasons based on configuration
  */
 export class ConnectionEventHandler {
   constructor(sessionManager) {
@@ -34,19 +34,6 @@ export class ConnectionEventHandler {
     logger.info(`📋 515 Flow Mode: ${ENABLE_515_FLOW ? "ENABLED" : "DISABLED"}`)
   }
 
-  handleConnectionOpen(sock, sessionId) {
-    logger.info(`✅ Connection opened for ${sessionId}`)
-
-    // Start health monitoring
-    if (this.healthMonitor) {
-      this.healthMonitor.startMonitoring(sessionId, sock)
-    }
-  }
-
-  recordActivity(sessionId) {
-    recordSessionActivity(sessionId)
-  }
-
   // ==========================================
   // MAIN CONNECTION CLOSE HANDLER
   // ==========================================
@@ -54,8 +41,7 @@ export class ConnectionEventHandler {
   /**
    * Handle connection close - Configuration-driven approach
    */
-    
-async _handleConnectionClose(sock, sessionId, lastDisconnect) {
+  async _handleConnectionClose(sock, sessionId, lastDisconnect) {
     try {
       if (this.healthMonitor) {
         this.healthMonitor.stopMonitoring(sessionId)
@@ -79,12 +65,6 @@ async _handleConnectionClose(sock, sessionId, lastDisconnect) {
         return
       }
 
-      // Update session status (only if NOT 405)
-      await this.sessionManager.storage.updateSession(sessionId, {
-        isConnected: false,
-        connectionStatus: "disconnected",
-      })
-
       // Get configuration for this disconnect reason
       const config = getDisconnectConfig(statusCode)
 
@@ -92,6 +72,35 @@ async _handleConnectionClose(sock, sessionId, lastDisconnect) {
       logger.warn(`   Status Code: ${statusCode}`)
       logger.warn(`   Message: ${config.message}`)
       logger.warn(`   Should Reconnect: ${config.shouldReconnect}`)
+
+      // ============================================================
+      // HANDLE 428 (Connection Closed) - COMPLETE CLEANUP
+      // ============================================================
+      if (statusCode === 428) {
+        logger.info(`🛑 Session ${sessionId} - Connection closed (428), performing complete cleanup`)
+        
+        // Get session data to check source
+        const session = await this.sessionManager.storage.getSession(sessionId)
+        const isWebUser = session?.source === "web"
+
+        if (isWebUser) {
+          // Web user: Keep PostgreSQL, delete MongoDB
+          logger.info(`🌐 Web user ${sessionId} - preserving account, cleaning session`)
+          await this.sessionManager.performCompleteUserCleanup(sessionId)
+        } else {
+          // Telegram user: Complete deletion
+          logger.info(`📱 Telegram user ${sessionId} - complete cleanup`)
+          await this.sessionManager.performCompleteUserCleanup(sessionId)
+        }
+        
+        return
+      }
+
+      // Update session status (only if NOT 405 or 428)
+      await this.sessionManager.storage.updateSession(sessionId, {
+        isConnected: false,
+        connectionStatus: "disconnected",
+      })
 
       // ============================================================
       // HANDLE RECONNECTABLE STATUS CODES (BEFORE VOLUNTARY CHECK)
@@ -318,7 +327,7 @@ async _handleConnectionClose(sock, sessionId, lastDisconnect) {
           if (sock.ev && typeof sock.ev.removeAllListeners === "function") {
             sock.ev.removeAllListeners()
           }
-          if (sock.ws && sock.ws.readyState === sock.ws.OPEN) {
+          if (sock.ws) {
             sock.ws.close(1000, "Bad MAC cleanup")
           }
         } catch (error) {
@@ -461,7 +470,7 @@ async _handleConnectionClose(sock, sessionId, lastDisconnect) {
       const newAttempts = (session.reconnectAttempts || 0) + 1
       await this.sessionManager.storage.updateSession(sessionId, {
         reconnectAttempts: newAttempts,
-        connectionStatus: "connected",
+        connectionStatus: "connecting",
       })
 
       logger.info(`🔄 Reconnection attempt ${newAttempts} for ${sessionId}`)

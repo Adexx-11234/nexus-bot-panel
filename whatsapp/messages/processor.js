@@ -2,7 +2,7 @@ import { createComponentLogger } from "../../utils/logger.js"
 import { MessageLogger } from "./logger.js"
 import { MessagePersistence } from "./persistence.js"
 import { MessageExtractor } from "./extractor.js"
-import { recordSessionActivity, analyzeMessage } from "../utils/index.js"
+import { analyzeMessage } from "../utils/index.js"
 
 const logger = createComponentLogger("MessageProcessor")
 
@@ -158,7 +158,6 @@ export class MessageProcessor {
    */
   async processMessage(sock, sessionId, m, prefix = null) {
     try {
-      recordSessionActivity(sessionId)
 
       await this.initialize()
 

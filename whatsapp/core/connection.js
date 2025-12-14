@@ -197,7 +197,7 @@ async createConnection(sessionId, phoneNumber = null, callbacks = {}, allowPairi
       
       while (waited < maxWait) {
         // Check if WebSocket exists and is CONNECTING or OPEN
-        if (sock.ws && (sock.ws.readyState === sock.ws.CONNECTING || sock.ws.readyState === sock.ws.OPEN)) {
+        if (sock.ws && (sock.ws.readyState === 0 || sock.ws.readyState === 1)) {
           logger.info(`WebSocket initialized after ${waited}ms (readyState: ${sock.ws.readyState})`)
           break
         }
@@ -322,7 +322,7 @@ async createConnection(sessionId, phoneNumber = null, callbacks = {}, allowPairi
         }
 
         // Close WebSocket
-        if (sock.ws && sock.ws.readyState === sock.ws.OPEN) {
+        if (sock.ws && sock.ws.readyState === 1) {
           sock.ws.close(1000, 'Disconnect')
         }
       }
@@ -362,7 +362,7 @@ async createConnection(sessionId, phoneNumber = null, callbacks = {}, allowPairi
   }
 
   isSocketReady(sock) {
-    return !!(sock?.user && sock.readyState === sock.ws?.OPEN)
+    return !!(sock?.user && sock?.ws?.readyState === 1)
   }
 
   async waitForSocketReady(sock, timeout = 30000) {

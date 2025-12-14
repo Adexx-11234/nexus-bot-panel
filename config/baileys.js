@@ -1,6 +1,6 @@
 import NodeCache from "node-cache"
 import { makeWASocket, Browsers } from "@whiskeysockets/baileys"
-import { createFileStore, deleteFileStore, getFileStore, recordSessionActivity } from "../whatsapp/index.js"
+import { createFileStore, deleteFileStore, getFileStore } from "../whatsapp/index.js"
 import { logger } from "../utils/logger.js"
 import pino from "pino"
 
@@ -112,7 +112,6 @@ export async function deleteSessionStore(sessionId) {
  */
 export function updateSessionLastMessage(sessionId) {
   sessionLastMessage.set(sessionId, Date.now())
-  recordSessionActivity(sessionId)
 }
 
 /**

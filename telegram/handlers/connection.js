@@ -214,7 +214,7 @@ export class ConnectionHandler {
             
             await new Promise(resolve => setTimeout(resolve, 2000))
             
-            if (socket?.user && socket.readyState === socket.ws?.OPEN) {
+            if (socket?.user && socket.ws && socket.ws.readyState === 1) {
               await this._handleConnectionSuccess(sessionId, phoneNumber, userId)
             } else {
               resolve({ success: false, error: 'Connection unstable' })

@@ -225,9 +225,9 @@ export class WhatsAppEventHandler {
   /**
    * Check if socket is ready
    */
-  isSocketReady(sock) {
-    return !!(sock?.user && sock.readyState === sock.ws?.OPEN)
-  }
+isSocketReady(sock) {
+  return !!(sock?.user && sock.ws && sock.ws.readyState === 1)
+}
 
   /**
    * Wait for socket to be ready
