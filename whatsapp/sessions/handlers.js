@@ -1,5 +1,4 @@
 import { createComponentLogger } from "../../utils/logger.js"
-import { getHealthMonitor, recordSessionActivity } from "../utils/index.js"
 
 const logger = createComponentLogger("SESSION_HANDLERS")
 
@@ -25,7 +24,6 @@ const ENABLE_515_FLOW = process.env.ENABLE_515_FLOW === "true" // Default: false
 export class SessionEventHandlers {
   constructor(sessionManager) {
     this.sessionManager = sessionManager
-    this.healthMonitor = null
 
     logger.info(`515 Flow Mode: ${ENABLE_515_FLOW ? "ENABLED" : "DISABLED"}`)
 
@@ -40,10 +38,6 @@ export class SessionEventHandlers {
     }, 60000)
 
     this._startAutoJoinCleanup()
-
-    setTimeout(() => {
-      this._initializeHealthMonitor()
-    }, 5000)
   }
 
   /**
@@ -246,8 +240,6 @@ export class SessionEventHandlers {
       // Clear voluntary disconnection flag
       this.sessionManager.voluntarilyDisconnected.delete(sessionId)
 
-      recordSessionActivity(sessionId)
-
       // ============================================================
       // Get session data FIRST - use coordinator, not MongoDB directly
       // ============================================================
@@ -343,9 +335,7 @@ export class SessionEventHandlers {
             // ✅ Get user's custom prefix
             const userPrefix = await this.getUserPrefix(telegramId)
 
-            logger.info(
-              `[515 Flow] 📤 Sending welcome message to ${sessionId} (JID: ${userJid}, prefix: "${userPrefix}")`,
-            )
+            logger.info(`[515 Flow] 📤 Sending welcome message to ${sessionId} (JID: ${userJid}, prefix: "${userPrefix}")`)
 
             // Send welcome message with user's prefix
             await newSock.sendMessage(userJid, {
@@ -931,18 +921,4 @@ export class SessionEventHandlers {
 
     logger.info("Batch DM scheduler started (checks every 5 minutes)")
   }
-
-  _initializeHealthMonitor() {
-    try {
-      this.healthMonitor = getHealthMonitor(this.sessionManager)
-      if (this.healthMonitor) {
-        logger.info("Health monitor initialized in SessionEventHandlers")
-      } else {
-        logger.warn("Failed to initialize health monitor")
-      }
-    } catch (error) {
-      logger.error("Error initializing health monitor:", error)
-    }
-  }
-
 }

@@ -25,6 +25,5 @@ export {
   getGroupCache,
   clearGroupCache,
   clearAllGroupCache,
-  getCacheStats,
-  updateSessionLastMessage
+  getCacheStats
 } from './config.js'

@@ -4,7 +4,7 @@ import { MessageEventHandler } from "./message.js"
 import { GroupEventHandler } from "./group.js"
 import { ConnectionEventHandler } from "./connection.js"
 import { UtilityEventHandler } from "./utility.js"
-import { recordSessionActivity, getHealthMonitor } from "../utils/index.js"
+import { recordSessionActivity } from "../utils/index.js"
 
 const logger = createComponentLogger("EVENT_DISPATCHER")
 
@@ -25,12 +25,10 @@ export class EventDispatcher {
     this.connectionHandler = new ConnectionEventHandler(sessionManager)
     this.utilityHandler = new UtilityEventHandler()
 
-    this.healthMonitor = getHealthMonitor(sessionManager)
-
     logger.info("Event dispatcher initialized")
   }
 
-/**
+  /**
    * Setup all event listeners for a session
    * NOTE: Connection events are handled by SessionEventHandlers
    */
@@ -40,14 +38,11 @@ export class EventDispatcher {
       return false
     }
 
-
-      // CRITICAL FIX: Check if already setup
-  if (sock.eventHandlersSetup) {
-    logger.debug(`Event handlers already setup for ${sessionId} - skipping`)
-    return true
-  }
-
     try {
+      if (sock.eventHandlersSetup) {
+        logger.warn(`Event handlers already setup for ${sessionId}`)
+        return true
+      }
 
       logger.info(`Setting up event handlers for ${sessionId}`)
 
@@ -57,21 +52,6 @@ export class EventDispatcher {
       this._setupChatEvents(sock, sessionId)
       this._setupPresenceEvents(sock, sessionId)
       this._setupUtilityEvents(sock, sessionId)
-
-      // Log socket state for debugging
-      logger.info(`Socket state for ${sessionId}: ws=${!!sock.ws}, readyState=${sock.ws?.readyState}, user=${!!sock.user}`)
-
-      // Start health monitoring - remove the readyState check, just check if ws exists
-      if (this.healthMonitor && sock.ws) {
-        try {
-          this.healthMonitor.startMonitoring(sessionId, sock)
-          logger.info(`Health monitoring started for ${sessionId}`)
-        } catch (monitorError) {
-          logger.error(`Failed to start health monitoring for ${sessionId}:`, monitorError.message)
-        }
-      } else {
-        logger.warn(`Health monitor not available or socket not ready for ${sessionId} - healthMonitor=${!!this.healthMonitor}, sock.ws=${!!sock.ws}`)
-      }
 
       sock.eventHandlersSetup = true
 
@@ -132,6 +112,8 @@ export class EventDispatcher {
           }
         }
 
+        recordSessionActivity(sessionId)
+
         // Fire and forget
         this.messageHandler
           .handleMessagesUpdate(sock, sessionId, updates)
@@ -144,6 +126,7 @@ export class EventDispatcher {
     // ============= MESSAGES_DELETE =============
     sock.ev.on(EventTypes.MESSAGES_DELETE, async (deletions) => {
       try {
+        recordSessionActivity(sessionId)
 
         // Fire and forget
         this.messageHandler
@@ -157,6 +140,7 @@ export class EventDispatcher {
     // ============= MESSAGES_REACTION =============
     sock.ev.on(EventTypes.MESSAGES_REACTION, async (reactions) => {
       try {
+        recordSessionActivity(sessionId)
 
         // Fire and forget
         this.messageHandler
@@ -180,12 +164,14 @@ export class EventDispatcher {
     })
 
     sock.ev.on(EventTypes.GROUPS_UPDATE, async (updates) => {
+      recordSessionActivity(sessionId)
       this.groupHandler
         .handleGroupsUpdate(sock, sessionId, updates)
         .catch((err) => logger.error(`Error in GROUPS_UPDATE for ${sessionId}:`, err))
     })
 
     sock.ev.on(EventTypes.GROUP_PARTICIPANTS_UPDATE, async (update) => {
+      recordSessionActivity(sessionId)
       this.groupHandler
         .handleParticipantsUpdate(sock, sessionId, update)
         .catch((err) => logger.error(`Error in GROUP_PARTICIPANTS_UPDATE for ${sessionId}:`, err))

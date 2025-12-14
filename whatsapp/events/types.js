@@ -55,34 +55,34 @@ export const ConnectionState = {
 
 export const DisconnectReason = {
   // Connection issues
-  CONNECTION_CLOSED: 428,
-  CONNECTION_LOST: 408,
-  TIMED_OUT: 408,
+  CONNECTION_CLOSED: 428,      // Connection was closed unexpectedly
+  CONNECTION_LOST: 408,        // Connection timeout/lost
+  TIMED_OUT: 408,              // Request timeout (same as CONNECTION_LOST)
   
-  // Early connection close (pre-pairing)
-  METHOD_NOT_ALLOWED: 405,
+  // ✅ NEW: Early connection close (pre-pairing)
+  METHOD_NOT_ALLOWED: 405,     // Connection closed before pairing could complete
   
   // Authentication & Session issues
-  LOGGED_OUT: 401,
-  FORBIDDEN: 403,
-  CONNECTION_REPLACED: 440,
-  BAD_SESSION: 500,
+  LOGGED_OUT: 401,             // User logged out from WhatsApp
+  FORBIDDEN: 403,              // Account banned/restricted by WhatsApp
+  CONNECTION_REPLACED: 440,    // Another device connected with same account
+  BAD_SESSION: 500,            // Bad MAC - corrupted session storage
   
   // Special cases (Post-pairing)
-  RESTART_REQUIRED: 515,
-  STREAM_ERROR_UNKNOWN: 516,
+  RESTART_REQUIRED: 515,       // Connection needs restart (happens after pairing code)
+  STREAM_ERROR_UNKNOWN: 516,   // Unknown stream error (similar to 515)
   
   // Service availability
-  UNAVAILABLE: 503,
+  UNAVAILABLE: 503,            // Service temporarily unavailable
   
   // Rate limiting
-  TOO_MANY_REQUESTS: 429,
+  TOO_MANY_REQUESTS: 429,      // Too many connection attempts
   
   // Other errors
-  CONFLICT: 409,
-  INTERNAL_SERVER_ERROR: 500,
-  BAD_REQUEST: 400,
-  NOT_FOUND: 404
+  CONFLICT: 409,               // Session conflict
+  INTERNAL_SERVER_ERROR: 500,  // WhatsApp internal error
+  BAD_REQUEST: 400,            // Invalid request
+  NOT_FOUND: 404               // Resource not found
 }
 
 // ==========================================
@@ -116,7 +116,7 @@ export const DisconnectConfig = {
   },
   
   // ============================================================
-  // EARLY CONNECTION CLOSE (Pre-Pairing)
+  // ✅ NEW: 405 - Early Connection Close (Pre-Pairing)
   // ============================================================
   
   [DisconnectReason.METHOD_NOT_ALLOWED]: {
@@ -168,8 +168,6 @@ export const DisconnectConfig = {
     isPermanent: false,
     requiresCleanup: false,
     clearVoluntaryFlag: true,
-    reconnectDelay: 10000, // 10 seconds
-    maxAttempts: 6,
     message: 'Connection replaced by another device',
     userAction: 'Reconnecting automatically',
     handler: 'handleConnectionReplaced'
@@ -186,23 +184,22 @@ export const DisconnectConfig = {
     requiresAuthClear: true,
     keepCredentials: true,
     reconnectDelay: 2000,
-    maxAttempts: 10,
+    maxAttempts: 5,
     message: 'Session data corrupted - clearing and reconnecting',
     handler: 'handleBadSession'
   },
   
   // ============================================================
-  // CONNECTION TIMEOUT - NOW RECONNECTS
+  // CONNECTION TIMEOUT - COMPLETE CLEANUP
   // ============================================================
   
   [DisconnectReason.TIMED_OUT]: {
-    shouldReconnect: true, // Changed from false
-    isPermanent: false, // Changed from true
-    requiresCleanup: false, // Changed from true
-    reconnectDelay: 30000, // Wait 30 seconds
-    maxAttempts: 7,
-    message: 'Connection request timed out - retrying',
-    userAction: 'Reconnecting automatically',
+    shouldReconnect: false,
+    isPermanent: true,
+    requiresCleanup: true,
+    requiresNotification: true,
+    message: 'Connection request timed out',
+    userAction: 'Use /connect to try again',
     handler: 'handleConnectionTimeout'
   },
   
@@ -210,8 +207,6 @@ export const DisconnectConfig = {
     shouldReconnect: true,
     isPermanent: false,
     requiresCleanup: false,
-    reconnectDelay: 15000, // 15 seconds
-    maxAttempts: 10,
     message: 'Connection lost',
     handler: 'handleConnectionLost'
   },
@@ -225,8 +220,6 @@ export const DisconnectConfig = {
     isPermanent: false,
     requiresCleanup: false,
     clearVoluntaryFlag: true,
-    reconnectDelay: 15000, // 15 seconds
-    maxAttempts: 10,
     message: 'Connection closed unexpectedly',
     handler: 'handleConnectionClosed'
   },
@@ -235,8 +228,8 @@ export const DisconnectConfig = {
     shouldReconnect: true,
     isPermanent: false,
     requiresCleanup: false,
-    reconnectDelay: 30000, // 30 seconds
-    maxAttempts: 7,
+    reconnectDelay: 10000,
+    maxAttempts: 5,
     message: 'WhatsApp service temporarily unavailable',
     handler: 'handleUnavailable'
   },
@@ -276,7 +269,7 @@ export const DisconnectConfig = {
     isPermanent: false,
     requiresCleanup: false,
     reconnectDelay: 10000,
-    maxAttempts: 5,
+    maxAttempts: 3,
     message: 'WhatsApp internal server error',
     handler: 'handleInternalError'
   },
@@ -302,6 +295,9 @@ export const DisconnectConfig = {
 // HELPER FUNCTIONS
 // ==========================================
 
+/**
+ * Get configuration for a disconnect reason
+ */
 export function getDisconnectConfig(statusCode) {
   return DisconnectConfig[statusCode] || {
     shouldReconnect: true,
@@ -314,26 +310,41 @@ export function getDisconnectConfig(statusCode) {
   }
 }
 
+/**
+ * Check if disconnect is permanent
+ */
 export function isPermanentDisconnect(statusCode) {
   const config = getDisconnectConfig(statusCode)
   return config.isPermanent === true
 }
 
+/**
+ * Check if should reconnect
+ */
 export function shouldReconnect(statusCode) {
   const config = getDisconnectConfig(statusCode)
   return config.shouldReconnect === true
 }
 
+/**
+ * Check if requires cleanup
+ */
 export function requiresCleanup(statusCode) {
   const config = getDisconnectConfig(statusCode)
   return config.requiresCleanup === true
 }
 
+/**
+ * Check if supports 515 complex flow
+ */
 export function supports515Flow(statusCode) {
   const config = getDisconnectConfig(statusCode)
   return config.supports515Flow === true
 }
 
+/**
+ * Get reconnection delay
+ */
 export function getReconnectDelay(statusCode, attemptNumber = 0) {
   const config = getDisconnectConfig(statusCode)
   
@@ -341,6 +352,7 @@ export function getReconnectDelay(statusCode, attemptNumber = 0) {
     return null
   }
   
+  // Exponential backoff for rate limiting
   if (config.useExponentialBackoff) {
     const delay = config.reconnectDelay * Math.pow(2, attemptNumber)
     return Math.min(delay, config.maxDelay || 300000)
@@ -349,41 +361,65 @@ export function getReconnectDelay(statusCode, attemptNumber = 0) {
   return config.reconnectDelay || 5000
 }
 
+/**
+ * Get max reconnection attempts
+ */
 export function getMaxAttempts(statusCode) {
   const config = getDisconnectConfig(statusCode)
   return config.maxAttempts || 5
 }
 
+/**
+ * Get disconnect message
+ */
 export function getDisconnectMessage(statusCode) {
   const config = getDisconnectConfig(statusCode)
   return config.message
 }
 
+/**
+ * Get handler name
+ */
 export function getHandlerName(statusCode) {
   const config = getDisconnectConfig(statusCode)
   return config.handler || 'handleUnknown'
 }
 
+/**
+ * Check if should clear voluntary disconnect flag
+ */
 export function shouldClearVoluntaryFlag(statusCode) {
   const config = getDisconnectConfig(statusCode)
   return config.clearVoluntaryFlag === true
 }
 
+/**
+ * Check if requires auth clear
+ */
 export function requiresAuthClear(statusCode) {
   const config = getDisconnectConfig(statusCode)
   return config.requiresAuthClear === true
 }
 
+/**
+ * Check if should keep credentials during cleanup
+ */
 export function shouldKeepCredentials(statusCode) {
   const config = getDisconnectConfig(statusCode)
   return config.keepCredentials === true
 }
 
+/**
+ * Check if requires user notification
+ */
 export function requiresNotification(statusCode) {
   const config = getDisconnectConfig(statusCode)
   return config.requiresNotification === true
 }
 
+/**
+ * Get user action message
+ */
 export function getUserAction(statusCode) {
   const config = getDisconnectConfig(statusCode)
   return config.userAction || null
@@ -412,6 +448,9 @@ export const DisconnectMessages = {
   [DisconnectReason.NOT_FOUND]: 'Resource not found'
 }
 
+/**
+ * Legacy function - use getDisconnectConfig instead
+ */
 export function canReconnect(statusCode) {
   return shouldReconnect(statusCode)
 }

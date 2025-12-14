@@ -22,7 +22,6 @@ export class SessionManager {
     this.connectionManager = null
     this.fileManager = null
     this.eventDispatcher = null
-    this.healthMonitor = null // Added healthMonitor instance
 
     // Session tracking
     this.activeSockets = new Map()
@@ -113,8 +112,6 @@ export class SessionManager {
 
       // Wait for MongoDB connection
       await this._waitForMongoDB()
-
-      await this._initializeHealthMonitor()
 
       logger.info("Session manager initialization complete")
       return true
@@ -339,7 +336,7 @@ export class SessionManager {
         return
       }
 
-      if (!sock.ws) {
+      if (sock.readyState !== sock.ws?.OPEN) {
         return
       }
 
@@ -348,7 +345,7 @@ export class SessionManager {
       if (!this.eventDispatcher) {
         this.eventDispatcher = new EventDispatcher(this)
       }
-       // ✅ This will call health monitoring ONCE inside setupEventHandlers
+
       this.eventDispatcher.setupEventHandlers(sock, sessionId)
       sock.eventHandlersSetup = true
 
@@ -400,7 +397,7 @@ export class SessionManager {
   ) {
     const userIdStr = String(userId)
     const sessionId = userIdStr.startsWith("session_") ? userIdStr : `session_${userIdStr}`
-
+     
     try {
       // Prevent duplicate session creation
       if (this.initializingSessions.has(sessionId)) {
@@ -446,8 +443,8 @@ export class SessionManager {
         }
       }
 
-      // Create socket connection (store gets bound inside createConnection)
-      const sock = await this.connectionManager.createConnection(sessionId, phoneNumber, callbacks, allowPairing)
+    // Create socket connection (store gets bound inside createConnection)
+    const sock = await this.connectionManager.createConnection(sessionId, phoneNumber, callbacks, allowPairing)
 
       if (!sock) {
         throw new Error("Failed to create socket connection")
@@ -712,24 +709,22 @@ export class SessionManager {
     }
   }
 
-  /**
-   * Get session socket
-   */
-  getSession(sessionId) {
-    const sock = this.activeSockets.get(sessionId)
+/**
+ * Get session socket
+ */
+getSession(sessionId) {
+  const sock = this.activeSockets.get(sessionId)
 
-    if (!sock && sessionId) {
-      import("../utils/index.js")
-        .then(({ invalidateSessionLookupCache }) => {
-          invalidateSessionLookupCache(sessionId)
-        })
-        .catch((err) => {
-          logger.error(`Failed to invalidate cache for ${sessionId}:`, err)
-        })
-    }
-
-    return sock
+  if (!sock && sessionId) {
+    import("../utils/index.js").then(({ invalidateSessionLookupCache }) => {
+      invalidateSessionLookupCache(sessionId)
+    }).catch(err => {
+      logger.error(`Failed to invalidate cache for ${sessionId}:`, err)
+    })
   }
+
+  return sock
+}
 
   /**
    * Get session by WhatsApp JID
@@ -866,10 +861,6 @@ export class SessionManager {
       // Stop web session detection
       this.stopWebSessionDetection()
 
-      if (this.healthMonitor) {
-        this.healthMonitor.shutdown()
-      }
-
       // Disconnect all sessions
       const disconnectPromises = []
       for (const sessionId of this.activeSockets.keys()) {
@@ -944,25 +935,6 @@ export class SessionManager {
    */
   getEventDispatcher() {
     return this.eventDispatcher
-  }
-
-  /**
-   * Get health monitor instance
-   */
-  getHealthMonitor() {
-    return this.healthMonitor
-  }
-
-  async _initializeHealthMonitor() {
-    try {
-      const { getHealthMonitor } = await import("../utils/index.js")
-      this.healthMonitor = getHealthMonitor(this)
-      if (this.healthMonitor) {
-        logger.info("Health monitor initialized in session manager")
-      }
-    } catch (error) {
-      logger.error("Failed to initialize health monitor:", error)
-    }
   }
 }
 

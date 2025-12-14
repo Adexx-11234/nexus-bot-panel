@@ -37,7 +37,16 @@ export class ConnectionEventHandler {
   handleConnectionOpen(sock, sessionId) {
     logger.info(`✅ Connection opened for ${sessionId}`)
 
+    // Start health monitoring
+    if (this.healthMonitor) {
+      this.healthMonitor.startMonitoring(sessionId, sock)
+    }
   }
+
+  recordActivity(sessionId) {
+    recordSessionActivity(sessionId)
+  }
+
   // ==========================================
   // MAIN CONNECTION CLOSE HANDLER
   // ==========================================
@@ -45,7 +54,8 @@ export class ConnectionEventHandler {
   /**
    * Handle connection close - Configuration-driven approach
    */
-  async _handleConnectionClose(sock, sessionId, lastDisconnect) {
+    
+async _handleConnectionClose(sock, sessionId, lastDisconnect) {
     try {
       if (this.healthMonitor) {
         this.healthMonitor.stopMonitoring(sessionId)
@@ -104,13 +114,11 @@ export class ConnectionEventHandler {
 
       // ============================================================
       // CHECK VOLUNTARY DISCONNECT (AFTER RECONNECTABLE CODES)
-      // BUT SKIP FOR 401 LOGGED OUT - ALWAYS CLEANUP
       // ============================================================
 
       const isVoluntaryDisconnect = this.sessionManager.voluntarilyDisconnected?.has(sessionId)
 
-      // For 401 (logged out), always proceed with cleanup regardless of voluntary flag
-      if (isVoluntaryDisconnect && !shouldClearVoluntaryFlag(statusCode) && statusCode !== DisconnectReason.LOGGED_OUT) {
+      if (isVoluntaryDisconnect && !shouldClearVoluntaryFlag(statusCode)) {
         logger.info(`✋ Session ${sessionId} voluntarily disconnected - skipping cleanup`)
         return
       }
