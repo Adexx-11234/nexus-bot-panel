@@ -2,7 +2,236 @@ import { createComponentLogger } from '../../utils/logger.js'
 import { useMultiFileAuthState, makeCacheableSignalKeyStore } from '@whiskeysockets/baileys'
 import pino from 'pino'
 import { extendSocket } from "./socket-extensions.js"
+import fs from 'fs/promises'
+import path from 'path'
+
 const logger = createComponentLogger('CONNECTION_MANAGER')
+
+// ✅ Socket Inspector - Logs all property accesses to JSON
+function createSocketInspector(sock, sessionId) {
+  const inspectionLog = {
+    sessionId,
+    timestamp: new Date().toISOString(),
+    properties: {},
+    methods: {},
+    eventListeners: [],
+    propertyAccesses: [],
+    methodCalls: []
+  }
+
+  // Helper to serialize values safely
+  const serializeValue = (value, depth = 0) => {
+    if (depth > 3) return '[Max Depth Reached]'
+    
+    if (value === null) return null
+    if (value === undefined) return '[undefined]'
+    
+    const type = typeof value
+    
+    if (type === 'function') {
+      return {
+        type: 'function',
+        name: value.name || '[anonymous]',
+        length: value.length
+      }
+    }
+    
+    if (type === 'symbol') return value.toString()
+    if (type === 'bigint') return value.toString()
+    if (type === 'boolean' || type === 'number' || type === 'string') return value
+    
+    if (value instanceof Date) return value.toISOString()
+    if (value instanceof RegExp) return value.toString()
+    if (value instanceof Error) {
+      return {
+        type: 'Error',
+        name: value.name,
+        message: value.message,
+        stack: value.stack
+      }
+    }
+    
+    if (Buffer.isBuffer(value)) {
+      return {
+        type: 'Buffer',
+        length: value.length,
+        preview: value.slice(0, 20).toString('hex')
+      }
+    }
+    
+    if (Array.isArray(value)) {
+      return value.slice(0, 10).map(v => serializeValue(v, depth + 1))
+    }
+    
+    if (type === 'object') {
+      try {
+        const obj = {}
+        const keys = Object.keys(value).slice(0, 20) // Limit to 20 keys
+        
+        for (const key of keys) {
+          try {
+            obj[key] = serializeValue(value[key], depth + 1)
+          } catch (e) {
+            obj[key] = `[Error: ${e.message}]`
+          }
+        }
+        
+        return obj
+      } catch (e) {
+        return `[Error serializing: ${e.message}]`
+      }
+    }
+    
+    return String(value)
+  }
+
+  // Snapshot initial state
+  const captureInitialState = () => {
+    try {
+      const keys = Object.keys(sock)
+      
+      for (const key of keys) {
+        try {
+          const value = sock[key]
+          const type = typeof value
+          
+          if (type === 'function') {
+            inspectionLog.methods[key] = {
+              name: value.name || key,
+              length: value.length,
+              isAsync: value.constructor.name === 'AsyncFunction'
+            }
+          } else {
+            inspectionLog.properties[key] = {
+              type: type,
+              value: serializeValue(value, 0),
+              writable: true,
+              enumerable: true
+            }
+          }
+        } catch (e) {
+          inspectionLog.properties[key] = {
+            error: e.message
+          }
+        }
+      }
+      
+      // Special handling for important objects
+      if (sock.ws) {
+        inspectionLog.properties.ws_details = {
+          type: 'WebSocket',
+          readyState: sock.ws.socket?._readyState,
+          url: sock.ws.socket?.url,
+          protocol: sock.ws.socket?.protocol
+        }
+      }
+      
+      if (sock.ev) {
+        inspectionLog.properties.ev_details = {
+          type: 'EventEmitter',
+          isBuffering: typeof sock.ev.isBuffering === 'function' ? sock.ev.isBuffering() : false,
+          listenerCount: sock.ev.listenerCount ? sock.ev.listenerCount('connection.update') : 'unknown'
+        }
+      }
+      
+      if (sock.user) {
+        inspectionLog.properties.user_details = serializeValue(sock.user, 0)
+      }
+      
+      if (sock.authState) {
+        inspectionLog.properties.authState_details = {
+          type: 'AuthState',
+          hasCreds: !!sock.authState?.creds,
+          hasKeys: !!sock.authState?.keys
+        }
+      }
+      
+    } catch (e) {
+      inspectionLog.captureError = e.message
+    }
+  }
+
+  captureInitialState()
+
+  // Create proxy to track runtime access
+  const handler = {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver)
+      
+      // Log property access
+      inspectionLog.propertyAccesses.push({
+        timestamp: Date.now(),
+        property: String(prop),
+        type: typeof value,
+        value: serializeValue(value, 0)
+      })
+      
+      // If it's a function, wrap it to log calls
+      if (typeof value === 'function') {
+        return new Proxy(value, {
+          apply(target, thisArg, argumentsList) {
+            inspectionLog.methodCalls.push({
+              timestamp: Date.now(),
+              method: String(prop),
+              args: argumentsList.map(arg => serializeValue(arg, 0))
+            })
+            
+            return Reflect.apply(target, thisArg, argumentsList)
+          }
+        })
+      }
+      
+      return value
+    },
+    
+    set(target, prop, value) {
+      inspectionLog.propertyAccesses.push({
+        timestamp: Date.now(),
+        property: String(prop),
+        type: 'SET',
+        value: serializeValue(value, 0)
+      })
+      
+      return Reflect.set(target, prop, value)
+    }
+  }
+
+  const proxySock = new Proxy(sock, handler)
+  
+  // Save inspection log to file
+  const saveLog = async () => {
+    try {
+      const logsDir = path.join(process.cwd(), 'socket-inspections')
+      await fs.mkdir(logsDir, { recursive: true })
+      
+      const filename = `sock_${sessionId}_${Date.now()}.json`
+      const filepath = path.join(logsDir, filename)
+      
+      // Limit log size
+      const limitedLog = {
+        ...inspectionLog,
+        propertyAccesses: inspectionLog.propertyAccesses.slice(-100), // Last 100 accesses
+        methodCalls: inspectionLog.methodCalls.slice(-50) // Last 50 calls
+      }
+      
+      await fs.writeFile(filepath, JSON.stringify(limitedLog, null, 2))
+      logger.info(`📝 Socket inspection saved: ${filename}`)
+      
+      return filepath
+    } catch (e) {
+      logger.error(`Failed to save socket inspection:`, e)
+      return null
+    }
+  }
+
+  // Save log after 5 seconds and return the save function
+  setTimeout(saveLog, 5000)
+  
+  // Attach save function to proxy for manual saving
+  proxySock._saveInspectionLog = saveLog
+  
+  return proxySock
+}
 
 export class ConnectionManager {
   constructor() {
@@ -11,138 +240,107 @@ export class ConnectionManager {
     this.activeSockets = new Map()
     this.pairingInProgress = new Set()
     this.connectionTimeouts = new Map()
+    this.enableSocketInspection = process.env.INSPECT_SOCKETS === 'true' // Enable via env var
   }
 
   initialize(fileManager, mongoClient = null) {
     this.fileManager = fileManager
     this.mongoClient = mongoClient
     logger.info('Connection manager initialized')
-  }
-
-  async createConnection(sessionId, phoneNumber = null, callbacks = {}, allowPairing = true) {
-    try {
-      logger.info(`Creating connection for ${sessionId}`)
-
-      // Get authentication state
-      const authState = await this._getAuthState(sessionId)
-      if (!authState) {
-        throw new Error('Failed to get authentication state')
-      }
-
-      // ✅ Import dependencies
-      const { createSessionStore, createBaileysSocket, bindStoreToSocket } = await import('./config.js')
-      const { proto } = await import('@whiskeysockets/baileys')
-      
-      // ✅ Create store BEFORE socket
-      const store = createSessionStore(sessionId)
-
-      // ✅ Create getMessage function with proper fallback
-      const getMessage = async (key) => {
-        if (!key || !key.remoteJid || !key.id) {
-          return proto.Message.fromObject({})
-        }
-        
-        if (store) {
-          try {
-            const msg = await store.loadMessage(key.remoteJid, key.id)
-            if (msg?.message) {
-              return msg.message
-            }
-          } catch (error) {
-            logger.debug(`getMessage failed for ${key.id}:`, error.message)
-          }
-        }
-        
-        return proto.Message.fromObject({})
-      }
-
-      // ✅ Create socket WITH getMessage function
-      const sock = createBaileysSocket(authState.state, sessionId, getMessage)
-      extendSocket(sock)
-      
-      // ✅ CRITICAL: Wait for WebSocket to actually connect (readyState === 1)
-      try {
-        await this._waitForWebSocketConnection(sock, sessionId)
-      } catch (error) {
-        logger.error(`WebSocket connection failed for ${sessionId}:`, error.message)
-        // Cleanup on failure
-        if (sock.ws && sock.ws.socket) {
-          sock.ws.socket.removeAllListeners()
-          sock.ws.close()
-        }
-        throw error
-      }
-      
-      // ✅ Now bind store AFTER WebSocket is connected
-      logger.info(`Binding store to socket for ${sessionId}`)
-      await bindStoreToSocket(sock, sessionId)
-      
-      logger.info(`Connection established for ${sessionId}`)
-
-      // Setup credentials update handler
-      sock.ev.on('creds.update', authState.saveCreds)
-
-      // Store socket metadata
-      sock.sessionId = sessionId
-      sock.authMethod = authState.method
-      sock.authCleanup = authState.cleanup
-      sock.connectionCallbacks = callbacks
-      sock._sessionStore = store
-      sock._storeCleanup = () => {
-        if (authState.cleanup) authState.cleanup()
-      }
-
-      // Track active socket
-      this.activeSockets.set(sessionId, sock)
-
-      // Handle pairing if needed (only for new sessions without auth)
-      if (allowPairing && phoneNumber && !authState.state.creds?.registered) {
-        this._schedulePairing(sock, sessionId, phoneNumber, callbacks)
-      }
-
-      logger.info(`Socket ready for ${sessionId} using ${authState.method} auth`)
-      return sock
-
-    } catch (error) {
-      logger.error(`Failed to create connection for ${sessionId}:`, error)
-      throw error
+    
+    if (this.enableSocketInspection) {
+      logger.info('🔍 Socket inspection ENABLED - logs will be saved to socket-inspections/')
     }
   }
 
-  // ✅ NEW METHOD: Wait for WebSocket to reach OPEN state (readyState === 1)
-  async _waitForWebSocketConnection(sock, sessionId, timeout = 15000) {
-    const startTime = Date.now()
-    
-    logger.debug(`Waiting for WebSocket connection for ${sessionId}`)
-    
-    return new Promise((resolve, reject) => {
-      const checkInterval = setInterval(() => {
-        if (Date.now() - startTime > timeout) {
-          clearInterval(checkInterval)
-          reject(new Error(`WebSocket connection timeout for ${sessionId}`))
-          return
-        }
+async createConnection(sessionId, phoneNumber = null, callbacks = {}, allowPairing = true) {
+  try {
+    logger.info(`Creating connection for ${sessionId}`)
 
-        // Check if WebSocket is in OPEN state (readyState === 1)
-        if (sock.ws && sock.ws.socket && sock.ws.socket.readyState === 1) {
-          clearInterval(checkInterval)
-          logger.debug(`WebSocket connected for ${sessionId} (readyState: 1)`)
-          // Give extra 1 second for socket to fully stabilize
-          setTimeout(() => resolve(true), 1000)
-        }
-      }, 200)
+    // Get authentication state
+    const authState = await this._getAuthState(sessionId)
+    if (!authState) {
+      throw new Error('Failed to get authentication state')
+    }
 
-      // Listen for connection errors
-      if (sock.ws && sock.ws.socket) {
-        const errorHandler = (error) => {
-          clearInterval(checkInterval)
-          sock.ws.socket.removeListener('error', errorHandler)
-          reject(new Error(`WebSocket error: ${error.message}`))
-        }
-        sock.ws.socket.once('error', errorHandler)
+    // ✅ Create store BEFORE socket
+    const { createSessionStore, createBaileysSocket, bindStoreToSocket } = await import('./config.js')
+    
+    // ✅ CRITICAL FIX: Import proto for fallback
+    const { proto } = await import('@whiskeysockets/baileys')
+    
+    const store = createSessionStore(sessionId)
+
+    // ✅ CRITICAL: Create getMessage with proper fallback BEFORE socket creation
+    const getMessage = async (key) => {
+      if (!key || !key.remoteJid || !key.id) {
+        logger.debug(`Invalid key in getMessage`)
+        return proto.Message.fromObject({})
       }
-    })
+      
+      if (store) {
+        try {
+          const msg = await store.loadMessage(key.remoteJid, key.id)
+          if (msg?.message) {
+            return msg.message
+          }
+        } catch (error) {
+          logger.debug(`getMessage failed for ${key.id}:`, error.message)
+        }
+      }
+      
+      return proto.Message.fromObject({})
+    }
+        
+
+    // ✅ Create socket WITH getMessage function
+    let sock = createBaileysSocket(authState.state, sessionId, getMessage)
+    extendSocket(sock)
+    
+    // ✅ INSPECTION: Wrap socket with proxy if enabled
+    if (this.enableSocketInspection) {
+      logger.info(`🔍 Inspecting socket for ${sessionId}`)
+      sock = createSocketInspector(sock, sessionId)
+    }
+    
+    // ✅ Bind store to socket IMMEDIATELY
+    logger.info(`Binding store to socket for ${sessionId}`)
+    await bindStoreToSocket(sock, sessionId)
+    
+    // ✅ Give store time to sync initial data (reduced for faster initialization)
+    await new Promise(resolve => setTimeout(resolve, 500))
+    
+    logger.info(`Store bound and ready for ${sessionId}`)
+
+    // Setup credentials update handler
+    sock.ev.on('creds.update', authState.saveCreds)
+
+    // Store socket metadata
+    sock.sessionId = sessionId
+    sock.authMethod = authState.method
+    sock.authCleanup = authState.cleanup
+    sock.connectionCallbacks = callbacks
+    sock._sessionStore = store
+    sock._storeCleanup = () => {
+      if (authState.cleanup) authState.cleanup()
+    }
+
+    // Track active socket
+    this.activeSockets.set(sessionId, sock)
+
+    // Handle pairing if needed
+    if (allowPairing && phoneNumber && !authState.state.creds?.registered) {
+      this._schedulePairing(sock, sessionId, phoneNumber, callbacks)
+    }
+
+    logger.info(`Socket created for ${sessionId} using ${authState.method} auth`)
+    return sock
+
+  } catch (error) {
+    logger.error(`Failed to create connection for ${sessionId}:`, error)
+    throw error
   }
+}
 
   async _getAuthState(sessionId) {
     try {
@@ -158,7 +356,7 @@ export class ConnectionManager {
           if (mongoAuth?.state?.creds?.noiseKey && mongoAuth.state.creds?.signedIdentityKey) {
             logger.info(`Using MongoDB auth for ${sessionId}`)
             
-            // ✅ Wrap keys with makeCacheableSignalKeyStore
+            // ✅ CRITICAL: Wrap keys with makeCacheableSignalKeyStore
             const authState = {
               creds: mongoAuth.state.creds,
               keys: makeCacheableSignalKeyStore(
@@ -194,7 +392,7 @@ export class ConnectionManager {
       if (fileAuth?.state?.creds?.noiseKey && fileAuth.state.creds?.signedIdentityKey) {
         logger.info(`Using file auth for ${sessionId}`)
         
-        // ✅ Wrap keys with makeCacheableSignalKeyStore
+        // ✅ CRITICAL: Wrap keys with makeCacheableSignalKeyStore
         const authState = {
           creds: fileAuth.state.creds,
           keys: makeCacheableSignalKeyStore(
@@ -220,63 +418,66 @@ export class ConnectionManager {
   }
 
   _schedulePairing(sock, sessionId, phoneNumber, callbacks) {
-    if (this.pairingInProgress.has(sessionId)) {
-      logger.warn(`Pairing already in progress for ${sessionId}`)
-      return
-    }
+  if (this.pairingInProgress.has(sessionId)) {
+    logger.warn(`Pairing already in progress for ${sessionId}`)
+    return
+  }
 
-    this.pairingInProgress.add(sessionId)
+  this.pairingInProgress.add(sessionId)
 
-    // Wait for WebSocket and then request pairing
-    const waitForWebSocketAndPair = async () => {
-      try {
-        logger.info(`Waiting for WebSocket to be ready for pairing ${sessionId}`)
+  // ✅ CRITICAL FIX: Wait for WebSocket to be initialized, then request pairing
+  const waitForWebSocketAndPair = async () => {
+    try {
+      logger.info(`Waiting for WebSocket initialization for ${sessionId}`)
+      
+      // Wait for sock.ws to exist and be in a valid state
+      const maxWait = 30000 // 30 seconds
+      const checkInterval = 100 // Check every 100ms
+      let waited = 0
+      
+      while (waited < maxWait) {
+        // Check if WebSocket exists and is CONNECTING or OPEN
+          const readyState = sock.ws?.socket?._readyState
+          if (sock.ws && (readyState === 0 || readyState === 1)) {
+        logger.info(`WebSocket initialized after ${waited}ms (readyState: ${readyState})`)
+         break
+         }
         
-        // Wait for WebSocket to be in OPEN state
-        const maxWait = 30000
-        const checkInterval = 100
-        let waited = 0
-        
-        while (waited < maxWait) {
-          const readyState = sock.ws?.socket?.readyState
-          if (sock.ws && readyState === 1) {
-            logger.info(`WebSocket ready for pairing after ${waited}ms`)
-            break
-          }
-          
-          await new Promise(resolve => setTimeout(resolve, checkInterval))
-          waited += checkInterval
-        }
-        
-        if (waited >= maxWait) {
-          throw new Error('WebSocket readiness timeout for pairing')
-        }
-        
-        // Additional delay to ensure stability
-        await new Promise(resolve => setTimeout(resolve, 1000))
-        
-        logger.info(`Requesting pairing code for ${sessionId}`)
-        
-        const { handlePairing } = await import('../utils/index.js')
-        await handlePairing(sock, sessionId, phoneNumber, new Map(), callbacks)
+        await new Promise(resolve => setTimeout(resolve, checkInterval))
+        waited += checkInterval
+      }
+      
+      // Timeout check
+      if (waited >= maxWait) {
+        throw new Error('WebSocket initialization timeout')
+      }
+      
+// Additional small delay to ensure WebSocket is stable
+await new Promise(resolve => setTimeout(resolve, 300))
+      
+      logger.info(`Requesting pairing code for ${sessionId}`)
+      
+      const { handlePairing } = await import('../utils/index.js')
+      await handlePairing(sock, sessionId, phoneNumber, new Map(), callbacks)
 
-        // Keep pairing flag for extended period
-        setTimeout(() => {
-          this.pairingInProgress.delete(sessionId)
-        }, 500000)
-
-      } catch (error) {
-        logger.error(`Pairing error for ${sessionId}:`, error)
+      // Keep pairing flag for extended period
+      setTimeout(() => {
         this.pairingInProgress.delete(sessionId)
-        
-        if (callbacks?.onError) {
-          callbacks.onError(error)
-        }
+      }, 500000)
+
+    } catch (error) {
+      logger.error(`Pairing error for ${sessionId}:`, error)
+      this.pairingInProgress.delete(sessionId)
+      
+      if (callbacks?.onError) {
+        callbacks.onError(error)
       }
     }
-    
-    waitForWebSocketAndPair()
   }
+  
+  // Start waiting
+  waitForWebSocketAndPair()
+}
 
   async checkAuthAvailability(sessionId) {
     const availability = {
@@ -330,7 +531,7 @@ export class ConnectionManager {
       }
     }
 
-    // Delete store on cleanup
+    // ✅ CRITICAL: Delete store on cleanup
     const { deleteSessionStore } = await import('./config.js')
     deleteSessionStore(sessionId)
 
@@ -362,12 +563,12 @@ export class ConnectionManager {
         }
 
         // Close WebSocket
-        if (sock.ws && sock.ws.socket && sock.ws.socket.readyState === 1) {
-          sock.ws.close()
+        if (sock.ws && sock.ws.socket._readyState === 1) {
+          sock.ws.close(1000, 'Disconnect')
         }
       }
 
-      // Delete store
+      // ✅ Delete store
       const { deleteSessionStore } = await import('./config.js')
       deleteSessionStore(sessionId)
 
@@ -401,9 +602,10 @@ export class ConnectionManager {
     return false
   }
 
-  isSocketReady(sock) {
-    return !!(sock?.user && sock?.ws?.socket?.readyState === 1)
-  }
+// Fix 3
+isSocketReady(sock) {
+  return !!(sock?.user && sock?.ws?.socket?._readyState === 1)
+}
 
   async waitForSocketReady(sock, timeout = 30000) {
     if (this.isSocketReady(sock)) {

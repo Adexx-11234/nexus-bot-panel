@@ -161,42 +161,49 @@ export class ConnectionEventHandler {
   // 515/516 FLOW HANDLER
   // ==========================================
 
-  /**
-   * Handle 515/516 disconnect with optional complex flow
-   */
-  async _handle515Flow(sessionId, statusCode, config) {
-    logger.info(`🔄 Handling ${statusCode} for ${sessionId}`)
+/**
+ * Handle 515/516 disconnect with optional complex flow
+ */
+async _handle515Flow(sessionId, statusCode, config) {
+  logger.info(`🔄 Handling ${statusCode} for ${sessionId}`)
 
-    // Clear voluntary disconnect flag
-    this.sessionManager.voluntarilyDisconnected?.delete(sessionId)
+  // Clear voluntary disconnect flag
+  this.sessionManager.voluntarilyDisconnected?.delete(sessionId)
 
-    // Lock to prevent duplicates
-    this.reconnectionLocks.add(sessionId)
+  // Lock to prevent duplicates
+  this.reconnectionLocks.add(sessionId)
 
-    // Mark for complex flow if enabled
-    if (ENABLE_515_FLOW) {
-      logger.info(`[515 COMPLEX FLOW] Marking ${sessionId} for complex restart`)
-
-      if (!this.sessionManager.sessions515Restart) {
-        this.sessionManager.sessions515Restart = new Set()
-      }
-      this.sessionManager.sessions515Restart.add(sessionId)
-    } else {
-      logger.info(`[SIMPLE FLOW] ${sessionId} will reconnect normally`)
-    }
-
-    // Schedule reconnection
-    const delay = getReconnectDelay(statusCode)
-    logger.info(`⏱️  Reconnecting ${sessionId} in ${delay}ms`)
-
-    setTimeout(() => {
-      this._attemptReconnection(sessionId)
-        .catch((err) => logger.error(`❌ Reconnection failed for ${sessionId}:`, err))
-        .finally(() => {
-          this.reconnectionLocks.delete(sessionId)
-        })
-    }, delay)
+  // ✅ ALWAYS track 515/516 disconnects (regardless of flow mode)
+  if (!this.sessionManager.sessions515Disconnect) {
+    this.sessionManager.sessions515Disconnect = new Set()
   }
+  this.sessionManager.sessions515Disconnect.add(sessionId)
+  logger.info(`📝 Marked ${sessionId} as 515/516 disconnect`)
+
+  // Mark for complex flow if enabled
+  if (ENABLE_515_FLOW) {
+    logger.info(`[515 COMPLEX FLOW] Marking ${sessionId} for complex restart`)
+
+    if (!this.sessionManager.sessions515Restart) {
+      this.sessionManager.sessions515Restart = new Set()
+    }
+    this.sessionManager.sessions515Restart.add(sessionId)
+  } else {
+    logger.info(`[SIMPLE FLOW] ${sessionId} will reconnect normally`)
+  }
+
+  // Schedule reconnection
+  const delay = getReconnectDelay(statusCode)
+  logger.info(`⏱️  Reconnecting ${sessionId} in ${delay}ms`)
+
+  setTimeout(() => {
+    this._attemptReconnection(sessionId)
+      .catch((err) => logger.error(`❌ Reconnection failed for ${sessionId}:`, err))
+      .finally(() => {
+        this.reconnectionLocks.delete(sessionId)
+      })
+  }, delay)
+}
 
   // ==========================================
   // PERMANENT DISCONNECT HANDLER

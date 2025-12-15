@@ -218,11 +218,13 @@ export class WebSessionDetector {
 
       // Check again if session is already active
       const existingSocket = this.sessionManager.activeSockets.get(sessionId)
-      if (existingSocket?.user && existingSocket.ws && existingSocket.ws.socket._readyState === 1) {
-        logger.info(`Session ${sessionId} already connected, marking as detected`)
-        await this.storage.markSessionAsDetected(sessionId, true)
-        return true
-      }
+    const isConnected = existingSocket?.user && existingSocket?.ws?.socket?._readyState === 1
+    
+    if (isConnected) {
+      logger.info(`Session ${sessionId} already connected, marking as detected`)
+      await this.storage.markSessionAsDetected(sessionId, true)
+      return true
+    }
 
       logger.info(`Creating takeover connection for ${sessionId} (previous status: ${currentSession.connectionStatus})`)
 

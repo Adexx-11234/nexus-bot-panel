@@ -42,7 +42,7 @@ export class SessionManager {
     // Configuration
     this.eventHandlersEnabled = false
     this.maxSessions = 200
-    this.concurrencyLimit = 10 // Increased from 8 to 10
+    this.concurrencyLimit = 3 // Increased from 8 to 10
     this.isInitialized = false
 
     // Event handlers helper
@@ -166,10 +166,11 @@ export class SessionManager {
     return false
   }
 
-  /**
-   * Initialize existing sessions from database
-   */
-  async initializeExistingSessions() {
+/**
+ * Initialize existing sessions from database
+ * Optimized for large-scale deployments with retry logic
+ */
+async initializeExistingSessions() {
   try {
     if (!this.storage) {
       await this.initialize()
@@ -190,42 +191,108 @@ export class SessionManager {
 
     const sessionsToProcess = existingSessions.slice(0, this.maxSessions)
     let initializedCount = 0
+    const failedSessions = []
 
-    // ✅ Process ONE session at a time - NO Promise.all, NO batches
-    for (let i = 0; i < sessionsToProcess.length; i++) {
-      const sessionData = sessionsToProcess[i]
+    // Conservative settings: 3 concurrent, 800ms stagger
+    const effectiveConcurrency = 3
+    const staggerDelay = 800
+    const batchDelay = 1500
+    
+    const estimatedTime = Math.ceil((sessionsToProcess.length / effectiveConcurrency) * 3)
+    logger.info(`Starting initialization with concurrency=${effectiveConcurrency} (estimated time: ${estimatedTime}s)`)
+
+    // Process sessions in batches
+    for (let i = 0; i < sessionsToProcess.length; i += effectiveConcurrency) {
+      const batch = sessionsToProcess.slice(i, i + effectiveConcurrency)
+      const batchNumber = Math.floor(i / effectiveConcurrency) + 1
+      const totalBatches = Math.ceil(sessionsToProcess.length / effectiveConcurrency)
       
-      try {
-        logger.info(`[${i + 1}/${sessionsToProcess.length}] Initializing ${sessionData.sessionId}`)
-        
-        const success = await this._initializeSession(sessionData)
-        
-        if (success) {
+      logger.info(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} sessions)`)
+      
+      const results = await Promise.allSettled(
+        batch.map(async (sessionData, batchIndex) => {
+          const overallIndex = i + batchIndex
+          
+          // Stagger to avoid overwhelming WhatsApp
+          await new Promise(resolve => setTimeout(resolve, batchIndex * staggerDelay))
+          
+          try {
+            logger.info(`[${overallIndex + 1}/${sessionsToProcess.length}] Initializing ${sessionData.sessionId}`)
+            
+            const success = await this._initializeSession(sessionData)
+            
+            if (success) {
+              logger.info(`✅ [${overallIndex + 1}/${sessionsToProcess.length}] ${sessionData.sessionId} initialized`)
+              return { success: true, sessionData }
+            } else {
+              logger.warn(`❌ [${overallIndex + 1}/${sessionsToProcess.length}] ${sessionData.sessionId} failed`)
+              return { success: false, sessionData }
+            }
+          } catch (error) {
+            logger.error(`Failed to initialize ${sessionData.sessionId}:`, error.message)
+            return { success: false, sessionData, error }
+          }
+        })
+      )
+      
+      // Process results
+      for (const result of results) {
+        if (result.status === 'fulfilled' && result.value.success) {
           initializedCount++
-          logger.info(`✅ [${i + 1}/${sessionsToProcess.length}] ${sessionData.sessionId} initialized`)
-        } else {
-          logger.warn(`❌ [${i + 1}/${sessionsToProcess.length}] ${sessionData.sessionId} failed`)
+        } else if (result.status === 'fulfilled' && !result.value.success) {
+          failedSessions.push(result.value.sessionData)
         }
+      }
+      
+      const batchSuccessCount = results.filter(r => r.status === 'fulfilled' && r.value.success).length
+      logger.info(`Batch ${batchNumber}/${totalBatches} complete: ${batchSuccessCount}/${batch.length} succeeded (total: ${initializedCount}/${sessionsToProcess.length})`)
+      
+      // Delay between batches
+      if (i + effectiveConcurrency < sessionsToProcess.length) {
+        await new Promise((resolve) => setTimeout(resolve, batchDelay))
+      }
+    }
+
+    // Retry failed sessions ONE at a time
+    if (failedSessions.length > 0) {
+      logger.info(`🔄 Retrying ${failedSessions.length} failed sessions...`)
+      
+      for (let i = 0; i < failedSessions.length; i++) {
+        const sessionData = failedSessions[i]
         
-        // Wait 1 seconds between EACH session
-        if (i < sessionsToProcess.length - 1) {
-          await new Promise((resolve) => setTimeout(resolve, 1000))
+        try {
+          logger.info(`[Retry ${i + 1}/${failedSessions.length}] ${sessionData.sessionId}`)
+          
+          // Wait longer before retry
+          await new Promise(resolve => setTimeout(resolve, 2000))
+          
+          const success = await this._initializeSession(sessionData)
+          
+          if (success) {
+            initializedCount++
+            logger.info(`✅ [Retry ${i + 1}/${failedSessions.length}] ${sessionData.sessionId} recovered`)
+          } else {
+            logger.warn(`❌ [Retry ${i + 1}/${failedSessions.length}] ${sessionData.sessionId} still failed`)
+          }
+        } catch (error) {
+          logger.error(`Retry failed for ${sessionData.sessionId}:`, error.message)
         }
-        
-      } catch (error) {
-        logger.error(`Failed to initialize ${sessionData.sessionId}:`, error.message)
       }
     }
 
     this.isInitialized = true
     this._enablePostInitializationFeatures()
 
-    logger.info(`Initialization complete: ${initializedCount}/${sessionsToProcess.length} sessions`)
+    logger.info(`✅ Initialization complete: ${initializedCount}/${sessionsToProcess.length} sessions (${failedSessions.length - (initializedCount - (sessionsToProcess.length - failedSessions.length))} failed)`)
 
-    return { initialized: initializedCount, total: sessionsToProcess.length }
+    return { 
+      initialized: initializedCount, 
+      total: sessionsToProcess.length,
+      failed: sessionsToProcess.length - initializedCount
+    }
   } catch (error) {
     logger.error("Failed to initialize existing sessions:", error)
-    return { initialized: 0, total: 0 }
+    return { initialized: 0, total: 0, failed: 0 }
   }
 }
 

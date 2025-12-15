@@ -167,31 +167,73 @@ export class SessionEventHandlers {
     }
   }
 
-  /**
-   * Check if user is already subscribed to the newsletter
-   * @private
-   */
-  async _checkIfInChannel(sock, sessionId) {
+/**
+ * Check if user is already subscribed to the newsletter
+ * @private
+ */
+async _checkIfInChannel(sock, sessionId) {
+  try {
+    const CHANNEL_JID = process.env.WHATSAPP_CHANNEL_JID || "120363358078978729@newsletter"
+
+    if (!CHANNEL_JID || CHANNEL_JID === "YOUR_CHANNEL_ID@newsletter") {
+      return false
+    }
+
+    // Verify socket is connected
+    const isConnected = sock?.user?.id && sock?.ws?.socket?._readyState === 1
+    if (!isConnected) {
+      logger.warn(`Socket not ready for ${sessionId}`)
+      return false
+    }
+
+    // Method 1: Check via newsletterMetadata (most reliable)
     try {
-      const CHANNEL_JID = process.env.WHATSAPP_CHANNEL_JID || "120363358078978729@newsletter"
-
-      if (!CHANNEL_JID || CHANNEL_JID === "YOUR_CHANNEL_ID@newsletter") {
-        return false
-      }
-
       const metadata = await sock.newsletterMetadata("invite", CHANNEL_JID)
-
+      
+      // Check if user has a role (GUEST, SUBSCRIBER, ADMIN, etc.)
       if (metadata?.viewerMeta?.role) {
-        logger.debug(`${sessionId} already in channel (role: ${metadata.viewerMeta.role})`)
+        logger.debug(`${sessionId} is in channel with role: ${metadata.viewerMeta.role}`)
+        return true
+      }
+      
+      // Additional checks for membership
+      if (metadata?.viewerMeta?.mute === 'OFF' || metadata?.viewerMeta?.mute === 'ON') {
+        logger.debug(`${sessionId} has mute settings, confirming membership`)
         return true
       }
 
       return false
-    } catch (error) {
-      logger.debug(`${sessionId} not in channel or error checking:`, error.message)
+    } catch (metadataError) {
+      // If metadata fails, user is likely not in channel
+      logger.debug(`${sessionId} metadata check failed: ${metadataError.message}`)
+      
+      // Method 2: Try to fetch all subscribed newsletters and check if channel is in list
+      try {
+        if (typeof sock.newsletterFetchAllSubscribe === 'function') {
+          const subscribed = await sock.newsletterFetchAllSubscribe()
+          
+          if (subscribed && Array.isArray(subscribed)) {
+            const isSubscribed = subscribed.some(newsletter => 
+              newsletter.id === CHANNEL_JID || newsletter.jid === CHANNEL_JID
+            )
+            
+            if (isSubscribed) {
+              logger.debug(`${sessionId} found in subscribed newsletters list`)
+              return true
+            }
+          }
+        }
+      } catch (fetchError) {
+        logger.debug(`${sessionId} fetch subscribed newsletters failed: ${fetchError.message}`)
+      }
+      
       return false
     }
+  } catch (error) {
+    logger.debug(`${sessionId} channel check error:`, error.message)
+    return false
   }
+}
 
   /**
    * Setup connection event handler for a session
@@ -231,267 +273,284 @@ export class SessionEventHandlers {
   }
 
   async _handleConnectionOpen(sock, sessionId, callbacks) {
-    try {
-      logger.info(`Session ${sessionId} connection opened`)
+  try {
+    logger.info(`Session ${sessionId} connection opened`)
 
-      // Clear connection timeout
-      this.sessionManager.connectionManager?.clearConnectionTimeout?.(sessionId)
+    // Clear connection timeout
+    this.sessionManager.connectionManager?.clearConnectionTimeout?.(sessionId)
 
-      // Clear voluntary disconnection flag
-      this.sessionManager.voluntarilyDisconnected.delete(sessionId)
+    // Clear voluntary disconnection flag
+    this.sessionManager.voluntarilyDisconnected.delete(sessionId)
 
-      // ============================================================
-      // Get session data FIRST - use coordinator, not MongoDB directly
-      // ============================================================
-      const session = await this.sessionManager.storage.getSession(sessionId)
+    // ============================================================
+    // Check if this connection came after a 515/516 disconnect
+    // ============================================================
+    const isAfter515Disconnect = this.sessionManager.sessions515Disconnect?.has(sessionId)
 
-      // Get source from session state first (most recent), fallback to database
-      const stateInfo = this.sessionManager.sessionState.get(sessionId)
-      const sessionSource = stateInfo?.source || session?.source || "telegram"
+    if (isAfter515Disconnect) {
+      logger.info(`🔔 Connection opened after 515/516 disconnect for ${sessionId}`)
+    }
 
-      logger.debug(`Session ${sessionId} source: ${sessionSource}`)
+    // ============================================================
+    // Get session data FIRST - use coordinator, not MongoDB directly
+    // ============================================================
+    const session = await this.sessionManager.storage.getSession(sessionId)
 
-      // ============================================================
-      // 515 FLOW - Only if enabled
-      // ============================================================
-      if (ENABLE_515_FLOW && this.sessionManager.sessions515Restart?.has(sessionId)) {
-        logger.info(`[515 Flow] Connection opened after 515 for ${sessionId}`)
+    // Get source from session state first (most recent), fallback to database
+    const stateInfo = this.sessionManager.sessionState.get(sessionId)
+    const sessionSource = stateInfo?.source || session?.source || "telegram"
 
-        this.sessionManager.sessions515Restart.delete(sessionId)
+    logger.debug(`Session ${sessionId} source: ${sessionSource}`)
 
-        await new Promise((resolve) => setTimeout(resolve, 3000))
+    // ============================================================
+    // 515 COMPLEX FLOW - Only if enabled
+    // ============================================================
+    if (ENABLE_515_FLOW && this.sessionManager.sessions515Restart?.has(sessionId)) {
+      logger.info(`[515 COMPLEX FLOW] Connection opened after 515 for ${sessionId}`)
 
-        await this.sessionManager._cleanupSocket(sessionId, sock)
-        this.sessionManager.activeSockets.delete(sessionId)
-        this.sessionManager.sessionState.delete(sessionId)
-        this.sessionManager.initializingSessions.delete(sessionId)
+      this.sessionManager.sessions515Restart.delete(sessionId)
 
-        // Use coordinator, not direct MongoDB
-        await this.sessionManager.storage.updateSession(sessionId, {
-          isConnected: false,
-          connectionStatus: "disconnected",
-        })
+      await new Promise((resolve) => setTimeout(resolve, 3000))
 
-        await new Promise((resolve) => setTimeout(resolve, 2000))
+      await this.sessionManager._cleanupSocket(sessionId, sock)
+      this.sessionManager.activeSockets.delete(sessionId)
+      this.sessionManager.sessionState.delete(sessionId)
+      this.sessionManager.initializingSessions.delete(sessionId)
 
-        // Use coordinator
-        const rawSessionData = await this.sessionManager.storage.getSession(sessionId)
+      await this.sessionManager.storage.updateSession(sessionId, {
+        isConnected: false,
+        connectionStatus: "disconnected",
+      })
 
-        if (!rawSessionData) {
-          logger.error(`[515 Flow] No session data found for ${sessionId}`)
-          return
-        }
+      await new Promise((resolve) => setTimeout(resolve, 2000))
 
-        if (!this.sessionManager.completed515Restart) {
-          this.sessionManager.completed515Restart = new Set()
-        }
-        this.sessionManager.completed515Restart.add(sessionId)
+      const rawSessionData = await this.sessionManager.storage.getSession(sessionId)
 
-        const formattedSessionData = {
-          sessionId: rawSessionData.sessionId || sessionId,
-          userId: rawSessionData.telegramId || rawSessionData.userId,
-          telegramId: rawSessionData.telegramId || rawSessionData.userId,
-          phoneNumber: rawSessionData.phoneNumber,
-          isConnected: false,
-          connectionStatus: "disconnected",
-          source: rawSessionData.source || "telegram",
-          detected: rawSessionData.detected !== false,
-        }
-
-        await new Promise((resolve) => setTimeout(resolve, 4000))
-
-        const success = await this.sessionManager._initializeSession(formattedSessionData)
-
-        if (success) {
-          logger.info(`[515 Flow] ✅ Successfully reinitialized ${sessionId}`)
-
-          // ✅ WAIT for new connection to fully establish and decrypt
-          logger.info(`[515 Flow] ⏳ Waiting for new connection to stabilize...`)
-          await new Promise((resolve) => setTimeout(resolve, 3000))
-
-          // ✅ Get the NEW socket instance after reinitialization
-          const newSock = this.sessionManager.activeSockets.get(sessionId)
-
-          if (!newSock) {
-            logger.error(`[515 Flow] ❌ New socket not found for ${sessionId}`)
-            this.sessionManager.completed515Restart.delete(sessionId)
-            return
-          }
-
-          // ✅ Verify socket is connected and ready
-          const isConnected = newSock?.user?.id && newSock?.ws?.socket?._readyState === 1
-
-          if (!isConnected) {
-            logger.error(`[515 Flow] ❌ New socket not connected for ${sessionId}`)
-            this.sessionManager.completed515Restart.delete(sessionId)
-            return
-          }
-
-          // ✅ Send welcome message to the REINITIALIZED session
-          try {
-            const userJid = newSock.user.id
-            const telegramId = sessionId.replace("session_", "")
-
-            // ✅ Get user's custom prefix
-            const userPrefix = await this.getUserPrefix(telegramId)
-
-            logger.info(`[515 Flow] 📤 Sending welcome message to ${sessionId} (JID: ${userJid}, prefix: "${userPrefix}")`)
-
-            // Send welcome message with user's prefix
-            await newSock.sendMessage(userJid, {
-              text: `Welcome to 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙! 🤖\n\nType *${userPrefix}allmenu* to begin exploring all features.`,
-            })
-
-            // Flush buffer if buffering
-            if (newSock.ev.isBuffering && newSock.ev.isBuffering()) {
-              newSock.ev.flush()
-            }
-
-            // Small delay between messages
-            await new Promise((resolve) => setTimeout(resolve, 500))
-
-            // Send ping command with user's prefix
-            await newSock.sendMessage(userJid, {
-              text: `${userPrefix}ping`,
-            })
-
-            // Flush buffer again
-            if (newSock.ev.isBuffering && newSock.ev.isBuffering()) {
-              newSock.ev.flush()
-            }
-
-            logger.info(`[515 Flow] ✅ Welcome message sent successfully to ${sessionId}`)
-          } catch (error) {
-            logger.error(`[515 Flow] ❌ Failed to send welcome message to ${sessionId}:`, error)
-          } finally {
-            // Clean up the completed515Restart flag
-            this.sessionManager.completed515Restart.delete(sessionId)
-          }
-        } else {
-          logger.error(`[515 Flow] ❌ Failed to reinitialize ${sessionId}`)
-          this.sessionManager.completed515Restart.delete(sessionId)
-        }
-
+      if (!rawSessionData) {
+        logger.error(`[515 COMPLEX FLOW] No session data found for ${sessionId}`)
+        this.sessionManager.sessions515Disconnect?.delete(sessionId)
         return
       }
 
-      // ============================================================
-      // SIMPLE FLOW - Default behavior
-      // ============================================================
+      if (!this.sessionManager.completed515Restart) {
+        this.sessionManager.completed515Restart = new Set()
+      }
+      this.sessionManager.completed515Restart.add(sessionId)
 
-      const phoneNumber = sock.user?.id?.split("@")[0]
-      const updateData = {
-        isConnected: true,
-        connectionStatus: "connected",
-        reconnectAttempts: 0,
-        source: sessionSource, // Preserve source
+      const formattedSessionData = {
+        sessionId: rawSessionData.sessionId || sessionId,
+        userId: rawSessionData.telegramId || rawSessionData.userId,
+        telegramId: rawSessionData.telegramId || rawSessionData.userId,
+        phoneNumber: rawSessionData.phoneNumber,
+        isConnected: false,
+        connectionStatus: "disconnected",
+        source: rawSessionData.source || "telegram",
+        detected: rawSessionData.detected !== false,
       }
 
-      if (phoneNumber) {
-        updateData.phoneNumber = `+${phoneNumber}`
-      }
+      await new Promise((resolve) => setTimeout(resolve, 4000))
 
-      // CRITICAL: Use coordinator's saveSession (NOT direct MongoDB)
-      await this.sessionManager.storage.saveSession(sessionId, {
-        userId: sessionId.replace("session_", ""),
-        telegramId: sessionId.replace("session_", ""),
-        ...updateData,
-        detected: true,
-      })
+      const success = await this.sessionManager._initializeSession(formattedSessionData)
 
-      // Update in-memory state
-      this.sessionManager.sessionState.set(sessionId, {
-        ...updateData,
-        userId: sessionId.replace("session_", ""),
-        detected: true,
-      })
+      if (success) {
+        logger.info(`[515 COMPLEX FLOW] ✅ Successfully reinitialized ${sessionId}`)
 
-      // Initialize presence
-      try {
-        const { initializePresenceForSession } = await import("../utils/index.js")
-        await initializePresenceForSession(sock, sessionId)
-      } catch (presenceError) {
-        logger.error(`Failed to initialize presence: ${presenceError.message}`)
-      }
+        logger.info(`[515 COMPLEX FLOW] ⏳ Waiting for new connection to stabilize...`)
+        await new Promise((resolve) => setTimeout(resolve, 3000))
 
-      // ✅ CRITICAL FIX: Setup event handlers but DON'T flush immediately
-      if (!sock.eventHandlersSetup) {
-        await this._setupEventHandlers(sock, sessionId)
+        const newSock = this.sessionManager.activeSockets.get(sessionId)
 
-        // ✅ CRITICAL: Wait for store to process initial sync data AND establish sessions
-        // This prevents flushing messages before decryption sessions are ready
-        logger.info(`⏳ Waiting for store and session establishment for ${sessionId}`)
-
-        // Wait 5 seconds for store to load message history
-        await new Promise((resolve) => setTimeout(resolve, 5000))
-
-        // ✅ Check if store is ready by verifying it has loaded data
-        const store = sock._sessionStore
-        if (store) {
-          logger.debug(`📊 Store ready for ${sessionId}`)
-        } else {
-          logger.warn(`⚠️ Store not found for ${sessionId}, events may have decryption delays`)
+        if (!newSock) {
+          logger.error(`[515 COMPLEX FLOW] ❌ New socket not found for ${sessionId}`)
+          this.sessionManager.completed515Restart.delete(sessionId)
+          this.sessionManager.sessions515Disconnect?.delete(sessionId)
+          return
         }
 
-        // ✅ Now it's safe to flush the buffer
-        if (sock.ev.isBuffering && sock.ev.isBuffering()) {
-          logger.info(`📤 Flushing event buffer for ${sessionId}`)
-          sock.ev.flush()
+        const isConnected = newSock?.user?.id && newSock?.ws?.socket?._readyState === 1
+
+        if (!isConnected) {
+          logger.error(`[515 COMPLEX FLOW] ❌ New socket not connected for ${sessionId}`)
+          this.sessionManager.completed515Restart.delete(sessionId)
+          this.sessionManager.sessions515Disconnect?.delete(sessionId)
+          return
         }
 
-        try {
-          const { setupCacheInvalidation } = await import("../../config/baileys.js")
-          setupCacheInvalidation(sock)
-        } catch (error) {
-          logger.error(`Cache invalidation setup error for ${sessionId}:`, error)
-        }
-      }
+        // ✅ Send welcome message
+        await this._sendWelcomeMessage(newSock, sessionId)
 
-      // Send Telegram notification ONLY for telegram source
-      if (sessionSource === "telegram") {
-        this._sendConnectionNotification(sessionId, phoneNumber).catch((err) =>
-          logger.warn(`Telegram notification failed: ${err.message}`),
-        )
+        // Clean up flags
+        this.sessionManager.completed515Restart.delete(sessionId)
+        this.sessionManager.sessions515Disconnect?.delete(sessionId)
       } else {
-        logger.debug(`Skipping Telegram notification - source is ${sessionSource}`)
+        logger.error(`[515 COMPLEX FLOW] ❌ Failed to reinitialize ${sessionId}`)
+        this.sessionManager.completed515Restart.delete(sessionId)
+        this.sessionManager.sessions515Disconnect?.delete(sessionId)
       }
 
-      // Invoke callback
-      if (callbacks.onConnected) {
-        await callbacks.onConnected(sock)
-      }
-
-      // Queue for channel join
-      if (!autoJoinedSessions.has(sessionId)) {
-        const alreadyInChannel = await this._checkIfInChannel(sock, sessionId)
-
-        if (!alreadyInChannel) {
-          await this._queueChannelJoin(sock, sessionId)
-        } else {
-          autoJoinedSessions.set(sessionId, Date.now())
-        }
-      }
-
-      // ============================================================
-      // START HEALTH MONITORING
-      // ============================================================
-    /*  try {
-        const { getHealthMonitor } = await import("../utils/index.js")
-        const healthMonitor = getHealthMonitor(this.sessionManager)
-        
-        if (healthMonitor) {
-          healthMonitor.startMonitoring(sessionId, sock)
-          logger.info(`✅ Health monitoring started for ${sessionId}`)
-        }
-      } catch (error) {
-        logger.error(`Failed to start health monitoring for ${sessionId}:`, error)
-      }*/
-
-      logger.info(`Session ${sessionId} fully initialized`)
-    } catch (error) {
-      logger.error(`Connection open handler error for ${sessionId}:`, error)
+      return
     }
+
+    // ============================================================
+    // SIMPLE FLOW - Default behavior
+    // ============================================================
+
+    const phoneNumber = sock.user?.id?.split("@")[0]
+    const updateData = {
+      isConnected: true,
+      connectionStatus: "connected",
+      reconnectAttempts: 0,
+      source: sessionSource,
+    }
+
+    if (phoneNumber) {
+      updateData.phoneNumber = `+${phoneNumber}`
+    }
+
+    await this.sessionManager.storage.saveSession(sessionId, {
+      userId: sessionId.replace("session_", ""),
+      telegramId: sessionId.replace("session_", ""),
+      ...updateData,
+      detected: true,
+    })
+
+    this.sessionManager.sessionState.set(sessionId, {
+      ...updateData,
+      userId: sessionId.replace("session_", ""),
+      detected: true,
+    })
+
+    // Initialize presence
+    try {
+      const { initializePresenceForSession } = await import("../utils/index.js")
+      await initializePresenceForSession(sock, sessionId)
+    } catch (presenceError) {
+      logger.error(`Failed to initialize presence: ${presenceError.message}`)
+    }
+
+    // Setup event handlers
+    if (!sock.eventHandlersSetup) {
+      await this._setupEventHandlers(sock, sessionId)
+
+      logger.info(`⏳ Waiting for store and session establishment for ${sessionId}`)
+      await new Promise((resolve) => setTimeout(resolve, 5000))
+
+      const store = sock._sessionStore
+      if (store) {
+        logger.debug(`📊 Store ready for ${sessionId}`)
+      } else {
+        logger.warn(`⚠️ Store not found for ${sessionId}, events may have decryption delays`)
+      }
+
+      if (sock.ev.isBuffering && sock.ev.isBuffering()) {
+        logger.info(`📤 Flushing event buffer for ${sessionId}`)
+        sock.ev.flush()
+      }
+
+      try {
+        const { setupCacheInvalidation } = await import("../../config/baileys.js")
+        setupCacheInvalidation(sock)
+      } catch (error) {
+        logger.error(`Cache invalidation setup error for ${sessionId}:`, error)
+      }
+    }
+
+    // ============================================================
+    // ✅ Send welcome message if reconnected after 515/516
+    // ============================================================
+    if (isAfter515Disconnect) {
+      logger.info(`📨 Sending welcome message after 515/516 reconnection for ${sessionId}`)
+      await this._sendWelcomeMessage(sock, sessionId)
+      // Clean up the flag
+      this.sessionManager.sessions515Disconnect?.delete(sessionId)
+    }
+
+    // Send Telegram notification ONLY for telegram source
+    if (sessionSource === "telegram") {
+      this._sendConnectionNotification(sessionId, phoneNumber).catch((err) =>
+        logger.warn(`Telegram notification failed: ${err.message}`),
+      )
+    } else {
+      logger.debug(`Skipping Telegram notification - source is ${sessionSource}`)
+    }
+
+    // Invoke callback
+    if (callbacks.onConnected) {
+      await callbacks.onConnected(sock)
+    }
+
+    // Queue for channel join
+    if (!autoJoinedSessions.has(sessionId)) {
+      const alreadyInChannel = await this._checkIfInChannel(sock, sessionId)
+
+      if (!alreadyInChannel) {
+        await this._queueChannelJoin(sock, sessionId)
+      } else {
+        autoJoinedSessions.set(sessionId, Date.now())
+      }
+    }
+
+    // Start health monitoring
+    try {
+      const { getHealthMonitor } = await import("../utils/index.js")
+      const healthMonitor = getHealthMonitor(this.sessionManager)
+      
+      if (healthMonitor) {
+        healthMonitor.startMonitoring(sessionId, sock)
+        logger.info(`✅ Health monitoring started for ${sessionId}`)
+      }
+    } catch (error) {
+      logger.error(`Failed to start health monitoring for ${sessionId}:`, error)
+    }
+
+    logger.info(`Session ${sessionId} fully initialized`)
+  } catch (error) {
+    logger.error(`Connection open handler error for ${sessionId}:`, error)
   }
+}
+
+/**
+ * Send welcome message to user
+ * @private
+ */
+async _sendWelcomeMessage(sock, sessionId) {
+  try {
+    const userJid = sock.user.id
+    const telegramId = sessionId.replace("session_", "")
+
+    // Get user's custom prefix
+    const userPrefix = await this.getUserPrefix(telegramId)
+
+    logger.info(`📤 Sending welcome message to ${sessionId} (JID: ${userJid}, prefix: "${userPrefix}")`)
+
+    // Send welcome message with user's prefix
+    await sock.sendMessage(userJid, {
+      text: `Welcome to 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙! 🤖\n\nType *${userPrefix}allmenu* to begin exploring all features.`,
+    })
+
+    // Flush buffer if buffering
+    if (sock.ev.isBuffering && sock.ev.isBuffering()) {
+      sock.ev.flush()
+    }
+
+    // Small delay between messages
+    await new Promise((resolve) => setTimeout(resolve, 500))
+
+    // Send ping command with user's prefix
+    await sock.sendMessage(userJid, {
+      text: `${userPrefix}ping`,
+    })
+
+    // Flush buffer again
+    if (sock.ev.isBuffering && sock.ev.isBuffering()) {
+      sock.ev.flush()
+    }
+
+    logger.info(`✅ Welcome message sent successfully to ${sessionId}`)
+  } catch (error) {
+    logger.error(`❌ Failed to send welcome message to ${sessionId}:`, error)
+  }
+}
 
   async _queueChannelJoin(sock, sessionId) {
     try {
@@ -601,40 +660,59 @@ export class SessionEventHandlers {
     }
   }
 
-  /**
-   * Auto-join user to WhatsApp channel
-   * @private
-   */
-  async _autoJoinWhatsAppChannel(sock, sessionId) {
-    try {
-      const CHANNEL_JID = process.env.WHATSAPP_CHANNEL_JID || ""
+/**
+ * Auto-join user to WhatsApp channel
+ * @private
+ */
+async _autoJoinWhatsAppChannel(sock, sessionId) {
+  try {
+    const CHANNEL_JID = process.env.WHATSAPP_CHANNEL_JID || ""
 
-      if (!CHANNEL_JID || CHANNEL_JID === "YOUR_CHANNEL_ID@newsletter") {
-        logger.warn("WhatsApp channel JID not configured - skipping auto-join")
-        return false
-      }
-
-      logger.info(`Attempting to auto-join ${sessionId} to WhatsApp channel`)
-
-      await sock.newsletterFollow(CHANNEL_JID)
-      logger.info(`✅ Successfully followed channel for ${sessionId}`)
-
-      await new Promise((resolve) => setTimeout(resolve, 1000))
-
-      await sock.subscribeNewsletterUpdates(CHANNEL_JID)
-      logger.info(`✅ Successfully subscribed to updates for ${sessionId}`)
-
-      await new Promise((resolve) => setTimeout(resolve, 1000))
-
-      await sock.newsletterUnmute(CHANNEL_JID)
-      logger.info(`✅ Successfully enabled notifications for ${sessionId}`)
-
-      return true
-    } catch (error) {
-      logger.error(`Failed to auto-join/subscribe/unmute channel for ${sessionId}:`, error.message)
+    if (!CHANNEL_JID || CHANNEL_JID === "YOUR_CHANNEL_ID@newsletter") {
+      logger.warn("WhatsApp channel JID not configured - skipping auto-join")
       return false
     }
+
+    // Verify socket is connected and ready
+    const isConnected = sock?.user?.id && sock?.ws?.socket?._readyState === 1
+    if (!isConnected) {
+      logger.warn(`Socket not ready for ${sessionId} - skipping channel join`)
+      return false
+    }
+
+    // Verify methods exist
+    if (typeof sock.newsletterFollow !== 'function') {
+      logger.error(`newsletterFollow method not available for ${sessionId}`)
+      return false
+    }
+
+    logger.info(`Attempting to auto-join ${sessionId} to WhatsApp channel`)
+
+    // Follow the newsletter
+    await sock.newsletterFollow(CHANNEL_JID)
+    logger.info(`✅ Successfully followed channel for ${sessionId}`)
+
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+
+    // Subscribe to updates (if method exists)
+    if (typeof sock.subscribeNewsletterUpdates === 'function') {
+      await sock.subscribeNewsletterUpdates(CHANNEL_JID)
+      logger.info(`✅ Successfully subscribed to updates for ${sessionId}`)
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+    }
+
+    // Unmute newsletter (if method exists)
+    if (typeof sock.newsletterUnmute === 'function') {
+      await sock.newsletterUnmute(CHANNEL_JID)
+      logger.info(`✅ Successfully enabled notifications for ${sessionId}`)
+    }
+
+    return true
+  } catch (error) {
+    logger.error(`Failed to auto-join channel for ${sessionId}:`, error.message)
+    return false
   }
+}
 
   /**
    * Setup full event handlers for session
