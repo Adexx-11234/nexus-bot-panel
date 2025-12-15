@@ -5,7 +5,7 @@ import { generateWAMessageFromContent, WAProto as proto, prepareWAMessageMedia }
 
 export default {
   name: "instagram",
-  commands: ["ig", "igdl", "instagram"],
+  commands: ["ig", "igdl", "instagram", "insta", "instadl"],
   description: "Download Instagram posts, reels, and stories",
   category: "download",
   usage: "• .ig <url> - Download Instagram content",

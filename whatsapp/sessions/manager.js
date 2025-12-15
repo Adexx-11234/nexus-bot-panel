@@ -170,59 +170,64 @@ export class SessionManager {
    * Initialize existing sessions from database
    */
   async initializeExistingSessions() {
-    try {
-      if (!this.storage) {
-        await this.initialize()
-      }
+  try {
+    if (!this.storage) {
+      await this.initialize()
+    }
 
-      await this._waitForMongoDB()
+    await this._waitForMongoDB()
 
-      const existingSessions = await this._getActiveSessionsFromDatabase()
+    const existingSessions = await this._getActiveSessionsFromDatabase()
 
-      if (existingSessions.length === 0) {
-        this.isInitialized = true
-        this._enablePostInitializationFeatures()
-        logger.info("No existing sessions to initialize")
-        return { initialized: 0, total: 0 }
-      }
-
-      logger.info(`Found ${existingSessions.length} existing sessions`)
-
-      const sessionsToProcess = existingSessions.slice(0, this.maxSessions)
-      let initializedCount = 0
-
-      // Process in batches
-      for (let i = 0; i < sessionsToProcess.length; i += this.concurrencyLimit) {
-        const batch = sessionsToProcess.slice(i, i + this.concurrencyLimit)
-
-        await Promise.all(
-          batch.map(async (sessionData) => {
-            try {
-              const success = await this._initializeSession(sessionData)
-              if (success) initializedCount++
-            } catch (error) {
-              logger.error(`Failed to initialize session ${sessionData.sessionId}:`, error)
-            }
-          }),
-        )
-
-        // Brief pause between batches
-        if (i + this.concurrencyLimit < sessionsToProcess.length) {
-          await new Promise((resolve) => setTimeout(resolve, 500))
-        }
-      }
-
+    if (existingSessions.length === 0) {
       this.isInitialized = true
       this._enablePostInitializationFeatures()
-
-      logger.info(`Initialized ${initializedCount}/${sessionsToProcess.length} sessions`)
-
-      return { initialized: initializedCount, total: sessionsToProcess.length }
-    } catch (error) {
-      logger.error("Failed to initialize existing sessions:", error)
+      logger.info("No existing sessions to initialize")
       return { initialized: 0, total: 0 }
     }
+
+    logger.info(`Found ${existingSessions.length} existing sessions`)
+
+    const sessionsToProcess = existingSessions.slice(0, this.maxSessions)
+    let initializedCount = 0
+
+    // ✅ Process ONE session at a time - NO Promise.all, NO batches
+    for (let i = 0; i < sessionsToProcess.length; i++) {
+      const sessionData = sessionsToProcess[i]
+      
+      try {
+        logger.info(`[${i + 1}/${sessionsToProcess.length}] Initializing ${sessionData.sessionId}`)
+        
+        const success = await this._initializeSession(sessionData)
+        
+        if (success) {
+          initializedCount++
+          logger.info(`✅ [${i + 1}/${sessionsToProcess.length}] ${sessionData.sessionId} initialized`)
+        } else {
+          logger.warn(`❌ [${i + 1}/${sessionsToProcess.length}] ${sessionData.sessionId} failed`)
+        }
+        
+        // Wait 1 seconds between EACH session
+        if (i < sessionsToProcess.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1000))
+        }
+        
+      } catch (error) {
+        logger.error(`Failed to initialize ${sessionData.sessionId}:`, error.message)
+      }
+    }
+
+    this.isInitialized = true
+    this._enablePostInitializationFeatures()
+
+    logger.info(`Initialization complete: ${initializedCount}/${sessionsToProcess.length} sessions`)
+
+    return { initialized: initializedCount, total: sessionsToProcess.length }
+  } catch (error) {
+    logger.error("Failed to initialize existing sessions:", error)
+    return { initialized: 0, total: 0 }
   }
+}
 
   /**
    * Initialize a single session
