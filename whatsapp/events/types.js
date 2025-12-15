@@ -214,15 +214,18 @@ export const DisconnectConfig = {
   // ============================================================
   // TEMPORARY ISSUES - DELAYED RECONNECT
   // ============================================================
-  
-  [DisconnectReason.CONNECTION_CLOSED]: {
-    shouldReconnect: true,
-    isPermanent: false,
-    requiresCleanup: false,
-    clearVoluntaryFlag: true,
-    message: 'Connection closed unexpectedly',
-    handler: 'handleConnectionClosed'
-  },
+
+[DisconnectReason.CONNECTION_CLOSED]: {
+  shouldReconnect: true,
+  isPermanent: false,
+  requiresCleanup: false,
+  clearVoluntaryFlag: true,
+  reconnectDelay: 5000,
+  maxAttempts: 5,
+  message: 'Connection closed unexpectedly - attempting reconnection',
+  userAction: 'Reconnecting automatically',
+  handler: 'handleConnectionClosed'
+},
   
   [DisconnectReason.UNAVAILABLE]: {
     shouldReconnect: true,

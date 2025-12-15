@@ -167,7 +167,7 @@ export class WebSessionDetector {
 
       // Check if session already has active socket in main server
       const existingSocket = this.sessionManager.activeSockets.get(sessionId)
-      if (existingSocket?.user && existingSocket.ws && existingSocket.ws.readyState === 1) {
+      if (existingSocket?.user && existingSocket.ws?.socket?._readyState === 1) {
         logger.info(`Session ${sessionId} already active in main server, marking as detected`)
         await this.storage.markSessionAsDetected(sessionId, true)
         this.processedSessions.add(sessionId)
@@ -218,7 +218,7 @@ export class WebSessionDetector {
 
       // Check again if session is already active
       const existingSocket = this.sessionManager.activeSockets.get(sessionId)
-      if (existingSocket?.user && existingSocket.ws && existingSocket.ws.readyState === 1) {
+      if (existingSocket?.user && existingSocket.ws && existingSocket.ws.socket._readyState === 1) {
         logger.info(`Session ${sessionId} already connected, marking as detected`)
         await this.storage.markSessionAsDetected(sessionId, true)
         return true

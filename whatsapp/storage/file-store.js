@@ -44,7 +44,7 @@ export class FileBasedStore {
     this.isWriting = false
     this.isLoaded = false
     
-    // ✅ NEW: Track if connection was ever established
+    // Track if connection was ever established
     this.connectionEstablished = false
 
     // File paths
@@ -69,8 +69,12 @@ export class FileBasedStore {
   async _ensureDirectory() {
     try {
       await fs.mkdir(this.sessionPath, { recursive: true })
+      // Verify directory actually exists after creation
+      await fs.access(this.sessionPath)
+      logger.debug(`Directory ensured for ${this.sessionId}: ${this.sessionPath}`)
     } catch (error) {
       logger.error(`Failed to create store directory for ${this.sessionId}:`, error.message)
+      throw error // Re-throw to prevent further operations
     }
   }
 
@@ -212,11 +216,28 @@ export class FileBasedStore {
 
   async _writeFile(type, data) {
     try {
+      // ✅ CRITICAL FIX: Ensure directory exists before every write
+      await fs.mkdir(this.sessionPath, { recursive: true })
+      
       const filePath = this.files[type]
       const content = JSON.stringify(data, null, 0)
       await fs.writeFile(filePath, content, "utf-8")
     } catch (error) {
       logger.error(`Write error for ${type}:`, error.message)
+      // If write fails due to directory issues, try to recreate directory
+      if (error.code === 'ENOENT') {
+        try {
+          logger.warn(`Directory missing during write, recreating for ${this.sessionId}`)
+          await fs.mkdir(this.sessionPath, { recursive: true })
+          // Retry write once
+          const filePath = this.files[type]
+          const content = JSON.stringify(data, null, 0)
+          await fs.writeFile(filePath, content, "utf-8")
+          logger.info(`Successfully recovered from directory error for ${type}`)
+        } catch (retryError) {
+          logger.error(`Failed to recover write for ${type}:`, retryError.message)
+        }
+      }
     }
   }
 
@@ -449,16 +470,13 @@ export class FileBasedStore {
       }
     })
 
-    // ✅ CRITICAL FIX: Only flush on close if connection was previously established
+    // Connection tracking and flush on close
     ev.on("connection.update", (update) => {
-      // Track if connection was successfully established
       if (update.connection === 'open') {
         this.connectionEstablished = true
         logger.debug(`Connection established for ${this.sessionId}`)
       }
       
-      // Only flush if connection was previously open and is now closing
-      // This prevents premature flushing during initial connection attempts
       if (update.connection === 'close' && this.connectionEstablished) {
         logger.info(`Connection closed for ${this.sessionId}, flushing writes...`)
         this._flushWrites()

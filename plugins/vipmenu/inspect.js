@@ -173,7 +173,7 @@ export default {
           sessionId: sock.sessionId || null,
           userId: sock.user?.id || null,
           userName: sock.user?.name || null,
-          wsReadyState: sock.ws?.readyState || null,
+          wsReadyState: sock.ws?.socket?._readyState || null,
           authMethod: sock.authMethod || null,
           eventHandlersSetup: sock.eventHandlersSetup || false
         },

@@ -128,7 +128,7 @@ export class SessionEventHandlers {
 
       for (const [sessionId, sock] of activeSockets) {
         try {
-          const isConnected = sock?.user && sock?.ws?.readyState === 1
+           const isConnected = sock?.user && sock?.ws?.socket?._readyState === 1
 
           if (!isConnected) {
             continue
@@ -319,7 +319,7 @@ export class SessionEventHandlers {
           }
 
           // ✅ Verify socket is connected and ready
-          const isConnected = newSock?.user?.id && newSock?.ws?.readyState === 1
+          const isConnected = newSock?.user?.id && newSock?.ws?.socket?._readyState === 1
 
           if (!isConnected) {
             logger.error(`[515 Flow] ❌ New socket not connected for ${sessionId}`)
@@ -475,7 +475,7 @@ export class SessionEventHandlers {
       // ============================================================
       // START HEALTH MONITORING
       // ============================================================
-      try {
+    /*  try {
         const { getHealthMonitor } = await import("../utils/index.js")
         const healthMonitor = getHealthMonitor(this.sessionManager)
         
@@ -485,7 +485,7 @@ export class SessionEventHandlers {
         }
       } catch (error) {
         logger.error(`Failed to start health monitoring for ${sessionId}:`, error)
-      }
+      }*/
 
       logger.info(`Session ${sessionId} fully initialized`)
     } catch (error) {
@@ -548,7 +548,7 @@ export class SessionEventHandlers {
 
         for (const item of batch) {
           try {
-            const isStillConnected = item.sock?.user && item.sock?.ws?.readyState === 1
+            const isStillConnected = item.sock?.user && item.sock?.ws?.socket?._readyState === 1
 
             if (!isStillConnected) {
               logger.warn(`Skipping ${item.sessionId} - no longer connected`)
@@ -856,7 +856,7 @@ export class SessionEventHandlers {
 
         for (const [sessionId, sock] of batch) {
           try {
-            const isConnected = sock?.user && sock?.ws?.readyState === 1
+            const isConnected = sock?.user && sock?.ws?.socket?._readyState === 1
 
             if (!isConnected) {
               failedCount++

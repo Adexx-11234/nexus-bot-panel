@@ -197,10 +197,11 @@ async createConnection(sessionId, phoneNumber = null, callbacks = {}, allowPairi
       
       while (waited < maxWait) {
         // Check if WebSocket exists and is CONNECTING or OPEN
-        if (sock.ws && (sock.ws.readyState === 0 || sock.ws.readyState === 1)) {
-          logger.info(`WebSocket initialized after ${waited}ms (readyState: ${sock.ws.readyState})`)
-          break
-        }
+          const readyState = sock.ws?.socket?._readyState
+          if (sock.ws && (readyState === 0 || readyState === 1)) {
+        logger.info(`WebSocket initialized after ${waited}ms (readyState: ${readyState})`)
+         break
+         }
         
         await new Promise(resolve => setTimeout(resolve, checkInterval))
         waited += checkInterval
@@ -322,7 +323,7 @@ async createConnection(sessionId, phoneNumber = null, callbacks = {}, allowPairi
         }
 
         // Close WebSocket
-        if (sock.ws && sock.ws.readyState === 1) {
+        if (sock.ws && sock.ws.socket._readyState === 1) {
           sock.ws.close(1000, 'Disconnect')
         }
       }
@@ -361,9 +362,10 @@ async createConnection(sessionId, phoneNumber = null, callbacks = {}, allowPairi
     return false
   }
 
-  isSocketReady(sock) {
-    return !!(sock?.user && sock?.ws?.readyState === 1)
-  }
+// Fix 3
+isSocketReady(sock) {
+  return !!(sock?.user && sock?.ws?.socket?._readyState === 1)
+}
 
   async waitForSocketReady(sock, timeout = 30000) {
     if (this.isSocketReady(sock)) {

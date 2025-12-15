@@ -316,7 +316,7 @@ export class SessionManager {
     this.eventHandlersEnabled = true
 
 for (const [sessionId, sock] of this.activeSockets) {
-  if (sock?.user && sock.ws && sock.ws.readyState === 1 && !sock.eventHandlersSetup) {
+  if (sock?.user && sock.ws && sock.ws?.socket?._readyState === 1 && !sock.eventHandlersSetup) {
     this._setupEventHandlers(sock, sessionId).catch((error) => {
       logger.error(`Failed to setup handlers for ${sessionId}:`, error)
     })
@@ -336,9 +336,9 @@ for (const [sessionId, sock] of this.activeSockets) {
         return
       }
 
-if (!sock.ws || sock.ws.readyState !== 1) {
-  return
-}
+   if (!sock.ws?.socket || sock.ws.socket._readyState !== 1) {
+      return
+    }
 
       const { EventDispatcher } = await import("../events/index.js")
 
@@ -408,7 +408,7 @@ if (!sock.ws || sock.ws.readyState !== 1) {
       // Only return existing session if it's actually connected
       if (this.activeSockets.has(sessionId) && !isReconnect) {
         const existingSocket = this.activeSockets.get(sessionId)
-        const isConnected = existingSocket?.user && existingSocket?.ws?.readyState === 1
+        const isConnected = existingSocket?.user && existingSocket?.ws?.socket?._readyState === 1
 
         if (isConnected) {
           logger.info(`Session ${sessionId} already exists and is connected`)
@@ -601,9 +601,9 @@ if (!sock.ws || sock.ws.readyState !== 1) {
       }
 
       // Close WebSocket
-      if (sock.ws && sock.ws.readyState === 1) {
-        sock.ws.close(1000, "Cleanup")
-      }
+if (sock.ws?.socket && sock.ws.socket._readyState === 1) {
+  sock.ws.close(1000, "Cleanup")
+}
 
       // Clear socket properties
       sock.user = null

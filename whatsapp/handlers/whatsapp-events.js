@@ -222,11 +222,11 @@ export class WhatsAppEventHandler {
     }
   }
 
-  /**
-   * Check if socket is ready
-   */
+/**
+ * Check if socket is ready
+ */
 isSocketReady(sock) {
-  return !!(sock?.user && sock.ws && sock.ws.readyState === 1)
+  return !!(sock?.user && sock.ws?.socket?._readyState === 1)
 }
 
   /**
