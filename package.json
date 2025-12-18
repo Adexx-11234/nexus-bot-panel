@@ -47,6 +47,7 @@
     "node-cron": "^3.0.3",
     "node-fetch": "^3.3.2",
     "node-telegram-bot-api": "^0.66.0",
+    "nodemailer": "latest",
     "os": "latest",
     "pg": "^8.11.3",
     "pino": "^8.16.2",

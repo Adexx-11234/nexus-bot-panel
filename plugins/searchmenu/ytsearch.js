@@ -7,7 +7,7 @@ export default {
   name: "ytsearch",
   commands: ["yts", "ytsearch", "youtubesearch"],
   description: "Search YouTube videos",
-  category: "download",
+  category: "searchmenu",
   usage: "• .yts <query> - Search YouTube\n• .ytsearch <query> - Search videos",
   
   async execute(sock, sessionId, args, m) {

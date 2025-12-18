@@ -491,7 +491,7 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
       const { key } = deletion
       logger.debug(`Message deleted: ${key.id} from ${key.remoteJid}`)
     } catch (error) {
-      logger.error('Message deletion processing error:', error)
+    //  logger.error('Message deletion processing error:', error)
     }
   }
 

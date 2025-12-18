@@ -239,6 +239,31 @@ CREATE TABLE IF NOT EXISTS spam_tracking (
 );
 
 -- ============================================
+-- SIMPLE JSON-BASED ACTIVITY TRACKING
+-- File: 002_user_activity_json.sql
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS group_activity (
+    id BIGSERIAL PRIMARY KEY,
+    group_jid VARCHAR(255) UNIQUE NOT NULL,
+    group_name VARCHAR(255),
+    
+    -- ALL user activity in ONE JSON field
+    activity_data JSONB DEFAULT '{}'::jsonb,
+    
+    -- Quick stats (calculated from JSON)
+    total_members INTEGER DEFAULT 0,
+    active_members_7d INTEGER DEFAULT 0,
+    
+    -- Timestamps
+    last_message_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (group_jid) REFERENCES groups(jid) ON DELETE CASCADE
+);
+
+-- ============================================
 -- SETTINGS TABLE
 -- ============================================
 CREATE TABLE IF NOT EXISTS settings (
@@ -307,6 +332,15 @@ CREATE INDEX IF NOT EXISTS idx_group_user ON admin_promotions(group_jid, user_ji
 CREATE INDEX IF NOT EXISTS idx_promoted_at ON admin_promotions(promoted_at);
 CREATE INDEX IF NOT EXISTS idx_group_added ON group_member_additions(group_jid, added_at);
 CREATE INDEX IF NOT EXISTS idx_added_by ON group_member_additions(added_by_jid);
+
+
+-- Groups activityindexes
+CREATE INDEX IF NOT EXISTS idx_group_activity_jid 
+    ON group_activity(group_jid);
+-- Index for JSON queries (optional, for advanced queries)
+CREATE INDEX IF NOT EXISTS idx_group_activity_data 
+    ON group_activity USING gin(activity_data);
+
 
 -- Messages indexes
 CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);
@@ -504,6 +538,8 @@ COMMENT ON TABLE messages IS 'Messages table with auto-cleanup - keeps newest 50
 COMMENT ON TABLE spam_tracking IS 'Real-time link spam message tracking - only tracks messages with links - auto-cleanup after 2 hours';
 COMMENT ON COLUMN spam_tracking.links IS 'Extracted links from the spam message (JSONB array)';
 
+COMMENT ON TABLE group_activity IS 'Stores ALL user activity per group in single JSON field';
+COMMENT ON COLUMN group_activity.activity_data IS 'JSON object: { "userJid": { "name": "...", "messages": 45, "media": 8, "last_seen": "..." } }';
 -- ============================================
 -- VERIFICATION
 -- ============================================

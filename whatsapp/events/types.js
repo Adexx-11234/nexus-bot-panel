@@ -59,7 +59,7 @@ export const DisconnectReason = {
   CONNECTION_LOST: 408,        // Connection timeout/lost
   TIMED_OUT: 408,              // Request timeout (same as CONNECTION_LOST)
   
-  // ✅ NEW: Early connection close (pre-pairing)
+  // ✅ Early connection close (pre-pairing)
   METHOD_NOT_ALLOWED: 405,     // Connection closed before pairing could complete
   
   // Authentication & Session issues
@@ -88,6 +88,8 @@ export const DisconnectReason = {
 // ==========================================
 // DISCONNECT CONFIGURATION
 // Each disconnect reason has specific handling rules
+// ✅ maxAttempts set to 2 for most disconnects
+// ✅ Auth clear added for connection issues
 // ==========================================
 
 export const DisconnectConfig = {
@@ -96,6 +98,7 @@ export const DisconnectConfig = {
   // ============================================================
   
   [DisconnectReason.LOGGED_OUT]: {
+    statusCode: 401,
     shouldReconnect: false,
     isPermanent: true,
     requiresCleanup: true,
@@ -106,28 +109,30 @@ export const DisconnectConfig = {
   },
   
   [DisconnectReason.FORBIDDEN]: {
+    statusCode: 403,
     shouldReconnect: false,
     isPermanent: true,
     requiresCleanup: true,
     requiresNotification: true,
     message: 'Account banned or restricted by WhatsApp',
-    userAction: 'Contact WhatsApp support',
+    userAction: 'Contact WhatsApp support or wait for restriction to be lifted',
     handler: 'handleForbidden'
   },
   
   // ============================================================
-  // ✅ NEW: 405 - Early Connection Close (Pre-Pairing)
+  // ✅ 405 - Early Connection Close (Pre-Pairing)
   // ============================================================
   
   [DisconnectReason.METHOD_NOT_ALLOWED]: {
+    statusCode: 405,
     shouldReconnect: true,
     isPermanent: false,
     requiresCleanup: false,
     clearVoluntaryFlag: true,
     reconnectDelay: 3000,
-    maxAttempts: 3,
-    message: 'Connection closed before pairing - retrying',
-    userAction: 'Reconnecting automatically',
+    maxAttempts: 2,
+    message: 'Connection closed before pairing completed',
+    userAction: 'Reconnecting automatically...',
     handler: 'handleEarlyClose'
   },
   
@@ -136,41 +141,105 @@ export const DisconnectConfig = {
   // ============================================================
   
   [DisconnectReason.RESTART_REQUIRED]: {
+    statusCode: 515,
     shouldReconnect: true,
     isPermanent: false,
     requiresCleanup: false,
     clearVoluntaryFlag: true,
-    reconnectDelay: 2000,
-    maxAttempts: 10,
-    message: 'Connection restart required (post-pairing)',
+    reconnectDelay: 3000,
+    maxAttempts: 10, // Keep at 10 for post-pairing restart
+    message: 'Connection restart required after pairing',
     supports515Flow: true,
     handler: 'handleRestartRequired'
   },
   
   [DisconnectReason.STREAM_ERROR_UNKNOWN]: {
+    statusCode: 516,
     shouldReconnect: true,
     isPermanent: false,
     requiresCleanup: false,
     clearVoluntaryFlag: true,
-    reconnectDelay: 2000,
-    maxAttempts: 10,
-    message: 'Stream error - restart required',
+    reconnectDelay: 3000,
+    maxAttempts: 10, // Keep at 10 for post-pairing restart
+    message: 'Stream error detected - restart required',
     supports515Flow: true,
     handler: 'handleRestartRequired'
   },
   
   // ============================================================
-  // CONNECTION REPLACEMENT - RECONNECT WITH DELAY
+  // ✅ CONNECTION ISSUES - RECONNECTABLE WITH AUTH CLEAR
   // ============================================================
   
-  [DisconnectReason.CONNECTION_REPLACED]: {
+  [DisconnectReason.CONNECTION_CLOSED]: {
+    statusCode: 428,
     shouldReconnect: true,
     isPermanent: false,
     requiresCleanup: false,
+    requiresAuthClear: true, // ✅ Auth clear needed
+    keepCredentials: true,
     clearVoluntaryFlag: true,
+    reconnectDelay: 6000,
+    maxAttempts: 4,
+    message: 'Connection closed unexpectedly',
+    userAction: 'Reconnecting automatically...',
+    handler: 'handleConnectionClosed'
+  },
+  
+  [DisconnectReason.CONNECTION_REPLACED]: {
+    statusCode: 440,
+    shouldReconnect: true,
+    isPermanent: false,
+    requiresCleanup: false,
+    requiresAuthClear: true, // ✅ Auth clear needed
+    keepCredentials: true,
+    clearVoluntaryFlag: true,
+    reconnectDelay: 6000,
+    maxAttempts: 3,
     message: 'Connection replaced by another device',
-    userAction: 'Reconnecting automatically',
+    userAction: 'Reconnecting automatically...',
     handler: 'handleConnectionReplaced'
+  },
+  
+  [DisconnectReason.CONNECTION_LOST]: {
+    statusCode: 408,
+    shouldReconnect: true,
+    isPermanent: false,
+    requiresCleanup: false,
+    requiresAuthClear: true, // ✅ Auth clear needed
+    keepCredentials: true,
+    reconnectDelay: 6000,
+    maxAttempts: 4,
+    message: 'Connection lost - network issue detected',
+    userAction: 'Reconnecting automatically...',
+    handler: 'handleConnectionLost'
+  },
+  
+  [DisconnectReason.INTERNAL_SERVER_ERROR]: {
+    statusCode: 500,
+    shouldReconnect: true,
+    isPermanent: false,
+    requiresCleanup: false,
+    requiresAuthClear: true, // ✅ Auth clear needed
+    keepCredentials: true,
+    reconnectDelay: 10000,
+    maxAttempts: 20,
+    message: 'WhatsApp internal server error',
+    userAction: 'Retrying connection...',
+    handler: 'handleInternalError'
+  },
+  
+  [DisconnectReason.NOT_FOUND]: {
+    statusCode: 404,
+    shouldReconnect: true, // ✅ Changed to reconnectable
+    isPermanent: false,
+    requiresCleanup: false,
+    requiresAuthClear: true, // ✅ Auth clear needed
+    keepCredentials: true,
+    reconnectDelay: 5000,
+    maxAttempts: 2,
+    message: 'Session resource not found',
+    userAction: 'Reconnecting automatically...',
+    handler: 'handleNotFound'
   },
   
   // ============================================================
@@ -178,13 +247,14 @@ export const DisconnectConfig = {
   // ============================================================
   
   [DisconnectReason.BAD_SESSION]: {
+    statusCode: 500,
     shouldReconnect: true,
     isPermanent: false,
     requiresCleanup: false,
     requiresAuthClear: true,
     keepCredentials: true,
     reconnectDelay: 2000,
-    maxAttempts: 5,
+    maxAttempts: 2,
     message: 'Session data corrupted - clearing and reconnecting',
     handler: 'handleBadSession'
   },
@@ -194,56 +264,41 @@ export const DisconnectConfig = {
   // ============================================================
   
   [DisconnectReason.TIMED_OUT]: {
+    statusCode: 408,
     shouldReconnect: false,
     isPermanent: true,
     requiresCleanup: true,
     requiresNotification: true,
-    message: 'Connection request timed out',
+    message: 'Connection request timed out - pairing code not entered in time',
     userAction: 'Use /connect to try again',
     handler: 'handleConnectionTimeout'
-  },
-  
-  [DisconnectReason.CONNECTION_LOST]: {
-    shouldReconnect: true,
-    isPermanent: false,
-    requiresCleanup: false,
-    message: 'Connection lost',
-    handler: 'handleConnectionLost'
   },
   
   // ============================================================
   // TEMPORARY ISSUES - DELAYED RECONNECT
   // ============================================================
-
-[DisconnectReason.CONNECTION_CLOSED]: {
-  shouldReconnect: true,
-  isPermanent: false,
-  requiresCleanup: false,
-  clearVoluntaryFlag: true,
-  reconnectDelay: 5000,
-  maxAttempts: 5,
-  message: 'Connection closed unexpectedly - attempting reconnection',
-  userAction: 'Reconnecting automatically',
-  handler: 'handleConnectionClosed'
-},
   
   [DisconnectReason.UNAVAILABLE]: {
+    statusCode: 503,
     shouldReconnect: true,
     isPermanent: false,
     requiresCleanup: false,
     reconnectDelay: 10000,
-    maxAttempts: 5,
+    maxAttempts: 2,
     message: 'WhatsApp service temporarily unavailable',
+    userAction: 'Waiting for service to become available...',
     handler: 'handleUnavailable'
   },
   
   [DisconnectReason.CONFLICT]: {
+    statusCode: 409,
     shouldReconnect: true,
     isPermanent: false,
     requiresCleanup: false,
     reconnectDelay: 5000,
-    maxAttempts: 5,
+    maxAttempts: 2,
     message: 'Session conflict detected',
+    userAction: 'Resolving conflict...',
     handler: 'handleConflict'
   },
   
@@ -252,45 +307,31 @@ export const DisconnectConfig = {
   // ============================================================
   
   [DisconnectReason.TOO_MANY_REQUESTS]: {
+    statusCode: 429,
     shouldReconnect: true,
     isPermanent: false,
     requiresCleanup: false,
     useExponentialBackoff: true,
     reconnectDelay: 5000,
     maxDelay: 300000, // 5 minutes max
-    maxAttempts: 10,
-    message: 'Too many connection attempts - backing off',
+    maxAttempts: 2,
+    message: 'Too many connection attempts - rate limited',
+    userAction: 'Please wait before trying again',
     handler: 'handleRateLimit'
   },
   
   // ============================================================
-  // ERROR STATES - INVESTIGATE
+  // ERROR STATES
   // ============================================================
   
-  [DisconnectReason.INTERNAL_SERVER_ERROR]: {
-    shouldReconnect: true,
-    isPermanent: false,
-    requiresCleanup: false,
-    reconnectDelay: 10000,
-    maxAttempts: 3,
-    message: 'WhatsApp internal server error',
-    handler: 'handleInternalError'
-  },
-  
   [DisconnectReason.BAD_REQUEST]: {
+    statusCode: 400,
     shouldReconnect: false,
     isPermanent: true,
     requiresCleanup: true,
     message: 'Invalid connection request',
+    userAction: 'Please reconnect using /connect',
     handler: 'handleBadRequest'
-  },
-  
-  [DisconnectReason.NOT_FOUND]: {
-    shouldReconnect: false,
-    isPermanent: true,
-    requiresCleanup: true,
-    message: 'Resource not found',
-    handler: 'handleNotFound'
   }
 }
 
@@ -303,12 +344,16 @@ export const DisconnectConfig = {
  */
 export function getDisconnectConfig(statusCode) {
   return DisconnectConfig[statusCode] || {
+    statusCode: statusCode,
     shouldReconnect: true,
     isPermanent: false,
     requiresCleanup: false,
+    requiresAuthClear: true, // ✅ Default to auth clear for unknown errors
+    keepCredentials: true,
     reconnectDelay: 10000,
-    maxAttempts: 5,
+    maxAttempts: 2,
     message: `Unknown disconnect reason: ${statusCode}`,
+    userAction: 'Attempting to reconnect...',
     handler: 'handleUnknown'
   }
 }
@@ -369,7 +414,7 @@ export function getReconnectDelay(statusCode, attemptNumber = 0) {
  */
 export function getMaxAttempts(statusCode) {
   const config = getDisconnectConfig(statusCode)
-  return config.maxAttempts || 5
+  return config.maxAttempts || 2
 }
 
 /**
@@ -433,15 +478,15 @@ export function getUserAction(statusCode) {
 // ==========================================
 
 export const DisconnectMessages = {
-  [DisconnectReason.METHOD_NOT_ALLOWED]: 'Connection closed before pairing',
+  [DisconnectReason.METHOD_NOT_ALLOWED]: 'Connection closed before pairing completed',
   [DisconnectReason.CONNECTION_CLOSED]: 'Connection closed unexpectedly',
-  [DisconnectReason.CONNECTION_LOST]: 'Connection lost or timed out',
+  [DisconnectReason.CONNECTION_LOST]: 'Connection lost - network issue detected',
   [DisconnectReason.TIMED_OUT]: 'Connection request timed out',
   [DisconnectReason.LOGGED_OUT]: 'Account logged out from WhatsApp',
   [DisconnectReason.FORBIDDEN]: 'Account banned or restricted by WhatsApp',
   [DisconnectReason.CONNECTION_REPLACED]: 'Connection replaced by another device',
   [DisconnectReason.BAD_SESSION]: 'Session data corrupted or invalid',
-  [DisconnectReason.RESTART_REQUIRED]: 'Connection restart required',
+  [DisconnectReason.RESTART_REQUIRED]: 'Connection restart required after pairing',
   [DisconnectReason.STREAM_ERROR_UNKNOWN]: 'Stream error - restart required',
   [DisconnectReason.UNAVAILABLE]: 'WhatsApp service unavailable',
   [DisconnectReason.TOO_MANY_REQUESTS]: 'Too many connection attempts',

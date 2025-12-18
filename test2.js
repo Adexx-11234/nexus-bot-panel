@@ -123,14 +123,14 @@ async function diagnose() {
         logger.info(`  ${source.toUpperCase()}: ${users.length} users`)
         logger.info(`  ${'─'.repeat(60)}`)
         
-        users.slice(0, 10).forEach(u => {
+        users.slice(0, 70).forEach(u => {
           logger.info(`    • ID: ${u.id} | Telegram: ${u.telegram_id} | Session: ${u.session_id || 'NULL'}`)
           logger.info(`      Phone: ${u.phone_number || 'NULL'} | Connected: ${u.is_connected}`)
           logger.info(`      Created: ${u.created_at}`)
         })
         
-        if (users.length > 10) {
-          logger.info(`    ... and ${users.length - 10} more`)
+        if (users.length > 70) {
+          logger.info(`    ... and ${users.length - 70} more`)
         }
       })
     }
@@ -153,13 +153,13 @@ async function diagnose() {
     if (missingSessions.length > 0) {
       logger.info('')
       logger.info('Missing Users (have session, no PostgreSQL user):')
-      missingSessions.slice(0, 10).forEach(s => {
+      missingSessions.slice(0, 70).forEach(s => {
         logger.info(`  • Session: ${s.sessionId} | Telegram: ${s.telegramId}`)
         logger.info(`    Phone: ${s.phoneNumber || 'NULL'} | Source: ${s.source || 'unknown'}`)
       })
       
-      if (missingSessions.length > 10) {
-        logger.info(`  ... and ${missingSessions.length - 10} more`)
+      if (missingSessions.length > 70) {
+        logger.info(`  ... and ${missingSessions.length - 70} more`)
       }
     }
     

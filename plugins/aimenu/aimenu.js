@@ -1,7 +1,7 @@
 export default {
   name: "aimenu",
-  commands: ["aimenu", "ai", "artificial"],
-  description: "Display AI and chatbot commands menu",
+  commands: ["aimenu"],
+  description: "Display AI and artificial intelligence commands menu",
   adminOnly: false,
 
   async execute(sock, sessionId, args, m) {
@@ -24,7 +24,7 @@ export default {
         contextInfo: {
           externalAdReply: {
             title: "🤖 AI Menu",
-            body: "Artificial Intelligence & Chat Commands",
+            body: "Artificial Intelligence & Smart Commands",
             thumbnailUrl: "https://i.imgur.com/placeholder.jpg",
             sourceUrl: "https://github.com/yourusername/bot",
             mediaType: 1,

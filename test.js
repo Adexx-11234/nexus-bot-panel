@@ -594,8 +594,20 @@ async function main() {
     // Connect to MongoDB
     logger.info('Connecting to MongoDB...')
     mongoClient = new MongoClient(CONFIG.MONGODB_URI, {
-      maxPoolSize: 80,
-      minPoolSize: 2
+        maxPoolSize: 50,              // ✅ Reduced from 90 - too many connections
+      minPoolSize: 10,              // ✅ Increased from 5 - keep more alive
+      maxIdleTimeMS: 600000,        // ✅ 10 minutes instead of 5
+      serverSelectionTimeoutMS: 30000,
+      socketTimeoutMS: 600000,      // ✅ 10 minutes instead of 5
+      connectTimeoutMS: 30000,
+      retryWrites: true,
+      retryReads: true,
+      heartbeatFrequencyMS: 30000,  // ✅ 30 seconds instead of 10 - less aggressive
+      // ✅ CRITICAL: Add these stability options
+      waitQueueTimeoutMS: 10000,
+      monitorCommands: false,        // Less overhead
+      compressors: ['zlib'],         // Enable compression
+      zlibCompressionLevel: 6
     })
     await mongoClient.connect()
     

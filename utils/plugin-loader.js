@@ -22,15 +22,16 @@ const log = {
  * Fire and forget - reduced TTL to 10s, cleanup every 10s for fast RAM release
  */
 class MessageDeduplicator {
-  constructor() {
-    this.processedMessages = new Map()
-    this.cleanupInterval = 10000 // 10 seconds
-    this.maxAge = 10000 // 10 seconds TTL (fire and forget)
+constructor() {
+  this.processedMessages = new Map()
+  this.cleanupInterval = 10000 // 10 seconds
+  this.maxAge = 30000 // 30 seconds TTL (increased for slow commands)
+  this.lockTimeout = 15000 // 15 seconds for active locks
 
-    this.startCleanup()
+  this.startCleanup()
 
-    log.info("MessageDeduplicator initialized (cleanup: 10s, TTL: 10s)")
-  }
+  log.info("MessageDeduplicator initialized (cleanup: 10s, TTL: 30s, Lock: 15s)")
+}
 
   generateKey(groupJid, messageId) {
     if (!groupJid || !messageId) return null
@@ -38,31 +39,40 @@ class MessageDeduplicator {
   }
 
   tryLockForProcessing(messageKey, sessionId, action) {
-    if (!messageKey) return false
+  if (!messageKey) return false
 
-    if (!this.processedMessages.has(messageKey)) {
-      this.processedMessages.set(messageKey, {
-        actions: new Set(),
-        timestamp: Date.now(),
-        lockedBy: null,
-      })
-    }
-
-    const entry = this.processedMessages.get(messageKey)
-
-    if (entry.actions.has(action)) {
-      return false
-    }
-
-    if (entry.lockedBy && entry.lockedBy !== sessionId) {
-      return false
-    }
-
-    entry.lockedBy = sessionId
-    entry.timestamp = Date.now()
-
-    return true
+  const existing = this.processedMessages.get(messageKey)
+  
+  // Check if action already processed
+  if (existing?.actions.has(action)) {
+    return false
   }
+
+  // Check if locked by another session AND lock is still valid
+  if (existing?.lockedBy && existing.lockedBy !== sessionId) {
+    // If lock is expired (older than 15s), allow new session to lock
+    const lockAge = Date.now() - existing.timestamp
+    if (lockAge < this.lockTimeout) {
+      return false // Lock still valid, deny
+    }
+    // Lock expired, allow this session to take over
+    log.debug(`Lock expired for ${action}, allowing new session`)
+  }
+
+  // Create or update entry atomically
+  if (!this.processedMessages.has(messageKey)) {
+    this.processedMessages.set(messageKey, {
+      actions: new Set(),
+      timestamp: Date.now(),
+      lockedBy: sessionId,
+    })
+  } else {
+    existing.lockedBy = sessionId
+    existing.timestamp = Date.now()
+  }
+
+  return true
+}
 
   markAsProcessed(messageKey, sessionId, action) {
     if (!messageKey) return
@@ -91,27 +101,41 @@ class MessageDeduplicator {
   }
 
   cleanup() {
-    const now = Date.now()
-    let cleanedCount = 0
+  const now = Date.now()
+  let cleanedCount = 0
 
-    for (const [key, entry] of this.processedMessages.entries()) {
-      if (now - entry.timestamp > this.maxAge) {
-        this.processedMessages.delete(key)
-        cleanedCount++
-      }
-    }
-
-    if (this.processedMessages.size > 500) {
-      const entries = Array.from(this.processedMessages.entries()).sort((a, b) => a[1].timestamp - b[1].timestamp)
-      const toRemove = entries.slice(0, this.processedMessages.size - 200)
-      toRemove.forEach(([key]) => this.processedMessages.delete(key))
-      cleanedCount += toRemove.length
-    }
-
-    if (cleanedCount > 0) {
-      log.info(`Cleaned up ${cleanedCount} message entries (remaining: ${this.processedMessages.size})`)
+  // Remove expired entries
+  for (const [key, entry] of this.processedMessages.entries()) {
+    if (now - entry.timestamp > this.maxAge) {
+      this.processedMessages.delete(key)
+      cleanedCount++
     }
   }
+
+  // Aggressive memory management: Keep max 300 entries
+  if (this.processedMessages.size > 300) {
+    const entries = Array.from(this.processedMessages.entries())
+      .sort((a, b) => a[1].timestamp - b[1].timestamp)
+    
+    const toRemove = entries.slice(0, this.processedMessages.size - 150)
+    toRemove.forEach(([key]) => this.processedMessages.delete(key))
+    cleanedCount += toRemove.length
+  }
+
+  // Release stale locks (locked but not processed for >15s)
+  for (const [key, entry] of this.processedMessages.entries()) {
+    if (entry.lockedBy && entry.actions.size === 0) {
+      const lockAge = now - entry.timestamp
+      if (lockAge > this.lockTimeout) {
+        entry.lockedBy = null // Release stale lock
+      }
+    }
+  }
+
+  if (cleanedCount > 0) {
+    log.info(`Cleaned ${cleanedCount} entries (remaining: ${this.processedMessages.size})`)
+  }
+}
 
   startCleanup() {
     setInterval(() => this.cleanup(), this.cleanupInterval)
@@ -428,40 +452,6 @@ class PluginLoader {
     this.reloadTimeouts.forEach((timeout) => clearTimeout(timeout))
     this.reloadTimeouts.clear()
   }
-  shouldCheckDatabaseUpdate(plugin, commandName) {
-    if (!plugin || !commandName) return false
-    
-    // Method 1: Check if it's a groupmenu command
-    if (plugin.category === 'groupmenu') {
-      return true
-    }
-    
-    // Method 2: Check if command requires admin permissions (boolean flags)
-    if (plugin.adminOnly === true || plugin.groupAdmin === true) {
-      return true
-    }
-    
-    // Method 3: Check permissions array for "admin" or "group_admin"
-    if (Array.isArray(plugin.permissions)) {
-      const hasAdminPerm = plugin.permissions.some(perm => {
-        const p = String(perm).toLowerCase()
-        return p === 'admin' || p === 'group_admin' || p === 'system_admin'
-      })
-      if (hasAdminPerm) return true
-    }
-    
-    // Method 4: Fallback - specific critical commands that MUST be deduplicated
-    const criticalCommands = [
-      'antilink', 'anticall', 'antibot', 'antispam', 'antiraid',
-      'antiimage', 'antivideo', 'antiaudio', 'antidocument', 'antisticker',
-      'antigroupmention', 'antidelete', 'antiviewonce', 'antitag',
-      'grouponly', 'publicmode', 'welcome', 'goodbye',
-      'autowelcome', 'autokick', 'closetime', 'opentime',
-      'antipromote', 'antidemote', 'antiadd', 'antiremove'
-    ]
-    
-    return criticalCommands.includes(commandName.toLowerCase())
-  }
     
   // ==================== COMMAND EXECUTION ====================
 
@@ -538,30 +528,48 @@ class PluginLoader {
       }
 
       if (!permissionCheck.allowed) {
-        this.clearTempData()
+  this.clearTempData()
 
-        if (permissionCheck.silent) {
-          return { success: false, silent: true }
-        }
+  if (permissionCheck.silent) {
+    return { success: false, silent: true }
+  }
 
-        try {
-          await sock.sendMessage(enhancedM.chat, { text: permissionCheck.message }, { quoted: m })
-        } catch (sendError) {
-          log.error("Failed to send permission error:", sendError)
-        }
-
-        return { success: false, error: permissionCheck.message }
+  // For groupmenu/gamemenu: Only first bot sends error, then mark as processed
+  const needsDeduplication = plugin.category === 'groupmenu' || plugin.category === 'gamemenu'
+  
+  if (needsDeduplication) {
+    const messageKey = this.deduplicator.generateKey(enhancedM.chat, m.key?.id)
+    if (messageKey) {
+      const actionKey = `permission-error-${commandName}`
+      
+      // Try to lock for sending error
+      if (!this.deduplicator.tryLockForProcessing(messageKey, sessionId, actionKey)) {
+        // Another bot already sent the error
+        return { success: false, silent: true }
       }
+      
+      // Send error and mark as processed
+      try {
+        await sock.sendMessage(enhancedM.chat, { text: permissionCheck.message }, { quoted: m })
+        this.deduplicator.markAsProcessed(messageKey, sessionId, actionKey)
+      } catch (sendError) {
+        log.error("Failed to send permission error:", sendError)
+      }
+    }
+  } else {
+    // Non-deduplicated commands: each bot sends its own error
+    try {
+      await sock.sendMessage(enhancedM.chat, { text: permissionCheck.message }, { quoted: m })
+    } catch (sendError) {
+      log.error("Failed to send permission error:", sendError)
+    }
+  }
+
+  return { success: false, error: permissionCheck.message }
+}
 
       // Execute plugin
       const result = await this.executePluginWithFallback(sock, sessionId, args, enhancedM, plugin)
-
-      if (this.shouldCheckDatabaseUpdate(plugin, commandName)) {
-        const messageKey = this.deduplicator.generateKey(enhancedM.chat, m.key?.id)
-        if (messageKey && !this.deduplicator.isActionProcessed(messageKey, "db-update")) {
-          this.deduplicator.markAsProcessed(messageKey, sessionId, "db-update")
-        }
-      }
 
       this.clearTempData()
       return { success: true, result }
@@ -645,7 +653,7 @@ class PluginLoader {
       const commandName = plugin.commands?.[0]?.toLowerCase() || ""
 
       // Menu commands - everyone can view (except vipmenu)
-      const publicMenus = ["aimenu", "convertmenu", "downloadmenu", "gamemenu", "groupmenu", "mainmenu", "ownermenu"]
+      const publicMenus = ["aimenu", "convertmenu", "downloadmenu", "gamemenu", "groupmenu", "mainmenu", "ownermenu", "toolmenu", "searchmenu", "bugmenu"]
       if (publicMenus.includes(commandName)) {
         return { allowed: true }
       }
@@ -737,7 +745,17 @@ class PluginLoader {
     }
   }
 async executePluginWithFallback(sock, sessionId, args, m, plugin) {
+  // Retry logic for database conflicts (groupmenu only)
+  const maxRetries = plugin.category === 'groupmenu' ? 2 : 0
+  let lastError = null
+  
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
+      if (attempt > 0) {
+        log.debug(`Retry attempt ${attempt} for ${plugin.name}`)
+        await new Promise(resolve => setTimeout(resolve, 100 * attempt)) // Backoff
+      }
+      
       if (m.isGroup && (!m.hasOwnProperty('isAdmin') || !m.hasOwnProperty('isBotAdmin'))) {
         m.isAdmin = await isGroupAdmin(sock, m.chat, m.sender)
         m.isBotAdmin = await isBotAdmin(sock, m.chat)
@@ -760,11 +778,24 @@ async executePluginWithFallback(sock, sessionId, args, m, plugin) {
       }
 
       return await plugin.execute(sock, sessionId, args, m)
-    } catch (error) {
+} catch (error) {
+      lastError = error
+      
+      // If it's a database error and we have retries left, continue
+      if (attempt < maxRetries && error.message?.includes('database')) {
+        log.warn(`Database error on attempt ${attempt + 1}, retrying...`)
+        continue
+      }
+      
+      // No more retries or non-database error
       log.error(`Plugin execution failed for ${plugin.name}:`, error)
       throw error
     }
   }
+  
+  // All retries failed
+  if (lastError) throw lastError
+}
 
   checkIsBotOwner(sock, userJid, fromMe = false) {
     // If fromMe is true, it's the bot owner

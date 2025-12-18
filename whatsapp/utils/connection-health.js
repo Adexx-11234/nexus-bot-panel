@@ -3,38 +3,118 @@ import { createComponentLogger } from "../../utils/logger.js"
 const logger = createComponentLogger("CONNECTION_HEALTH")
 
 /**
- * ConnectionHealthMonitor
- * Monitors session activity and triggers health checks
- * Only monitors and triggers - does NOT handle disconnects directly
+ * ConnectionHealthMonitor - Optimized for 150+ sessions
+ * 
+ * PURPOSE:
+ * - Check for partial/stale sessions every 5 minutes (not constantly)
+ * - Reinitialize sessions with no user JID
+ * - Send self-ping for inactive but healthy sessions
+ * - NO duplicate health monitoring (handlers already do it)
  */
 export class ConnectionHealthMonitor {
   constructor(sessionManager) {
     this.sessionManager = sessionManager
 
-    this.sessionActivity = new Map() // sessionId -> { lastActivity, monitorStarted }
-    this.healthCheckIntervals = new Map() // sessionId -> intervalId
-    this.activeMonitoredSessions = new Set() // Track which sessions are monitored (prevent duplicates)
+    this.sessionActivity = new Map()
+    this.healthCheckIntervals = new Map()
+    this.activeMonitoredSessions = new Set()
+    this.staleCheckInterval = null
 
     // Config
-    this.HEALTH_CHECK_INTERVAL = 30 * 1000 // Check every 30 seconds
+    this.HEALTH_CHECK_INTERVAL = 30 * 1000 // Check activity every 30 seconds
+    this.STALE_CHECK_INTERVAL = 5 * 60 * 1000 // ✅ Check for stale/partial every 5 minutes
     this.INACTIVITY_THRESHOLD = 30 * 60 * 1000 // 30 minutes no activity
-    this.PING_TIMEOUT = 15 * 1000 // 15 seconds to respond
-    this.MAX_FAILED_PINGS = 3 // Trigger disconnect after 3 failed pings
+    this.REINIT_WAIT_TIME = 15000 // ✅ 15 seconds (not 5) for reinit to complete
+    this.MAX_FAILED_PINGS = 3
 
-    logger.info("ConnectionHealthMonitor initialized")
+    // ✅ Start periodic stale session checker
+    this._startStaleSessionChecker()
+
+    logger.info("ConnectionHealthMonitor initialized (stale check: every 5 minutes)")
   }
 
   /**
-   * Start monitoring a session
+   * ✅ NEW: Periodic checker for stale/partial sessions (every 5 minutes)
+   */
+  _startStaleSessionChecker() {
+    this.staleCheckInterval = setInterval(async () => {
+      await this._checkForStalePartialSessions()
+    }, this.STALE_CHECK_INTERVAL)
+
+    logger.info("✅ Stale session checker started (runs every 5 minutes)")
+  }
+
+  /**
+   * ✅ NEW: Check all active sessions for stale/partial state
+   */
+  async _checkForStalePartialSessions() {
+    try {
+      const activeSockets = Array.from(this.sessionManager.activeSockets.entries())
+      
+      if (activeSockets.length === 0) {
+        return
+      }
+
+      logger.info(`🔍 Checking ${activeSockets.length} sessions for stale/partial state...`)
+
+      let partialCount = 0
+      let staleCount = 0
+
+      for (const [sessionId, sock] of activeSockets) {
+        try {
+
+        // ✅ Skip if reconnection in progress
+        const eventDispatcher = this.sessionManager.getEventDispatcher()
+        const connectionHandler = eventDispatcher?.connectionEventHandler
+        
+        if (connectionHandler && !connectionHandler.canReinitialize(sessionId)) {
+          continue
+        }
+          const hasUserJid = !!sock?.user?.id
+          const readyState = sock?.ws?.socket?._readyState
+          const isOpen = readyState === 1
+
+          // ✅ Partial session: Socket exists but no user JID
+          if (!hasUserJid) {
+            partialCount++
+            logger.warn(`🚨 Partial session detected: ${sessionId} (no user JID)`)
+            await this._reinitializeSession(sessionId, sock)
+            continue
+          }
+
+          // ✅ Stale socket: Has user but websocket not open
+          if (hasUserJid && !isOpen) {
+            staleCount++
+            logger.warn(`🚨 Stale session detected: ${sessionId} (readyState: ${readyState})`)
+            await this._reinitializeSession(sessionId, sock)
+            continue
+          }
+
+        } catch (error) {
+          logger.error(`Error checking ${sessionId}:`, error.message)
+        }
+      }
+
+      if (partialCount > 0 || staleCount > 0) {
+        logger.info(`✅ Stale check complete: ${partialCount} partial, ${staleCount} stale - triggered reinitialization`)
+      } else {
+        logger.info(`✅ Stale check complete: All ${activeSockets.length} sessions healthy`)
+      }
+
+    } catch (error) {
+      logger.error("Error in stale session checker:", error)
+    }
+  }
+
+  /**
+   * Start monitoring a session for inactivity
    */
   startMonitoring(sessionId, sock) {
-    // Prevent duplicate monitoring
     if (this.activeMonitoredSessions.has(sessionId)) {
       logger.debug(`Already monitoring ${sessionId}`)
       return
     }
 
-    // Stop existing monitoring if any (cleanup)
     this.stopMonitoring(sessionId)
 
     const now = Date.now()
@@ -47,7 +127,6 @@ export class ConnectionHealthMonitor {
 
     this.activeMonitoredSessions.add(sessionId)
 
-    // Start health check interval
     const intervalId = setInterval(() => {
       this._checkHealth(sessionId, sock)
     }, this.HEALTH_CHECK_INTERVAL)
@@ -69,19 +148,19 @@ export class ConnectionHealthMonitor {
 
     this.sessionActivity.delete(sessionId)
     this.activeMonitoredSessions.delete(sessionId)
+    
     logger.debug(`Stopped health monitoring for ${sessionId}`)
   }
 
   /**
-   * Record activity for a session (call this on message upsert)
+   * Record activity for a session
    */
   recordActivity(sessionId) {
     const data = this.sessionActivity.get(sessionId)
     if (data) {
       data.lastActivity = Date.now()
-      data.failedPings = 0 // Reset failed pings on activity
+      data.failedPings = 0
     } else {
-      // Session not being monitored yet, initialize it
       this.sessionActivity.set(sessionId, {
         lastActivity: Date.now(),
         monitorStarted: Date.now(),
@@ -91,20 +170,23 @@ export class ConnectionHealthMonitor {
   }
 
   /**
-   * Check health of a session
+   * Check health - only for inactivity ping test
    */
   async _checkHealth(sessionId, sock) {
     try {
-      // Check if socket still exists and has WebSocket
-      if (!sock?.ws) {
+      const currentSock = this.sessionManager.activeSockets?.get(sessionId) || sock
+
+      if (!currentSock?.ws) {
         logger.warn(`Socket not available for ${sessionId}, stopping health check`)
         this.stopMonitoring(sessionId)
         return
       }
 
+      // ✅ Stale/partial checks are now done by periodic checker (every 5 min)
+      // This only checks for inactivity
+
       const data = this.sessionActivity.get(sessionId)
       if (!data) {
-        logger.warn(`No tracking data for ${sessionId}`)
         return
       }
 
@@ -114,7 +196,7 @@ export class ConnectionHealthMonitor {
       // If no activity for 30 minutes, do a self-ping
       if (timeSinceActivity > this.INACTIVITY_THRESHOLD) {
         logger.info(`No activity for ${Math.round(timeSinceActivity / 60000)}min on ${sessionId}, sending self-ping`)
-        await this._sendSelfPing(sessionId, sock, data)
+        await this._sendSelfPing(sessionId, currentSock, data)
       }
     } catch (error) {
       logger.error(`Health check error for ${sessionId}:`, error.message)
@@ -122,183 +204,183 @@ export class ConnectionHealthMonitor {
   }
 
   /**
-   * Send a self-ping message using user's prefix
+   * ✅ OPTIMIZED: Reinitialize session with longer wait time
+   */
+  async _reinitializeSession(sessionId) {
+  try {
+    // ✅ CRITICAL: Check if reconnection already in progress
+    const eventDispatcher = this.sessionManager.getEventDispatcher()
+    const connectionHandler = eventDispatcher?.connectionEventHandler
+    
+    if (connectionHandler && !connectionHandler.canReinitialize(sessionId)) {
+      logger.info(`⏭️ Skipping reinitialization for ${sessionId} - reconnection handler active`)
+      return false
+    }
+    
+    logger.info(`🔄 Reinitializing session: ${sessionId}`)
+    
+    const session = await this.sessionManager.storage.getSession(sessionId)
+    if (!session) {
+      logger.error(`❌ No session data for ${sessionId}`)
+      return false
+    }
+
+    // ✅ REMOVED: MongoDB health check - not needed, cache handles it
+
+    // Cleanup socket first
+    const sock = this.sessionManager.activeSockets.get(sessionId)
+    if (sock) {
+      logger.info(`🧹 Cleaning socket before reinitialization for ${sessionId}`)
+      await this.sessionManager._cleanupSocket(sessionId, sock)
+    }
+
+    this.sessionManager.activeSockets.delete(sessionId)
+    this.sessionManager.sessionState.delete(sessionId)
+
+    // Wait a moment for cleanup to complete
+    await new Promise(resolve => setTimeout(resolve, 1000))
+
+    logger.info(`🔄 Starting reinitialization for ${sessionId}`)
+
+    // Create new session - will use cached auth state if MongoDB unavailable
+    const newSock = await this.sessionManager.createSession(
+      session.userId,
+      session.phoneNumber,
+      session.callbacks || {},
+      true, // isReconnect
+      session.source || "telegram",
+      false // Don't allow pairing
+    )
+
+    if (newSock) {
+      logger.info(`✅ Successfully reinitialized ${sessionId}`)
+      return true
+    } else {
+      logger.error(`❌ Failed to reinitialize ${sessionId}`)
+      return false
+    }
+  } catch (error) {
+    logger.error(`❌ Reinitialization error for ${sessionId}:`, error)
+    return false
+  }
+}
+
+  /**
+   * Cleanup socket before reinitialization
+   */
+  async _cleanupSocketBeforeReinit(sock, sessionId) {
+    try {
+      logger.info(`🧹 Cleaning socket before reinitialization for ${sessionId}`)
+
+      // Flush event buffer FIRST
+      if (sock?.ev?.isBuffering?.()) {
+        try {
+          sock.ev.flush()
+          logger.debug(`📤 Event buffer flushed for ${sessionId}`)
+        } catch (flushError) {
+          logger.warn(`Failed to flush buffer for ${sessionId}:`, flushError.message)
+        }
+      }
+
+      // Call session manager's cleanup socket
+      if (this.sessionManager._cleanupSocket) {
+        await this.sessionManager._cleanupSocket(sessionId, sock)
+      }
+
+      logger.debug(`✅ Socket cleaned for reinitialization: ${sessionId}`)
+    } catch (error) {
+      logger.error(`Socket cleanup error for ${sessionId}:`, error)
+    }
+  }
+
+  /**
+   * Send a self-ping message
    */
   async _sendSelfPing(sessionId, sock, data) {
     try {
       const userJid = sock.user?.id
+      
       if (!userJid) {
-        logger.error(`No user JID for ${sessionId}`)
+        logger.warn(`No user JID for ${sessionId} - will be caught on next 5min stale check`)
         return
       }
 
-      // Check if socket still valid
-      if (!sock?.ws) {
+      if (!sock?.ws || sock.ws.socket?._readyState !== 1) {
         logger.warn(`Socket invalid for ${sessionId}`)
-        await this._handlePingFailure(sessionId, data)
+        await this._handlePingFailure(sessionId, data, sock)
         return
       }
 
-      // Get user's prefix from database
       const prefix = await this._getUserPrefix(sessionId)
 
-      // Send warning message first
       await sock.sendMessage(userJid, {
         text: `⚠️ *Connection Health Check*\n\nNo activity detected for 30 minutes.\nTesting connection...`,
       })
 
-      // Wait a bit then send ping command
-      setTimeout(async () => {
-        try {
-          // Check socket still valid before sending ping
-          if (!sock?.ws) {
-            logger.warn(`Socket became invalid before ping for ${sessionId}`)
-            await this._handlePingFailure(sessionId, data)
-            return
-          }
+      logger.info(`📤 Warning message sent to ${sessionId}`)
 
-          // Send ping command with user's prefix
-          const pingCommand = `${prefix}ping`
-          await sock.sendMessage(userJid, {
-            text: pingCommand,
-          })
+      await new Promise(resolve => setTimeout(resolve, 1000))
 
-          logger.info(`Sent self-ping to ${sessionId} with command: ${pingCommand}`)
+      if (!sock?.ws || sock.ws.socket?._readyState !== 1) {
+        logger.warn(`Socket became invalid before ping for ${sessionId}`)
+        await this._handlePingFailure(sessionId, data, sock)
+        return
+      }
 
-          // Set timeout to check for pong
-          setTimeout(() => {
-            this._checkPingResponse(sessionId, data)
-          }, this.PING_TIMEOUT)
-        } catch (error) {
-          logger.error(`Failed to send ping command for ${sessionId}:`, error.message)
-          await this._handlePingFailure(sessionId, data)
-        }
-      }, 1000)
+      const pingCommand = `${prefix}ping`
+      await sock.sendMessage(userJid, {
+        text: pingCommand,
+      })
+
+      logger.info(`✅ Ping sent successfully to ${sessionId} - connection alive`)
+      data.failedPings = 0
+      data.lastActivity = Date.now()
+
+      if (sock.ev?.isBuffering?.()) {
+        sock.ev.flush()
+      }
+
     } catch (error) {
-      logger.error(`Self-ping error for ${sessionId}:`, error.message)
-      await this._handlePingFailure(sessionId, data)
+      logger.error(`❌ Ping send failed for ${sessionId}:`, error.message)
+      await this._handlePingFailure(sessionId, data, sock)
     }
   }
 
-  /**
-   * Get user's prefix from database
-   */
   async _getUserPrefix(sessionId) {
     try {
-      // Extract telegram ID from session ID
       const telegramId = sessionId.replace("session_", "")
-
       const { UserQueries } = await import("../../database/query.js")
       const settings = await UserQueries.getUserSettings(telegramId)
-
       const prefix = settings?.custom_prefix || "."
       return prefix === "none" ? "" : prefix
     } catch (error) {
       logger.error("Error getting user prefix:", error.message)
-      return "." // Default fallback
+      return "."
     }
   }
 
-  /**
-   * Check if ping got a response
-   */
-  _checkPingResponse(sessionId, data) {
-    if (!data) return
-
-    const now = Date.now()
-
-    // If activity recorded after we sent ping, connection is alive
-    if (now - data.lastActivity < this.PING_TIMEOUT) {
-      logger.info(`Ping successful for ${sessionId}, connection alive`)
-      data.failedPings = 0
-      return
-    }
-
-    // No response - increment failure count
-    this._handlePingFailure(sessionId, data)
-  }
-
-  /**
-   * Handle ping failure
-   */
-  async _handlePingFailure(sessionId, data) {
+  async _handlePingFailure(sessionId, data, sock) {
     if (!data) return
 
     data.failedPings = (data.failedPings || 0) + 1
-
-    logger.warn(`Ping failed for ${sessionId} (${data.failedPings}/${this.MAX_FAILED_PINGS})`)
+    logger.warn(`❌ Ping failed for ${sessionId} (${data.failedPings}/${this.MAX_FAILED_PINGS})`)
 
     if (data.failedPings >= this.MAX_FAILED_PINGS) {
-      logger.error(`Max ping failures reached for ${sessionId}, triggering disconnect`)
-
-      // Stop monitoring this session
+      logger.error(`🚨 Max ping failures for ${sessionId}, will be handled on next 5min check`)
       this.stopMonitoring(sessionId)
-
-      // Trigger disconnect through ConnectionEventHandler (status 428 = Connection Closed)
-      await this._triggerHealthDisconnect(sessionId)
     } else {
-      // Retry ping after 5 seconds
       logger.info(`Will retry ping for ${sessionId} in 5 seconds`)
-      setTimeout(() => {
-        const sock = this.sessionManager.activeSockets?.get(sessionId)
-        if (sock?.ws) {
-          this._sendSelfPing(sessionId, sock, data)
-        } else {
-          logger.warn(`Socket no longer available for retry ping: ${sessionId}`)
+      setTimeout(async () => {
+        const currentSock = this.sessionManager.activeSockets?.get(sessionId)
+        const currentData = this.sessionActivity.get(sessionId)
+        
+        if (currentSock?.ws && currentSock.ws.socket?._readyState === 1 && currentData) {
+          await this._sendSelfPing(sessionId, currentSock, currentData)
         }
       }, 5000)
     }
   }
 
-  /**
-   * Trigger disconnect through proper handler (don't handle directly)
-   */
-  async _triggerHealthDisconnect(sessionId) {
-    try {
-      logger.info(`Triggering health-based disconnect for ${sessionId}`)
-
-      const sock = this.sessionManager.activeSockets?.get(sessionId)
-      
-      if (!sock) {
-        logger.warn(`No socket found for ${sessionId}`)
-        return
-      }
-
-      // Create a disconnect event (428 = Connection Closed)
-      const lastDisconnect = {
-        error: {
-          output: {
-            statusCode: 428,
-            payload: {
-              message: 'Connection health check failed - no activity',
-            },
-          },
-          isBoom: true,
-        },
-      }
-
-      // Let ConnectionEventHandler handle it properly
-      const { ConnectionEventHandler } = await import("../events/index.js")
-
-      if (!this.sessionManager.connectionEventHandler) {
-        this.sessionManager.connectionEventHandler = new ConnectionEventHandler(this.sessionManager)
-      }
-
-      await this.sessionManager.connectionEventHandler._handleConnectionClose(
-        sock,
-        sessionId,
-        lastDisconnect
-      )
-
-      logger.info(`Health disconnect triggered for ${sessionId}`)
-    } catch (error) {
-      logger.error(`Failed to trigger health disconnect for ${sessionId}:`, error.message)
-    }
-  }
-
-  /**
-   * Get health stats
-   */
   getStats() {
     const stats = {}
     for (const [sessionId, data] of this.sessionActivity.entries()) {
@@ -312,16 +394,10 @@ export class ConnectionHealthMonitor {
     return stats
   }
 
-  /**
-   * Get count of active monitored sessions
-   */
   getActiveCount() {
     return this.activeMonitoredSessions.size
   }
 
-  /**
-   * Cleanup stale monitoring (for sessions that no longer exist)
-   */
   cleanupStale() {
     const activeSockets = this.sessionManager.activeSockets
     let cleaned = 0
@@ -337,9 +413,29 @@ export class ConnectionHealthMonitor {
       logger.debug(`Cleaned up ${cleaned} stale health monitors`)
     }
   }
+
+  /**
+   * Cleanup on shutdown
+   */
+  shutdown() {
+    if (this.staleCheckInterval) {
+      clearInterval(this.staleCheckInterval)
+      this.staleCheckInterval = null
+    }
+
+    for (const intervalId of this.healthCheckIntervals.values()) {
+      clearInterval(intervalId)
+    }
+
+    this.healthCheckIntervals.clear()
+    this.sessionActivity.clear()
+    this.activeMonitoredSessions.clear()
+
+    logger.info("Health monitor shutdown complete")
+  }
 }
 
-// Singleton instance
+// Singleton
 let healthMonitor = null
 
 export function getHealthMonitor(sessionManager) {

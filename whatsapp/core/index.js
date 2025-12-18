@@ -26,5 +26,7 @@ export {
   clearGroupCache,
   clearAllGroupCache,
   getCacheStats,
-  updateSessionLastMessage 
+  updateSessionLastMessage,
+  ensureCacheableKeys,
+  wrapSocketForDecryptionErrors
 } from './config.js'

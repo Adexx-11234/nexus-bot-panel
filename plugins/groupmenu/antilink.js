@@ -9,7 +9,7 @@ export default {
   name: "Anti-Link",
   description: "Detect and remove links with configurable warning system",
   commands: ["antilink"],
-  category: "group",
+  category: "groupmenu",
   adminOnly: true,
   usage:
     "• `.antilink on` - Enable link protection\n• `.antilink off` - Disable link protection\n• `.antilink status` - Check protection status\n• `.antilink warn [number]` - Set warning limit (3-10)\n• `.antilink reset @user` - Reset user warnings\n• `.antilink list` - Show warning list\n• `.antilink stats` - View statistics",

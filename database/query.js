@@ -2487,6 +2487,235 @@ export const UserQueries = {
   },
 }
 
+
+// ==========================================
+// SIMPLE JSON-BASED ACTIVITY QUERIES
+// ==========================================
+
+export const ActivityQueries = {
+  
+  /**
+   * Update user activity when they send a message
+   * This is called from processor.js
+   */
+  async updateUserActivity(groupJid, userJid, userName, hasMedia = false) {
+  if (!checkCircuitBreaker()) {
+    logger.debug(`Circuit open, skipping activity update`)
+    return
+  }
+
+  try {
+    await queryManager.execute(
+      `INSERT INTO group_activity (group_jid, activity_data, last_message_at, updated_at)
+       VALUES (
+         $1::text,
+         jsonb_build_object(
+           $2::text, 
+           jsonb_build_object(
+             'name', $3::text,
+             'messages', 1,
+             'media', $4::int,
+             'last_seen', CURRENT_TIMESTAMP
+           )
+         ),
+         CURRENT_TIMESTAMP,
+         CURRENT_TIMESTAMP
+       )
+       ON CONFLICT (group_jid)
+       DO UPDATE SET
+         activity_data = CASE
+           WHEN group_activity.activity_data ? $2::text THEN
+             jsonb_set(
+               jsonb_set(
+                 jsonb_set(
+                   group_activity.activity_data,
+                   ARRAY[$2::text, 'messages'],
+                   to_jsonb((group_activity.activity_data->$2::text->>'messages')::int + 1)
+                 ),
+                 ARRAY[$2::text, 'media'],
+                 to_jsonb((group_activity.activity_data->$2::text->>'media')::int + $4::int)
+               ),
+               ARRAY[$2::text, 'last_seen'],
+               to_jsonb(CURRENT_TIMESTAMP)
+             )
+           ELSE
+             group_activity.activity_data || jsonb_build_object(
+               $2::text,
+               jsonb_build_object(
+                 'name', $3::text,
+                 'messages', 1,
+                 'media', $4::int,
+                 'last_seen', CURRENT_TIMESTAMP
+               )
+             )
+         END,
+         last_message_at = CURRENT_TIMESTAMP,
+         updated_at = CURRENT_TIMESTAMP`,
+      [groupJid, userJid, userName, hasMedia ? 1 : 0]
+    )
+  } catch (error) {
+    if (!error.message?.includes('timeout')) {
+      logger.error(`Error updating activity: ${error.message}`)
+    }
+  }
+},
+
+  /**
+   * Get ALL activity data for a group
+   * Returns JSON with all users who ever sent a message
+   */
+  async getGroupActivity(groupJid) {
+    if (!checkCircuitBreaker()) {
+      return null
+    }
+
+    try {
+      const result = await queryManager.execute(
+        `SELECT activity_data, last_message_at, updated_at
+         FROM group_activity
+         WHERE group_jid = $1`,
+        [groupJid]
+      )
+      
+      if (result.rows.length === 0) {
+        return { activity_data: {} }
+      }
+      
+      return result.rows[0]
+    } catch (error) {
+      logger.error(`Error getting group activity: ${error.message}`)
+      return { activity_data: {} }
+    }
+  },
+
+  /**
+   * Get active members (sent at least 1 message)
+   * Returns sorted array: [{ jid, name, messages, media, last_seen }, ...]
+   */
+  async getActiveMembers(groupJid) {
+    try {
+      const groupData = await this.getGroupActivity(groupJid)
+      
+      if (!groupData || !groupData.activity_data) {
+        return []
+      }
+
+      // Convert JSON to array and sort by message count
+      const activityData = groupData.activity_data
+      const activeMembers = []
+
+      for (const [userJid, userData] of Object.entries(activityData)) {
+        activeMembers.push({
+          user_jid: userJid,
+          user_name: userData.name || 'Unknown',
+          messages: userData.messages || 0,
+          media: userData.media || 0,
+          last_seen: userData.last_seen
+        })
+      }
+
+      // Sort by messages (highest first)
+      activeMembers.sort((a, b) => b.messages - a.messages)
+
+      return activeMembers
+    } catch (error) {
+      logger.error(`Error getting active members: ${error.message}`)
+      return []
+    }
+  },
+
+  /**
+   * Get inactive members (in group but never sent message OR sent message but not recently)
+   * This gets current group members and compares with tracked activity
+   */
+  async getInactiveMembers(sock, groupJid) {
+    try {
+      // Get current group members from WhatsApp
+      const metadata = await sock.groupMetadata(groupJid).catch(() => null)
+      
+      if (!metadata || !metadata.participants) {
+        return []
+      }
+
+      // Get tracked activity from database
+      const groupData = await this.getGroupActivity(groupJid)
+      const activityData = groupData?.activity_data || {}
+
+      const inactiveMembers = []
+
+      // Check each group member
+      for (const participant of metadata.participants) {
+        const userJid = participant.id
+        const userData = activityData[userJid]
+
+        // Inactive if: not in database OR in database with 0 recent messages
+        if (!userData || userData.messages === 0) {
+          inactiveMembers.push({
+            user_jid: userJid,
+            user_name: userData?.name || participant.notify || 'Unknown',
+            messages: userData?.messages || 0,
+            last_seen: userData?.last_seen || null
+          })
+        }
+      }
+
+      return inactiveMembers
+    } catch (error) {
+      logger.error(`Error getting inactive members: ${error.message}`)
+      return []
+    }
+  },
+
+  /**
+   * Reset activity counters (called weekly/monthly to "reset" the tracking period)
+   */
+  async resetActivityCounters() {
+    if (!checkCircuitBreaker()) {
+      return 0
+    }
+
+    try {
+      const result = await queryManager.execute(
+        `UPDATE group_activity
+         SET activity_data = '{}'::jsonb,
+             active_members_7d = 0,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE last_message_at < NOW() - INTERVAL '7 days'`
+      )
+      return result.rowCount
+    } catch (error) {
+      logger.error(`Error resetting counters: ${error.message}`)
+      return 0
+    }
+  },
+
+  /**
+   * Delete inactive groups (no messages in 4+ days)
+   */
+  async cleanupInactiveGroups(daysInactive = 4) {
+    if (!checkCircuitBreaker()) {
+      return 0
+    }
+
+    try {
+      const result = await queryManager.execute(
+        `DELETE FROM group_activity
+         WHERE last_message_at < NOW() - INTERVAL '${daysInactive} days'
+         RETURNING group_jid`
+      )
+
+      if (result.rows.length > 0) {
+        logger.info(`Deleted ${result.rows.length} inactive groups`)
+      }
+
+      return result.rows.length
+    } catch (error) {
+      logger.error(`Error cleaning up groups: ${error.message}`)
+      return 0
+    }
+  }
+}
+
 // ==========================================
 // UTILITY FUNCTIONS
 // ==========================================

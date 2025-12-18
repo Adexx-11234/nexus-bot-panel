@@ -16,7 +16,7 @@ const logger = createComponentLogger("SOCKET_EXTENSIONS")
 
 /**
  * Load and process bot logo as thumbnail
- * Uses sharp to resize to 48x48 for WhatsApp thumbnails
+ * Uses sharp to resize to 200x200 for WhatsApp thumbnails (higher quality)
  */
 async function loadBotLogoThumbnail() {
   try {
@@ -32,13 +32,17 @@ async function loadBotLogoThumbnail() {
       if (fs.existsSync(imagePath)) {
         logger.debug(`Loading bot logo from: ${imagePath}`)
         
-        // Resize to 48x48 for thumbnail
+        // Resize to 200x200 for higher quality thumbnail
         const thumbnail = await sharp(imagePath)
-          .resize(48, 48, {
+          .resize(200, 200, {
             fit: 'cover',
-            position: 'center'
+            position: 'center',
+            kernel: sharp.kernel.lanczos3 // Better quality scaling
           })
-          .jpeg({ quality: 70 })
+          .jpeg({ 
+            quality: 95, // Higher quality
+            chromaSubsampling: '4:4:4' // Better color quality
+          })
           .toBuffer()
         
         // Convert to base64
@@ -133,6 +137,32 @@ function getFakeQuotedPresets() {
         message: {
           imageMessage: {
             caption: '*🤖 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - AI Assistant*',
+            jpegThumbnail: BOT_LOGO_THUMBNAIL
+          }
+        }
+      },
+
+      toolmenu: {
+        key: {
+          participant: '0@s.whatsapp.net',
+          remoteJid: '0@s.whatsapp.net'
+        },
+        message: {
+          imageMessage: {
+            caption: '*🔧 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Tool Center*',
+            jpegThumbnail: BOT_LOGO_THUMBNAIL
+          }
+        }
+      },
+
+      searchmenu: {
+        key: {
+          participant: '0@s.whatsapp.net',
+          remoteJid: '0@s.whatsapp.net'
+        },
+        message: {
+          imageMessage: {
+            caption: '*🔍 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Search Hub*',
             jpegThumbnail: BOT_LOGO_THUMBNAIL
           }
         }
@@ -241,6 +271,26 @@ function getFakeQuotedPresets() {
       },
       message: {
         conversation: '*🤖 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - AI Assistant*'
+      }
+    },
+
+    toolmenu: {
+      key: {
+        participant: '0@s.whatsapp.net',
+        remoteJid: '0@s.whatsapp.net'
+      },
+      message: {
+        conversation: '*🔧 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Tool Center*'
+      }
+    },
+
+    searchmenu: {
+      key: {
+        participant: '0@s.whatsapp.net',
+        remoteJid: '0@s.whatsapp.net'
+      },
+      message: {
+        conversation: '*🔍 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Search Hub*'
       }
     },
 

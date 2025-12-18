@@ -1,0 +1,105 @@
+import { createComponentLogger } from "../../utils/logger.js"
+import { ActivityQueries } from "../../database/query.js"
+import AdminChecker from "../../whatsapp/utils/admin-checker.js"
+
+const logger = createComponentLogger("LISTINACTIVE")
+
+export default {
+  name: "listinactive",
+  aliases: ["inactiveusers", "inactivemembers", "li"],
+  category: "groupmenu",
+  description: "Show inactive group members",
+  usage: "listinactive",
+  adminOnly: true,
+
+  async execute(sock, sessionId, args, m) {
+    if (!m.isGroup) {
+      await sock.sendMessage(m.chat, {
+        text: "❌ This command can only be used in groups!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
+      }, { quoted: m })
+      return
+    }
+
+    const adminChecker = new AdminChecker()
+    const isAdmin = await adminChecker.isGroupAdmin(sock, m.chat, m.sender)
+    
+    if (!isAdmin) {
+      await sock.sendMessage(m.chat, {
+        text: "❌ Only group admins can use this command!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
+      }, { quoted: m })
+      return
+    }
+
+    try {
+      // Get inactive members (compares current group members vs tracked activity)
+      const inactiveMembers = await ActivityQueries.getInactiveMembers(sock, m.chat)
+
+      if (!inactiveMembers || inactiveMembers.length === 0) {
+        await sock.sendMessage(m.chat, {
+          text: "🎉 All members are active! No inactive members found.\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
+        }, { quoted: m })
+        return
+      }
+
+      // Get group name
+      const groupMetadata = await sock.groupMetadata(m.chat).catch(() => null)
+      const groupName = groupMetadata?.subject || "This Group"
+
+      // Build message
+      let message = `😴 *INACTIVE MEMBERS - ${groupName}*\n`
+      message += `📊 Showing ${inactiveMembers.length} inactive members\n\n`
+
+      // Show max 30 members (to avoid huge messages)
+      const displayLimit = 30
+      const displayMembers = inactiveMembers.slice(0, displayLimit)
+
+      for (let i = 0; i < displayMembers.length; i++) {
+        const member = displayMembers[i]
+        const userNumber = member.user_jid.split("@")[0]
+        const userName = member.user_name || `User ${userNumber.slice(-4)}`
+        
+        const lastSeen = this.getRelativeTime(member.last_seen)
+        
+        message += `${i + 1}️⃣ *${userName}*\n`
+        message += `   📨 ${member.messages} messages\n`
+        message += `   ⏱️ Last seen: ${lastSeen}\n\n`
+      }
+
+      if (inactiveMembers.length > displayLimit) {
+        message += `... and ${inactiveMembers.length - displayLimit} more\n\n`
+      }
+
+      message += `━━━━━━━━━━━━━━━━━━━━━━\n`
+      message += `💡 Members who haven't sent messages\n`
+      message += `📅 Updated: ${new Date().toLocaleDateString()}\n\n`
+      message += `> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
+
+      await sock.sendMessage(m.chat, {
+        text: message
+      }, { quoted: m })
+
+    } catch (error) {
+      logger.error("Error in listinactive command:", error)
+      await sock.sendMessage(m.chat, {
+        text: "❌ Failed to fetch inactive members!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
+      }, { quoted: m })
+    }
+  },
+
+  getRelativeTime(timestamp) {
+    if (!timestamp) return "Never"
+
+    const now = new Date()
+    const then = new Date(timestamp)
+    const diffMs = now - then
+    const diffSeconds = Math.floor(diffMs / 1000)
+    const diffMinutes = Math.floor(diffSeconds / 60)
+    const diffHours = Math.floor(diffMinutes / 60)
+    const diffDays = Math.floor(diffHours / 24)
+
+    if (diffSeconds < 60) return "Just now"
+    if (diffMinutes < 60) return `${diffMinutes} min ago`
+    if (diffHours < 24) return `${diffHours} hr ago`
+    return `${diffDays} days ago`
+  }
+}

@@ -49,7 +49,7 @@ export class SessionManager {
     this.sessionEventHandlers = new SessionEventHandlers(this)
 
     this._startTrackingCleanup()
-
+    this._startFailedSessionRetry()
     logger.info("Session manager created (maxSessions: 200)")
     logger.info(`515 Flow: ${ENABLE_515_FLOW ? "ENABLED" : "DISABLED"}`)
   }
@@ -296,46 +296,92 @@ async initializeExistingSessions() {
   }
 }
 
-  /**
-   * Initialize a single session
-   * @private
-   */
-  async _initializeSession(sessionData) {
-    if (this.voluntarilyDisconnected.has(sessionData.sessionId)) {
+/**
+ * Initialize a single session
+ * @private
+ */
+async _initializeSession(sessionData) {
+  if (this.voluntarilyDisconnected.has(sessionData.sessionId)) {
+    return false
+  }
+
+  try {
+    // Check auth availability
+    const authAvailability = await this.connectionManager.checkAuthAvailability(sessionData.sessionId)
+
+    if (authAvailability.preferred === "none") {
+      // ✅ Mark session as needing attention - don't delete
+      logger.warn(`No auth available for ${sessionData.sessionId} - marking for manual reconnection`)
+      await this.storage.updateSession(sessionData.sessionId, {
+        isConnected: false,
+        connectionStatus: "auth_missing",
+        reconnectAttempts: (sessionData.reconnectAttempts || 0) + 1
+      })
       return false
     }
+
+    // Create session
+    const sock = await this.createSession(
+      sessionData.userId,
+      sessionData.phoneNumber,
+      {},
+      false,
+      sessionData.source || "telegram",
+      false,
+    )
+
+    if (!sock) {
+      logger.warn(`Failed to create socket for ${sessionData.sessionId}`)
+      await this.storage.updateSession(sessionData.sessionId, {
+        isConnected: false,
+        connectionStatus: "failed",
+        reconnectAttempts: (sessionData.reconnectAttempts || 0) + 1
+      })
+      return false
+    }
+
+    return true
+  } catch (error) {
+    logger.error(`Session initialization failed for ${sessionData.sessionId}:`, error)
+    await this.storage.updateSession(sessionData.sessionId, {
+      isConnected: false,
+      connectionStatus: "error",
+      reconnectAttempts: (sessionData.reconnectAttempts || 0) + 1
+    })
+    return false
+  }
+}
+
+/**
+ * ✅ NEW: Retry failed sessions periodically
+ */
+_startFailedSessionRetry() {
+  setInterval(async () => {
+    if (!this.isInitialized) return
 
     try {
-      // Check auth availability
-      const authAvailability = await this.connectionManager.checkAuthAvailability(sessionData.sessionId)
-
-      if (authAvailability.preferred === "none") {
-        await this._cleanupFailedInitialization(sessionData.sessionId)
-        return false
-      }
-
-      // Create session
-      const sock = await this.createSession(
-        sessionData.userId,
-        sessionData.phoneNumber,
-        {},
-        false,
-        sessionData.source || "telegram",
-        false, // Don't allow pairing during initialization
+      const sessions = await this.storage.getAllSessions()
+      const failedSessions = sessions.filter(s => 
+        !s.isConnected && 
+        s.connectionStatus !== "disconnected" &&
+        !this.voluntarilyDisconnected.has(s.sessionId) &&
+        !this.activeSockets.has(s.sessionId) &&
+        (s.reconnectAttempts || 0) < 10 // Stop after 10 attempts
       )
 
-      if (!sock) {
-        await this._cleanupFailedInitialization(sessionData.sessionId)
-        return false
+      if (failedSessions.length > 0) {
+        logger.info(`🔄 Retrying ${failedSessions.length} failed sessions...`)
+        
+        for (const sessionData of failedSessions.slice(0, 3)) { // Max 3 at a time
+          await this._initializeSession(sessionData)
+          await new Promise(resolve => setTimeout(resolve, 2000))
+        }
       }
-
-      return true
     } catch (error) {
-      logger.error(`Session initialization failed for ${sessionData.sessionId}:`, error)
-      await this._cleanupFailedInitialization(sessionData.sessionId)
-      return false
+      logger.error("Failed session retry error:", error)
     }
-  }
+  }, 300000) // Every 5 minutes
+}
 
   /**
    * Get active sessions from database - use coordinator, not MongoDB directly
@@ -611,6 +657,13 @@ for (const [sessionId, sock] of this.activeSockets) {
     try {
       logger.info(`Disconnecting session ${sessionId} (force: ${forceCleanup})`)
 
+      // ✅ CRITICAL: Cancel any active reconnection attempts
+    const eventDispatcher = this.getEventDispatcher()
+    const connectionHandler = eventDispatcher?.connectionEventHandler
+    if (connectionHandler) {
+      connectionHandler.cancelReconnection(sessionId)
+    }
+
       const sessionData = await this.storage.getSession(sessionId)
       const isWebUser = sessionData?.source === "web"
 
@@ -658,10 +711,22 @@ for (const [sessionId, sock] of this.activeSockets) {
    */
   async _cleanupSocket(sessionId, sock) {
     try {
+
+      if (sock?.ev?.isBuffering?.()) {
+      try {
+        sock.ev.flush()
+        logger.debug(`📤 Event buffer flushed for ${sessionId}`)
+      } catch (flushError) {
+        logger.warn(`Failed to flush buffer for ${sessionId}:`, flushError.message)
+      }
+    }
+    
       // ✅ Cleanup session store first
       if (sock._storeCleanup) {
         sock._storeCleanup()
       }
+
+      
 
       // Delete store from config - FIXED IMPORT PATH
       const { deleteSessionStore } = await import("../core/index.js") // ✅ This is CORRECT

@@ -27,7 +27,9 @@ export {
   clearGroupCache,
   clearAllGroupCache,
   getCacheStats,
-  updateSessionLastMessage
+  updateSessionLastMessage,
+  ensureCacheableKeys,
+  wrapSocketForDecryptionErrors
 } from '../../config/baileys.js'
 
 // No logging needed - this is just a re-export module

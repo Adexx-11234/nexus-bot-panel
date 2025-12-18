@@ -145,7 +145,7 @@ export class GroupNotifier {
    */
 async _sendEnhancedMessage(sock, groupJid, messageData) {
   try {
-    const { message, fakeQuotedMessage, participant } = messageData
+    const { message, fakeQuotedMessage, participant, canvasImage } = messageData
 
     if (!message || !participant) {
       logger.error('Missing required fields:', { hasMessage: !!message, hasParticipant: !!participant })
@@ -157,7 +157,6 @@ async _sendEnhancedMessage(sock, groupJid, messageData) {
       throw new Error('Invalid fakeQuotedMessage structure')
     }
 
-    // NO optional chaining - direct property access
     const contextInfo = {
       mentionedJid: [participant],
       quotedMessage: fakeQuotedMessage.message,
@@ -168,12 +167,23 @@ async _sendEnhancedMessage(sock, groupJid, messageData) {
       quotedParticipant: fakeQuotedMessage.key.participant || participant
     }
 
-    const messageOptions = {
-      text: message,
-      contextInfo: contextInfo
+    // If canvas image exists (only for welcome), send image with caption
+    if (canvasImage) {
+      const messageOptions = {
+        image: canvasImage,
+        caption: message,
+        contextInfo: contextInfo
+      }
+      await sock.sendMessage(groupJid, messageOptions)
+    } else {
+      // For other actions (goodbye, promote, demote) - send text only
+      const messageOptions = {
+        text: message,
+        contextInfo: contextInfo
+      }
+      await sock.sendMessage(groupJid, messageOptions)
     }
 
-    await sock.sendMessage(groupJid, messageOptions)
     logger.info(`Enhanced message sent for ${participant}`)
 
   } catch (error) {

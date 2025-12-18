@@ -152,29 +152,37 @@ export class EventDispatcher {
     })
   }
 
-  /**
+ /**
    * Setup group event listeners
    */
   _setupGroupEvents(sock, sessionId) {
     sock.ev.on(EventTypes.GROUPS_UPSERT, async (groups) => {
-     // recordSessionActivity(sessionId)
       this.groupHandler
         .handleGroupsUpsert(sock, sessionId, groups)
         .catch((err) => logger.error(`Error in GROUPS_UPSERT for ${sessionId}:`, err))
     })
 
     sock.ev.on(EventTypes.GROUPS_UPDATE, async (updates) => {
-    //  recordSessionActivity(sessionId)
       this.groupHandler
         .handleGroupsUpdate(sock, sessionId, updates)
         .catch((err) => logger.error(`Error in GROUPS_UPDATE for ${sessionId}:`, err))
     })
 
     sock.ev.on(EventTypes.GROUP_PARTICIPANTS_UPDATE, async (update) => {
-    //  recordSessionActivity(sessionId)
       this.groupHandler
         .handleParticipantsUpdate(sock, sessionId, update)
         .catch((err) => logger.error(`Error in GROUP_PARTICIPANTS_UPDATE for ${sessionId}:`, err))
+      
+      // ✅ ACTIVITY TRACKING: Detect when users leave/are removed
+      if (update.action === 'remove' && update.participants) {
+        const { ActivityQueries } = await import("../../database/query.js")
+        
+        for (const userJid of update.participants) {
+          ActivityQueries.setUserLeftGroup(update.id, userJid).catch((err) => {
+            logger.debug(`Failed to mark user as left: ${err.message}`)
+          })
+        }
+      }
     })
   }
 

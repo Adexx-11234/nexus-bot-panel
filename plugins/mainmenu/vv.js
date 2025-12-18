@@ -1,5 +1,5 @@
 // Fixed VV Command Plugin - Streamlined with proper timestamp handling
-import { ViewOnceHandler } from "../../whatsapp/utils/viewonce-handler.js"
+import { ViewOnceHandler } from "../../whatsapp/index.js"
 
 export default {
   name: "ViewOnce Retrieval",
@@ -7,7 +7,7 @@ export default {
   commands: ["vv"],
   category: "both",
   adminOnly: false,
-  usage: `• Reply to a ViewOnce message with \`.vv\` to retrieve it\n• \`.vv dm\` - Send to your DM instead`,
+  usage: `• Reply to a ViewOnce message with \`.vv\` to retrieve it`,
 
   async execute(sock, sessionId, args, m) {
     try {
@@ -19,7 +19,7 @@ export default {
 
       if (!detectionResult.detected) {
         return {
-          response: "❌ Please reply to a ViewOnce message with .vv to retrieve it.\n\n• `.vv` - Retrieve to current chat\n• `.vv dm` - Send to your DM",
+          response: "❌ Please reply to a ViewOnce message with .vv to retrieve it.\n\n• `.vv` - Retrieve to current chat",
           mentions: [],
         }
       }
@@ -78,13 +78,11 @@ export default {
       const contextMessage = 
         `🔓 *ViewOnce Retrieved* 🔓\n\n` +
         `👤 Retrieved by: ${senderName}\n` +
-        `📱 Type: ${detectionResult.mediaType?.toUpperCase() || "Unknown"}\n` +
-        `🕒 Original: ${timestamp}\n` +
-        `⚠️ Retrieved using .vv command`
+        `📱 Type: ${detectionResult.mediaType?.toUpperCase() || "Unknown"}`
 
-      await sock.sendMessage(chatJid, {
+   /*   await sock.sendMessage(chatJid, {
         text: contextMessage
-      }, { quoted: originalMessage })
+      }, { quoted: originalMessage })*/
 
     } catch (error) {
       console.error("[VV] Error sending context message:", error.message)

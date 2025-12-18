@@ -1,5 +1,5 @@
 import NodeCache from "node-cache"
-import { makeWASocket, Browsers } from "@whiskeysockets/baileys"
+import { makeWASocket, Browsers, makeCacheableSignalKeyStore } from "@whiskeysockets/baileys"
 import { createFileStore, deleteFileStore, getFileStore } from "../whatsapp/index.js"
 import { logger } from "../utils/logger.js"
 import pino from "pino"
@@ -40,11 +40,12 @@ export const baileysConfig = {
   logger: pino({ level: "silent" }),
   printQRInTerminal: false,
   msgRetryCounterMap: {},
-  retryRequestDelayMs: 250,
+  retryRequestDelayMs: 350,
   markOnlineOnConnect: false,
   getMessage: defaultGetMessage,
   // version: [2, 3000, 1025190524], // remove comments if connection open but didn't connect on WhatsApp
   emitOwnEvents: true,
+  shouldIgnoreJid: (jid) => false,
   // Remove mentionedJid to avoid issues
   patchMessageBeforeSending: (msg) => {
     if (msg.contextInfo) delete msg.contextInfo.mentionedJid;
@@ -52,6 +53,8 @@ export const baileysConfig = {
   },
   appStateSyncInitialTimeoutMs: 10000,
   generateHighQualityLinkPreview: true,
+  syncFullHistory: false,
+  defaultQueryTimeoutMs: 60000,
   // Don't send ACKs to avoid potential bans
   sendAcks: false,
 }
@@ -112,6 +115,104 @@ export async function deleteSessionStore(sessionId) {
  */
 export function updateSessionLastMessage(sessionId) {
   sessionLastMessage.set(sessionId, Date.now())
+}
+
+
+/**
+ * ✅ CRITICAL: Always ensure keys are wrapped properly
+ */
+export function ensureCacheableKeys(authState) {
+  if (!authState || !authState.keys) {
+    return authState
+  }
+
+  // Check if already wrapped (has required methods)
+  const hasRequiredMethods = 
+    typeof authState.keys.get === 'function' &&
+    typeof authState.keys.set === 'function'
+
+  if (!hasRequiredMethods) {
+    logger.warn('Auth keys not properly wrapped, fixing...')
+    authState.keys = makeCacheableSignalKeyStore(
+      authState.keys,
+      pino({ level: 'silent' })
+    )
+  }
+
+  return authState
+}
+
+// ==================== ENCRYPTION/DECRYPTION ERROR PATTERNS ====================
+const DECRYPTION_ERROR_PATTERNS = [
+  // Standard decryption errors
+  'decrypt', 'Could not find', 'message key',
+  
+  // libsignal specific errors
+  'SessionEntry', 'Bad MAC', 'session_cipher', 'libsignal',
+  
+  // Session structure errors
+  '_chains', 'registrationId', 'currentRatchet', 'ephemeralKeyPair',
+  'indexInfo', 'pendingPreKey', 'baseKey', 'remoteIdentityKey',
+  
+  // Key errors
+  'pubKey', 'privKey', 'lastRemoteEphemeralKey', 'previousCounter',
+  'rootKey', 'baseKeyType', 'signedKeyId', 'preKeyId', 'chainKey',
+  'chainType', 'messageKeys',
+  
+  // Session state errors
+  'used:', 'created:', 'closed:', 'Closing',
+  
+  // Buffer errors related to encryption
+  '<Buffer'
+]
+
+/**
+ * Check if error is related to encryption/decryption
+ */
+function isEncryptionError(error) {
+  if (!error) return false
+  
+  const errorMessage = error.message || error.toString() || ''
+  const errorStack = error.stack || ''
+  const combinedError = `${errorMessage} ${errorStack}`.toLowerCase()
+  
+  return DECRYPTION_ERROR_PATTERNS.some(pattern => 
+    combinedError.includes(pattern.toLowerCase())
+  )
+}
+
+/**
+ * ✅ CRITICAL: Wrap socket to catch decryption errors
+ */
+export function wrapSocketForDecryptionErrors(sock, sessionId) {
+  const originalEmit = sock.ev.emit.bind(sock.ev)
+  
+  sock.ev.emit = function(event, ...args) {
+    try {
+      return originalEmit(event, ...args)
+    } catch (error) {
+      // ✅ Catch ALL encryption/decryption related errors
+      if (isEncryptionError(error)) {
+        logger.warn(`Encryption error for ${sessionId} on ${event}:`, error.message)
+        
+        // ✅ CRITICAL: Request message retry from WhatsApp
+        if (event === 'messages.upsert' && args[0]?.messages) {
+          const msg = args[0].messages[0]
+          if (msg?.key && sock.sendRetryRequest) {
+            logger.info(`Requesting retry for message ${msg.key.id}`)
+            sock.sendRetryRequest(msg.key)
+              .catch(err => logger.debug(`Retry request failed: ${err.message}`))
+          }
+        }
+        
+        return // Don't propagate error
+      }
+      
+      throw error // Re-throw non-encryption errors
+    }
+  }
+  
+  return sock
 }
 
 /**

@@ -264,7 +264,7 @@ async _checkIfInChannel(sock, sessionId) {
         await this._handleConnectionClose(sock, sessionId, lastDisconnect, callbacks)
       } else if (connection === "connecting") {
         await this.sessionManager.storage.updateSession(sessionId, {
-          connectionStatus: "connecting",
+          connectionStatus: "connected",
         })
       }
     } catch (error) {
