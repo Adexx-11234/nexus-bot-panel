@@ -1,16 +1,23 @@
 import { WAProto as proto, initAuthCreds } from "@whiskeysockets/baileys"
 import { createComponentLogger } from "../../utils/logger.js"
+import fs from "fs/promises"
+import path from "path"
 
 const logger = createComponentLogger("AUTH_STATE")
 
-// ==================== BUFFER SERIALIZATION ====================
+// ==================== CONFIGURATION ====================
+const CONFIG = {
+  CACHE_DURATION: 2 * 60 * 60 * 1000, // 2 hours
+  FILE_FALLBACK_DIR: "./auth_fallback",
+  MAX_CACHE_SIZE: 50 * 1024 * 1024, // 50MB
+  SYNC_INTERVAL: 60000, // 1 minute
+}
+
+// ==================== SERIALIZATION ====================
 const BufferJSON = {
   replacer: (k, value) => {
     if (Buffer.isBuffer(value) || value instanceof Uint8Array || value?.type === "Buffer") {
-      return {
-        type: "Buffer",
-        data: Buffer.from(value?.data || value).toString("base64"),
-      }
+      return { type: "Buffer", data: Buffer.from(value?.data || value).toString("base64") }
     }
     return value
   },
@@ -23,821 +30,436 @@ const BufferJSON = {
   },
 }
 
-// ==================== IN-MEMORY CACHE ====================
-const sessionCaches = new Map() // sessionId -> { cache: Map, size: number, preKeysLoaded: boolean }
-const writeQueue = new Map()
-
-// Cache configuration
-const MAX_CACHE_PER_SESSION = 500 * 1024 // 500KB per session
-const MAX_TOTAL_CACHE = 50 * 1024 * 1024 // 50MB total
-const MAX_CACHE_AGE_NON_CRITICAL = 600000 // 10 minutes
-const CACHE_CLEANUP_INTERVAL = 300000 // 5 minutes
-
-let totalCacheSize = 0
-
-// ==================== HELPER FUNCTIONS ====================
-const getDataSize = (data) => {
-  try {
-    return JSON.stringify(data).length
-  } catch {
-    return 0
+// ==================== CACHE MANAGER ====================
+class CacheManager {
+  constructor(sessionId) {
+    this.sessionId = sessionId
+    this.cache = new Map() // fileName -> { data, timestamp, needsSync }
+    this.size = 0
+    this.startTime = Date.now()
+    this.useFileFallback = false
+    this.fallbackDir = path.join(CONFIG.FILE_FALLBACK_DIR, sessionId)
   }
-}
 
-const getSessionCache = (sessionId) => {
-  if (!sessionCaches.has(sessionId)) {
-    sessionCaches.set(sessionId, {
-      cache: new Map(),
-      size: 0,
-      lastAccess: Date.now(),
-      preKeysLoaded: false
-    })
+  async init() {
+    await fs.mkdir(this.fallbackDir, { recursive: true })
   }
-  
-  const sessionCache = sessionCaches.get(sessionId)
-  sessionCache.lastAccess = Date.now()
-  
-  return sessionCache
-}
 
-// ==================== MONGODB HEALTH CHECK ====================
-const checkMongoHealth = async (collection) => {
-  try {
-    if (!collection) {
+  get(fileName) {
+    return this.cache.get(fileName)?.data
+  }
+
+  set(fileName, data) {
+    const oldSize = this.cache.has(fileName) ? JSON.stringify(this.cache.get(fileName).data).length : 0
+    const newSize = JSON.stringify(data).length
+    
+    this.size = this.size - oldSize + newSize
+    this.cache.set(fileName, { data, timestamp: Date.now(), needsSync: true })
+  }
+
+  has(fileName) {
+    return this.cache.has(fileName)
+  }
+
+  delete(fileName) {
+    if (this.cache.has(fileName)) {
+      const size = JSON.stringify(this.cache.get(fileName).data).length
+      this.size -= size
+      this.cache.delete(fileName)
+    }
+  }
+
+  // Get all files that need MongoDB sync
+  getPendingSync() {
+    const pending = []
+    for (const [fileName, data] of this.cache.entries()) {
+      if (data.needsSync) {
+        pending.push({ fileName, data: data.data })
+      }
+    }
+    return pending
+  }
+
+  // Mark file as synced to MongoDB
+  markSynced(fileName) {
+    const cached = this.cache.get(fileName)
+    if (cached) cached.needsSync = false
+  }
+
+  // Check if we should switch to file fallback (2 hours cache-only)
+  shouldUseFileFallback() {
+    return Date.now() - this.startTime > CONFIG.CACHE_DURATION
+  }
+
+  // Save entire cache to file system
+  async saveToFile() {
+    try {
+      for (const [fileName, data] of this.cache.entries()) {
+        const filePath = path.join(this.fallbackDir, fileName)
+        await fs.writeFile(filePath, JSON.stringify(data.data, BufferJSON.replacer), "utf8")
+      }
+      this.useFileFallback = true
+      logger.info(`[${this.sessionId}] ✅ Cache saved to file fallback (${this.cache.size} files)`)
+      return true
+    } catch (error) {
+      logger.error(`[${this.sessionId}] File fallback save failed: ${error.message}`)
       return false
     }
-    
-    // FIXED: Use find().limit(1).toArray() instead of findOne().limit()
-    await Promise.race([
-      collection.find({}).limit(1).toArray(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Health check timeout')), 20000))
-    ])
-    
-    return true
-  } catch (error) {
-    // Only log every 60 seconds to avoid spam
-    if (!checkMongoHealth._lastError || Date.now() - checkMongoHealth._lastError > 60000) {
-      logger.warn(`[MongoDB] Health check failed: ${error.message}`)
-      checkMongoHealth._lastError = Date.now()
-    }
-    return false
-  }
-}
-
-// ==================== CACHE CLEANUP ====================
-const cleanupSessionCache = (sessionId) => {
-  const sessionCache = sessionCaches.get(sessionId)
-  if (!sessionCache) return
-
-  const now = Date.now()
-  let cleaned = 0
-
-  for (const [key, data] of sessionCache.cache.entries()) {
-    const isCritical = 
-      key === 'creds.json' || 
-      key.includes('session-') || 
-      key.includes('pre-key-') ||
-      key.includes('app-state-sync')
-    
-    if (!isCritical && data.timestamp && now - data.timestamp > MAX_CACHE_AGE_NON_CRITICAL) {
-      const size = getDataSize(data.data)
-      sessionCache.size -= size
-      totalCacheSize -= size
-      sessionCache.cache.delete(key)
-      cleaned++
-    }
   }
 
-  if (sessionCache.size > MAX_CACHE_PER_SESSION) {
-    const entries = Array.from(sessionCache.cache.entries())
-      .filter(([key]) => {
-        return key !== 'creds.json' && 
-               !key.includes('session-') && 
-               !key.includes('pre-key-') &&
-               !key.includes('app-state-sync')
-      })
-      .sort((a, b) => (a[1].timestamp || 0) - (b[1].timestamp || 0))
-
-    const toRemove = Math.min(10, entries.length)
-    
-    for (let i = 0; i < toRemove; i++) {
-      const [key, data] = entries[i]
-      const size = getDataSize(data.data)
-      sessionCache.size -= size
-      totalCacheSize -= size
-      sessionCache.cache.delete(key)
-      cleaned++
-    }
-  }
-
-  if (cleaned > 0) {
-    logger.debug(`[Cache] Cleaned ${cleaned} non-critical entries for ${sessionId}`)
-  }
-}
-
-const cleanupCache = (sessionId = null, force = false) => {
-  if (sessionId) {
-    const sessionCache = sessionCaches.get(sessionId)
-    if (sessionCache) {
-      if (force) {
-        totalCacheSize -= sessionCache.size
-        sessionCaches.delete(sessionId)
-      } else {
-        const criticalKeys = Array.from(sessionCache.cache.keys()).filter(key => {
-          return key === 'creds.json' || 
-                 key.includes('session-') || 
-                 key.includes('pre-key-') ||
-                 key.includes('app-state-sync')
-        })
-        
-        sessionCache.cache.forEach((data, key) => {
-          if (!criticalKeys.includes(key)) {
-            const size = getDataSize(data.data)
-            sessionCache.size -= size
-            totalCacheSize -= size
-            sessionCache.cache.delete(key)
-          }
-        })
-      }
-    }
-
-    for (const [key, timeout] of writeQueue) {
-      if (key.startsWith(`${sessionId}:`)) {
-        clearTimeout(timeout)
-        writeQueue.delete(key)
-      }
-    }
-  } else {
-    for (const [sessionId] of sessionCaches.entries()) {
-      cleanupSessionCache(sessionId)
-    }
-  }
-}
-
-setInterval(() => cleanupCache(), CACHE_CLEANUP_INTERVAL)
-
-// ==================== MONGODB OPERATIONS ====================
-const executeMongoOperation = async (operation, operationName, sessionId) => {
-  const startTime = Date.now()
-  
-  try {
-    const result = await Promise.race([
-      operation(),
-      new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Operation timeout')), 2000) // 2 sec timeout
-      )
-    ])
-    
-    const duration = Date.now() - startTime
-    
-    if (duration > 1500) {
-      logger.warn(`[MongoDB] ${operationName} took ${duration}ms for ${sessionId}`)
-    }
-    
-    return result
-  } catch (error) {
-    if (!operationName.startsWith('read:') && error.message !== 'Operation timeout') {
-      logger.error(`[MongoDB] ${operationName} failed for ${sessionId}: ${error.message}`)
-    }
-    return null
-  }
-}
-
-// ==================== CRITICAL: PRE-KEY SYNC ====================
-const preloadAllKeys = async (collection, sessionId, mongoHealthy) => {
-  // FIXED: Always try to check MongoDB health again before preloading
-  if (!mongoHealthy) {
+  // Load from file system
+  async loadFromFile(fileName) {
     try {
-      mongoHealthy = await checkMongoHealth(collection)
+      const filePath = path.join(this.fallbackDir, fileName)
+      const content = await fs.readFile(filePath, "utf8")
+      return JSON.parse(content, BufferJSON.reviver)
     } catch (error) {
-      logger.debug(`[PreLoad] Health recheck failed for ${sessionId}`)
+      return null
     }
   }
 
-  if (!mongoHealthy) {
-    logger.debug(`[PreLoad] MongoDB not healthy, skipping for ${sessionId}`)
-    return
-  }
-
-  const sessionCache = getSessionCache(sessionId)
-  
-  if (sessionCache.preKeysLoaded) {
-    logger.debug(`[PreLoad] Already loaded for ${sessionId}`)
-    return
-  }
-
-  try {
-    logger.info(`[PreLoad] Loading ALL keys for ${sessionId}...`)
-    const startTime = Date.now()
-    
-    const allDocs = await executeMongoOperation(
-      async () => {
-        return await collection.find(
-          { sessionId: sessionId },
-          { projection: { filename: 1, datajson: 1 } }
-        ).toArray()
-      },
-      'preload',
-      sessionId
-    )
-    
-    if (!allDocs || allDocs.length === 0) {
-      logger.warn(`[PreLoad] No keys found for ${sessionId} - fresh session`)
-      sessionCache.preKeysLoaded = true
-      return
+  // Save single file to fallback
+  async saveFileToFallback(fileName, data) {
+    try {
+      const filePath = path.join(this.fallbackDir, fileName)
+      await fs.writeFile(filePath, JSON.stringify(data, BufferJSON.replacer), "utf8")
+      return true
+    } catch (error) {
+      logger.error(`[${this.sessionId}] Failed to save ${fileName} to fallback: ${error.message}`)
+      return false
     }
-    
-    let loadedCount = 0
-    let totalSize = 0
-    
-    for (const doc of allDocs) {
-      try {
-        const fileName = doc.filename
-        const data = JSON.parse(doc.datajson, BufferJSON.reviver)
-        
-        if (data) {
-          const size = getDataSize(data)
-          
-          sessionCache.cache.set(fileName, { 
-            data, 
-            timestamp: null,
-            needsSync: false
-          })
-          
-          sessionCache.size += size
-          totalCacheSize += size
-          totalSize += size
-          loadedCount++
-        }
-      } catch (error) {
-        logger.error(`[PreLoad] Failed to parse ${doc.filename}: ${error.message}`)
-      }
-    }
-    
-    sessionCache.preKeysLoaded = true
-    const duration = Date.now() - startTime
-    
-    logger.info(`[PreLoad] ✅ Loaded ${loadedCount} keys in ${duration}ms (${(totalSize/1024).toFixed(1)}KB) for ${sessionId}`)
-    
-  } catch (error) {
-    logger.error(`[PreLoad] Failed for ${sessionId}: ${error.message}`)
   }
 }
 
-// ==================== PERIODIC WRITE RETRY ====================
-let writeRetryInterval = null
+// ==================== GLOBAL CACHE STORAGE ====================
+const sessionCaches = new Map() // sessionId -> CacheManager
 
-/**
- * ✅ NEW: Background worker to retry failed writes
- */
-const startWriteRetryWorker = (collection, sessionId) => {
-  // Only one worker per session
-  const workerKey = `retry_worker_${sessionId}`
-  
-  if (writeRetryInterval && writeRetryInterval[workerKey]) {
-    return
+// ==================== SYNC WORKER ====================
+class SyncWorker {
+  constructor(collection, sessionId, cacheManager) {
+    this.collection = collection
+    this.sessionId = sessionId
+    this.cache = cacheManager
+    this.interval = null
+    this.isRunning = false
   }
 
-  if (!writeRetryInterval) {
-    writeRetryInterval = {}
+  start() {
+    if (this.interval) return
+    
+    this.interval = setInterval(() => this.sync(), CONFIG.SYNC_INTERVAL)
+    logger.debug(`[${this.sessionId}] Sync worker started`)
   }
 
-  writeRetryInterval[workerKey] = setInterval(async () => {
-    const sessionCache = sessionCaches.get(sessionId)
-    if (!sessionCache) {
-      // Session cache gone, stop worker
-      clearInterval(writeRetryInterval[workerKey])
-      delete writeRetryInterval[workerKey]
-      return
+  stop() {
+    if (this.interval) {
+      clearInterval(this.interval)
+      this.interval = null
+      logger.debug(`[${this.sessionId}] Sync worker stopped`)
     }
+  }
 
-    // Find entries that need sync
-    const needsSync = []
-    for (const [fileName, data] of sessionCache.cache.entries()) {
-      if (data.needsSync) {
-        needsSync.push({ fileName, data: data.data })
+  async sync() {
+    if (this.isRunning) return
+    this.isRunning = true
+
+    try {
+      // Check if we should move to file fallback
+      if (!this.cache.useFileFallback && this.cache.shouldUseFileFallback()) {
+        logger.warn(`[${this.sessionId}] 2 hours elapsed - switching to file fallback`)
+        await this.cache.saveToFile()
+        this.stop() // Stop syncing to MongoDB
+        return
       }
-    }
 
-    if (needsSync.length === 0) {
-      return
-    }
-
-    // Check MongoDB health
-    const isHealthy = await checkMongoHealth(collection)
-    if (!isHealthy) {
-      const criticalCount = needsSync.filter(item => 
-        item.fileName === 'creds.json' || 
-        item.fileName.includes('session-') || 
-        item.fileName.includes('pre-key-')
-      ).length
-      
-      if (criticalCount > 0) {
-        logger.warn(`[Retry Worker] ${sessionId}: ${criticalCount} critical files pending sync (MongoDB unhealthy)`)
+      // If already using file fallback, just save to files
+      if (this.cache.useFileFallback) {
+        const pending = this.cache.getPendingSync()
+        for (const { fileName, data } of pending) {
+          await this.cache.saveFileToFallback(fileName, data)
+          this.cache.markSynced(fileName)
+        }
+        return
       }
-      return
-    }
 
-    logger.info(`[Retry Worker] ${sessionId}: Syncing ${needsSync.length} pending files to MongoDB`)
+      // Try MongoDB sync
+      const pending = this.cache.getPendingSync()
+      if (pending.length === 0) return
 
-    // Attempt to sync
-    let syncedCount = 0
-    let failedCount = 0
+      // Always return true for health (as requested)
+      const isHealthy = true
 
-    for (const { fileName, data } of needsSync) {
-      try {
-        await Promise.race([
-          (async () => {
-            const query = { filename: fixFileName(fileName), sessionId: sessionId }
-            const update = {
+      if (!isHealthy) return
+
+      let synced = 0
+      for (const { fileName, data } of pending) {
+        try {
+          await this.collection.updateOne(
+            { filename: this.fixFileName(fileName), sessionId: this.sessionId },
+            {
               $set: {
-                filename: fixFileName(fileName),
-                sessionId: sessionId,
+                filename: this.fixFileName(fileName),
+                sessionId: this.sessionId,
                 datajson: JSON.stringify(data, BufferJSON.replacer),
                 updatedAt: new Date(),
               },
-            }
-            await collection.updateOne(query, update, { upsert: true })
-            
-            // Mark as synced
-            const cached = sessionCache.cache.get(fileName)
-            if (cached) {
-              cached.needsSync = false
-            }
-            
-            syncedCount++
-          })(),
-          new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Sync timeout')), 10000)
+            },
+            { upsert: true }
           )
-        ])
-      } catch (error) {
-        failedCount++
-        
-        // Log only critical file failures
-        const isCritical = fileName === 'creds.json' || 
-                          fileName.includes('session-') || 
-                          fileName.includes('pre-key-')
-        
-        if (isCritical) {
-          logger.error(`[Retry Worker] Failed to sync ${fileName}: ${error.message}`)
+          this.cache.markSynced(fileName)
+          synced++
+        } catch (error) {
+          // If sync fails, save to file fallback
+          await this.cache.saveFileToFallback(fileName, data)
         }
       }
+
+      if (synced > 0) {
+        logger.debug(`[${this.sessionId}] Synced ${synced}/${pending.length} files to MongoDB`)
+      }
+    } catch (error) {
+      logger.error(`[${this.sessionId}] Sync error: ${error.message}`)
+    } finally {
+      this.isRunning = false
     }
+  }
 
-    if (syncedCount > 0) {
-      logger.info(`[Retry Worker] ${sessionId}: ✅ Synced ${syncedCount}/${needsSync.length} files${failedCount > 0 ? ` (${failedCount} failed)` : ''}`)
-    }
-
-  }, 30000) // Run every 30 seconds
-}
-
-/**
- * ✅ NEW: Stop retry worker for a session
- */
-const stopWriteRetryWorker = (sessionId) => {
-  const workerKey = `retry_worker_${sessionId}`
-  
-  if (writeRetryInterval && writeRetryInterval[workerKey]) {
-    clearInterval(writeRetryInterval[workerKey])
-    delete writeRetryInterval[workerKey]
-    logger.debug(`[Retry Worker] Stopped for ${sessionId}`)
+  fixFileName(file) {
+    return file?.replace(/\//g, "__")?.replace(/:/g, "-") || ""
   }
 }
 
-// ==================== Fix fixFileName to be accessible ====================
-const fixFileName = (file) => file?.replace(/\//g, "__")?.replace(/:/g, "-") || ""
-
-// ==================== AUTH STATE IMPLEMENTATION ====================
+// ==================== MAIN AUTH STATE ====================
 export const useMongoDBAuthState = async (collection, sessionId, isPairing = false) => {
-  if (!sessionId || !sessionId.startsWith("session_")) {
+  if (!sessionId?.startsWith("session_")) {
     throw new Error(`Invalid sessionId: ${sessionId}`)
+  }
+
+  // Get or create cache manager
+  let cacheManager = sessionCaches.get(sessionId)
+  if (!cacheManager) {
+    cacheManager = new CacheManager(sessionId)
+    await cacheManager.init()
+    sessionCaches.set(sessionId, cacheManager)
   }
 
   const fixFileName = (file) => file?.replace(/\//g, "__")?.replace(/:/g, "-") || ""
 
-  // FIXED: Properly check MongoDB health with timeout
-  let mongoHealthy = false
-  try {
-    mongoHealthy = await Promise.race([
-      checkMongoHealth(collection),
-      new Promise(resolve => setTimeout(() => resolve(false), 3000))
-    ])
-  } catch (error) {
-    logger.debug(`[${sessionId}] Health check failed: ${error.message}`)
-    mongoHealthy = false
-  }
-  
-  if (!mongoHealthy) {
-    logger.warn(`[${sessionId}] MongoDB not available - using cache-only mode`)
-  } else {
-    logger.info(`[${sessionId}] MongoDB is healthy and available`)
-  }
-
-  startWriteRetryWorker(collection, sessionId)
-
-  /**
-   * ✅ ENHANCED: Read with connection validation
-   */
+  // ==================== READ DATA ====================
   const readData = async (fileName) => {
-    const isCriticalFile = 
-      fileName === "creds.json" ||
-      fileName.includes('session-') || 
-      fileName.includes('pre-key-') ||
-      fileName.includes('app-state-sync')
-    
-    const sessionCache = getSessionCache(sessionId)
-    
-    // Check cache first
-    if (sessionCache.cache.has(fileName)) {
-      const cached = sessionCache.cache.get(fileName)
-      
-      if (isCriticalFile) {
-        return cached.data
-      }
-      
-      if (cached.timestamp && Date.now() - cached.timestamp < MAX_CACHE_AGE_NON_CRITICAL) {
-        return cached.data
-      }
+    // 1. Check cache first
+    if (cacheManager.has(fileName)) {
+      return cacheManager.get(fileName)
     }
 
-    // Check MongoDB health before attempting read
-    const isHealthy = await checkMongoHealth(collection)
-    if (!isHealthy) {
-      // Return stale cache if available
-      if (sessionCache.cache.has(fileName)) {
-        const staleData = sessionCache.cache.get(fileName).data
-        logger.debug(`[Read] Using stale cache for ${fileName} (MongoDB unavailable)`)
-        return staleData
+    // 2. If using file fallback, load from file
+    if (cacheManager.useFileFallback) {
+      const data = await cacheManager.loadFromFile(fileName)
+      if (data) {
+        cacheManager.set(fileName, data)
+        cacheManager.markSynced(fileName) // Already in file
       }
-      return null
+      return data
     }
 
-    // Try MongoDB
-    const result = await executeMongoOperation(
-      async () => {
-        return await collection.findOne(
-          { filename: fixFileName(fileName), sessionId: sessionId },
-          { projection: { datajson: 1 } }
-        )
-      },
-      `read:${fileName}`,
-      sessionId
-    )
+    // 3. Try MongoDB (always assume healthy as requested)
+    try {
+      const result = await collection.findOne(
+        { filename: fixFileName(fileName), sessionId },
+        { projection: { datajson: 1 } }
+      )
 
-    if (result) {
-      try {
+      if (result) {
         const data = JSON.parse(result.datajson, BufferJSON.reviver)
-
-        if (data) {
-          const size = getDataSize(data)
-
-          const oldSize = sessionCache.cache.has(fileName) 
-            ? getDataSize(sessionCache.cache.get(fileName).data) 
-            : 0
-          
-          sessionCache.size = sessionCache.size - oldSize + size
-          totalCacheSize = totalCacheSize - oldSize + size
-          
-          sessionCache.cache.set(fileName, { 
-            data, 
-            timestamp: isCriticalFile ? null : Date.now(),
-            needsSync: false
-          })
-        }
-
+        cacheManager.set(fileName, data)
+        cacheManager.markSynced(fileName) // Already in MongoDB
         return data
-      } catch (parseError) {
-        logger.error(`[Parse Error] ${sessionId}:${fileName}: ${parseError.message}`)
+      }
+    } catch (error) {
+      // MongoDB failed, try file fallback
+      const data = await cacheManager.loadFromFile(fileName)
+      if (data) {
+        cacheManager.set(fileName, data)
+        return data
       }
     }
-    
-    // Return stale cache if available
-    if (sessionCache.cache.has(fileName)) {
-      return sessionCache.cache.get(fileName).data
-    }
-    
+
     return null
   }
 
-  /**
- * ✅ ENHANCED: Write with retry logic and connection validation
- */
-const writeData = async (datajson, fileName) => {
-  const isCriticalFile = 
-    fileName === "creds.json" ||
-    fileName.includes('session-') || 
-    fileName.includes('pre-key-') ||
-    fileName.includes('app-state-sync')
-  
-  const sessionCache = getSessionCache(sessionId)
+  // ==================== WRITE DATA ====================
+  const writeData = async (data, fileName) => {
+    // Always write to cache immediately (NEVER fails)
+    cacheManager.set(fileName, data)
 
-  // IMMEDIATE cache update
-  try {
-    const oldSize = sessionCache.cache.has(fileName) 
-      ? getDataSize(sessionCache.cache.get(fileName).data) 
-      : 0
+    // If using file fallback, write to file
+    if (cacheManager.useFileFallback) {
+      await cacheManager.saveFileToFallback(fileName, data)
+    }
     
-    const newSize = getDataSize(datajson)
-    
-    sessionCache.size = sessionCache.size - oldSize + newSize
-    totalCacheSize = totalCacheSize - oldSize + newSize
-    
-    sessionCache.cache.set(fileName, { 
-      data: datajson, 
-      timestamp: isCriticalFile ? null : Date.now(),
-      needsSync: true
-    })
-  } catch (cacheError) {
-    logger.error(`[Cache Write Error] ${sessionId}:${fileName}: ${cacheError.message}`)
+    // Sync worker will handle MongoDB in background
   }
 
-  // Background MongoDB write with retry
-  const queueKey = `${sessionId}:${fileName}`
-  
-  if (writeQueue.has(queueKey)) {
-    clearTimeout(writeQueue.get(queueKey))
-  }
+  // ==================== REMOVE DATA ====================
+  const removeData = async (fileName) => {
+    cacheManager.delete(fileName)
 
-  const attemptWrite = async (retryCount = 0) => {
-    // Check MongoDB health before write
-    const isHealthy = await checkMongoHealth(collection)
-    
-    if (!isHealthy) {
-      if (isCriticalFile && retryCount === 0) {
-        logger.warn(`[Write Deferred] ${fileName}: MongoDB not healthy, will retry`)
+    if (cacheManager.useFileFallback) {
+      try {
+        const filePath = path.join(cacheManager.fallbackDir, fileName)
+        await fs.unlink(filePath)
+      } catch (error) {
+        // File doesn't exist, ignore
       }
-      
-      // Retry for critical files
-      if (isCriticalFile && retryCount < 10) { // ✅ Increased from 5 to 10
-        const delay = 3000 * (retryCount + 1) // ✅ Increased from 2000 to 3000
-        setTimeout(() => attemptWrite(retryCount + 1), delay)
-      }
-      return
     }
 
     try {
-      await Promise.race([
-        (async () => {
-          const query = { filename: fixFileName(fileName), sessionId: sessionId }
-          const update = {
-            $set: {
-              filename: fixFileName(fileName),
-              sessionId: sessionId,
-              datajson: JSON.stringify(datajson, BufferJSON.replacer),
-              updatedAt: new Date(),
-            },
-          }
-          await collection.updateOne(query, update, { upsert: true })
-          
-          // Mark as synced
-          const cached = sessionCache.cache.get(fileName)
-          if (cached) {
-            cached.needsSync = false
-          }
-        })(),
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Write timeout')), 15000) // ✅ Increased from 5000 to 15000
-        )
-      ])
+      await collection.deleteOne({ filename: fixFileName(fileName), sessionId })
     } catch (error) {
-      const isConnError = 
-        error.message?.toLowerCase().includes('connect') || 
-        error.message?.toLowerCase().includes('topology') ||
-        error.message?.toLowerCase().includes('must be connected') ||
-        error.message?.toLowerCase().includes('timeout') // ✅ Added timeout as connection error
-      
-      if (isConnError && isCriticalFile && retryCount < 10) { // ✅ Increased from 5 to 10
-        logger.warn(`[Write Retry ${retryCount + 1}/10] ${fileName}: ${error.message}`)
-        const delay = 3000 * (retryCount + 1) // ✅ Increased from 2000 to 3000
-        setTimeout(() => attemptWrite(retryCount + 1), delay)
-      } else if (isCriticalFile) {
-        logger.error(`[Write Failed] ${fileName}: ${error.message} (retry ${retryCount}/10)`)
-      }
-    }
-
-    writeQueue.delete(queueKey)
-  }
-
-  // ✅ Critical files write immediately, non-critical files are batched
-  const initialDelay = isCriticalFile ? 10 : 50
-  const timeoutId = setTimeout(() => attemptWrite(0), initialDelay)
-  writeQueue.set(queueKey, timeoutId)
-}
-
-  /**
-   * Remove data
-   */
-  const removeData = async (fileName) => {
-    const sessionCache = sessionCaches.get(sessionId)
-    if (sessionCache && sessionCache.cache.has(fileName)) {
-      const size = getDataSize(sessionCache.cache.get(fileName).data)
-      sessionCache.size -= size
-      totalCacheSize -= size
-      sessionCache.cache.delete(fileName)
-    }
-
-    const isHealthy = await checkMongoHealth(collection)
-    if (isHealthy) {
-      await executeMongoOperation(
-        async () => {
-          await collection.deleteOne({ filename: fixFileName(fileName), sessionId: sessionId })
-        },
-        `remove:${fileName}`,
-        sessionId
-      )
+      // MongoDB failed, ignore (already removed from cache/file)
     }
   }
 
-  // Load credentials FIRST
+  // ==================== LOAD CREDENTIALS ====================
   const existingCreds = await readData("creds.json")
-  const creds =
-    existingCreds && existingCreds.noiseKey && existingCreds.signedIdentityKey 
-      ? existingCreds 
-      : initAuthCreds()
+  const creds = existingCreds?.noiseKey && existingCreds?.signedIdentityKey 
+    ? existingCreds 
+    : initAuthCreds()
 
   const isNewSession = !existingCreds
 
   if (isNewSession) {
     logger.info(`[${sessionId}] Creating new credentials`)
     await writeData(creds, "creds.json")
+  } else {
+    logger.info(`[${sessionId}] Loaded existing credentials`)
   }
 
-  // Preload for existing sessions (not pairing)
-  if (!isNewSession && !isPairing && mongoHealthy) {
-    logger.info(`[${sessionId}] Scheduling background key preload...`)
-    
-    setImmediate(() => {
-      preloadAllKeys(collection, sessionId, mongoHealthy).catch(err => {
-        logger.error(`[PreLoad] Background preload failed for ${sessionId}: ${err.message}`)
-      })
-    })
-  } else if (isPairing) {
-    logger.info(`[${sessionId}] Skipping preload - pairing mode`)
-  } else if (isNewSession) {
-    logger.info(`[${sessionId}] Skipping preload - new session`)
-  }
+  // Start sync worker
+  const syncWorker = new SyncWorker(collection, sessionId, cacheManager)
+  syncWorker.start()
 
+  // ==================== RETURN AUTH STATE ====================
   return {
     state: {
       creds,
       keys: {
         get: async (type, ids) => {
           const data = {}
-          const sessionCache = getSessionCache(sessionId)
           
-          // Check cache first
           for (const id of ids) {
             const fileName = `${type}-${id}.json`
+            let value = await readData(fileName)
             
-            if (sessionCache.cache.has(fileName)) {
-              let value = sessionCache.cache.get(fileName).data
-              
-              if (type === "app-state-sync-key" && value) {
-                value = proto.Message.AppStateSyncKeyData.fromObject(value)
-              }
-              
-              if (value) {
-                data[id] = value
-              }
+            if (type === "app-state-sync-key" && value) {
+              value = proto.Message.AppStateSyncKeyData.fromObject(value)
             }
-          }
-          
-          // Fetch missing keys from MongoDB
-          const missingIds = ids.filter(id => !data[id])
-          
-          if (missingIds.length > 0) {
-            const isHealthy = await checkMongoHealth(collection)
             
-            if (isHealthy) {
-              await Promise.all(missingIds.map(async (id) => {
-                try {
-                  let value = await readData(`${type}-${id}.json`)
-                  if (type === "app-state-sync-key" && value) {
-                    value = proto.Message.AppStateSyncKeyData.fromObject(value)
-                  }
-                  if (value) data[id] = value
-                } catch (error) {
-                  // Silent
-                }
-              }))
-            }
-          }
-          
-          const totalFound = Object.keys(data).length
-          const totalRequested = ids.length
-          
-          if (type === 'session' && totalFound > 0 && totalFound < totalRequested) {
-            logger.warn(`[Keys] Retrieved ${totalFound}/${totalRequested} ${type} keys for ${sessionId}`)
+            if (value) data[id] = value
           }
           
           return data
         },
         set: async (data) => {
-          const tasks = []
-          
           for (const category in data) {
             for (const id in data[category]) {
               const value = data[category][id]
               const file = `${category}-${id}.json`
-              tasks.push(value ? writeData(value, file) : removeData(file))
+              
+              if (value) {
+                await writeData(value, file)
+              } else {
+                await removeData(file)
+              }
             }
           }
-          
-          await Promise.allSettled(tasks)
         },
       },
     },
     saveCreds: () => writeData(creds, "creds.json"),
-        cleanup: (force = false) => {
-      stopWriteRetryWorker(sessionId) // ✅ Stop worker on cleanup
-      cleanupCache(sessionId, force)
-        },
+    cleanup: (force = false) => {
+      syncWorker.stop()
+      if (force) {
+        sessionCaches.delete(sessionId)
+      }
+    },
   }
 }
 
-// ==================== CLEANUP & VALIDATION ====================
+// ==================== CLEANUP ====================
 export const cleanupSessionAuthData = async (collection, sessionId) => {
   try {
-    const result = await executeMongoOperation(
-      async () => await collection.deleteMany({ sessionId }),
-      'cleanup',
-      sessionId
-    )
+    await collection.deleteMany({ sessionId })
     
-    if (result) {
-      logger.info(`[Cleanup] Removed ${result.deletedCount} documents for ${sessionId}`)
+    const cacheManager = sessionCaches.get(sessionId)
+    if (cacheManager) {
+      // Remove fallback directory
+      await fs.rm(cacheManager.fallbackDir, { recursive: true, force: true })
+      sessionCaches.delete(sessionId)
     }
     
-    cleanupCache(sessionId, true)
+    logger.info(`[${sessionId}] Cleaned up auth data`)
     return true
   } catch (error) {
-    logger.error(`[Cleanup] Failed for ${sessionId}:`, error)
-    cleanupCache(sessionId, true)
+    logger.error(`[${sessionId}] Cleanup failed: ${error.message}`)
     return false
   }
 }
 
+// ==================== VALIDATION ====================
 export const hasValidAuthData = async (collection, sessionId) => {
-  const sessionCache = sessionCaches.get(sessionId)
+  const cacheManager = sessionCaches.get(sessionId)
   
-  if (sessionCache?.cache.has('creds.json')) {
-    const creds = sessionCache.cache.get('creds.json').data
+  // Check cache
+  if (cacheManager?.has('creds.json')) {
+    const creds = cacheManager.get('creds.json')
     if (creds?.noiseKey && creds?.signedIdentityKey) {
       return true
     }
   }
 
-  const mongoHealthy = await checkMongoHealth(collection)
-  if (!mongoHealthy) {
-    return false
+  // Check file fallback
+  if (cacheManager) {
+    const creds = await cacheManager.loadFromFile('creds.json')
+    if (creds?.noiseKey && creds?.signedIdentityKey) {
+      return true
+    }
   }
 
-  const result = await executeMongoOperation(
-    async () => {
-      const creds = await collection.findOne(
-        { filename: "creds.json", sessionId: sessionId },
-        { projection: { datajson: 1 } }
-      )
-      
-      if (!creds) return false
-      
-      const credsData = JSON.parse(creds.datajson, BufferJSON.reviver)
-      return !!(credsData && credsData.noiseKey && credsData.signedIdentityKey)
-    },
-    'validate',
-    sessionId
-  )
+  // Check MongoDB
+  try {
+    const result = await collection.findOne(
+      { filename: "creds.json", sessionId },
+      { projection: { datajson: 1 } }
+    )
+    
+    if (result) {
+      const creds = JSON.parse(result.datajson, BufferJSON.reviver)
+      return !!(creds?.noiseKey && creds?.signedIdentityKey)
+    }
+  } catch (error) {
+    // MongoDB failed, already checked cache/file
+  }
 
-  return result || false
+  return false
 }
 
+// ==================== STATS ====================
 export const getAuthCacheStats = () => {
-  let totalCriticalFiles = 0
-  let totalNeedSync = 0
+  let totalSize = 0
+  let totalFiles = 0
+  let usingFallback = 0
   
   for (const [sessionId, cache] of sessionCaches) {
-    for (const [key, value] of cache.cache.entries()) {
-      if (key === 'creds.json' || 
-          key.includes('session-') || 
-          key.includes('pre-key-') ||
-          key.includes('app-state-sync')) {
-        totalCriticalFiles++
-      }
-      if (value.needsSync) {
-        totalNeedSync++
-      }
-    }
+    totalSize += cache.size
+    totalFiles += cache.cache.size
+    if (cache.useFileFallback) usingFallback++
   }
 
   return {
     sessions: sessionCaches.size,
-    totalSizeMB: (totalCacheSize / 1024 / 1024).toFixed(2),
-    maxTotalMB: (MAX_TOTAL_CACHE / 1024 / 1024).toFixed(2),
-    maxPerSessionKB: (MAX_CACHE_PER_SESSION / 1024).toFixed(2),
-    writeQueueSize: writeQueue.size,
-    avgSessionSizeKB: sessionCaches.size > 0 ? ((totalCacheSize / sessionCaches.size) / 1024).toFixed(2) : 0,
-    criticalFilesCached: totalCriticalFiles,
-    pendingSync: totalNeedSync
+    totalFiles,
+    totalSizeMB: (totalSize / 1024 / 1024).toFixed(2),
+    usingFileFallback,
   }
 }

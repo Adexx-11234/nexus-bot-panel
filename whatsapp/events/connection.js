@@ -160,9 +160,9 @@ _endReconnection(sessionId, success = false) {
 
       // ✅ Special handling: Requires auth clear (but NOT bad session)
       // This includes: 428, 440, 408, 500, 404
-      if (requiresAuthClear(statusCode) && statusCode !== DisconnectReason.BAD_SESSION) {
+    /*  if (requiresAuthClear(statusCode) && statusCode !== DisconnectReason.BAD_SESSION) {
         return await this._handleAuthClearReconnect(sessionId, statusCode, config, sock)
-      }
+      }*/
 
       // Special handling: Bad Session (uses different method)
       if (statusCode === DisconnectReason.BAD_SESSION) {

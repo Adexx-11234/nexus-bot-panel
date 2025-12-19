@@ -3,9 +3,51 @@ import { createComponentLogger } from "../../utils/logger.js"
 
 const logger = createComponentLogger("MONGODB_STORAGE")
 
-/**
- * MongoDBStorage - Enhanced with write buffering during reconnection
- */
+// ==================== CONFIGURATION ====================
+const CONFIG = {
+  RECONNECT_DELAY: 5000, // 5 seconds
+  HEALTH_CHECK_INTERVAL: 30000, // 30 seconds
+  CACHE_DURATION: 5 * 60 * 1000, // 5 minutes
+}
+
+// ==================== SESSION CACHE ====================
+class SessionCache {
+  constructor() {
+    this.cache = new Map() // sessionId -> { data, timestamp }
+    this.allSessions = { data: null, timestamp: 0 }
+  }
+
+  get(sessionId) {
+    const cached = this.cache.get(sessionId)
+    if (!cached) return null
+    
+    // Return cached data (even if stale - better than nothing)
+    return cached.data
+  }
+
+  set(sessionId, data) {
+    this.cache.set(sessionId, { data, timestamp: Date.now() })
+  }
+
+  delete(sessionId) {
+    this.cache.delete(sessionId)
+  }
+
+  getAllSessions() {
+    return this.allSessions.data
+  }
+
+  setAllSessions(data) {
+    this.allSessions = { data, timestamp: Date.now() }
+  }
+
+  clear() {
+    this.cache.clear()
+    this.allSessions = { data: null, timestamp: 0 }
+  }
+}
+
+// ==================== MONGODB STORAGE ====================
 export class MongoDBStorage {
   constructor() {
     this.client = null
@@ -13,476 +55,106 @@ export class MongoDBStorage {
     this.sessions = null
     this.isConnected = false
     this.isConnecting = false
-    this.retryCount = 0
-    this.connectionTimeout = 30000
-    this.reconnectInterval = null
-    this.healthCheckInterval = null
-    this.aggressiveHealingInterval = null
-    this.lastSuccessfulConnection = null
-    this.lastSuccessfulOperation = null
-    this.connectionAttempts = 0
-    this.consecutiveFailures = 0
-    this.inEmergencyMode = false
-
-    // ✅ NEW: Write buffer for operations during disconnection
-    this.writeBuffer = new Map() // key -> { operation, timestamp, retries }
-    this.maxBufferSize = 1000
-    this.maxBufferAge = 300000 // 5 minutes
-    this.bufferProcessInterval = null
-
-    this.minReconnectDelay = 2000
-    this.maxReconnectDelay = 15000
-    this.emergencyModeThreshold = 5
-    this.emergencyCheckInterval = 5000
-
+    this.reconnectTimer = null
+    this.healthCheckTimer = null
+    this.cache = new SessionCache()
+    
     this._initConnection()
     this._startHealthCheck()
-    this._startAggressiveHealing()
-    this._startBufferProcessor()
   }
 
-  /**
-   * ✅ NEW: Process buffered writes when connection is restored
-   */
-  _startBufferProcessor() {
-    this.bufferProcessInterval = setInterval(async () => {
-      if (!this.isConnected || this.writeBuffer.size === 0) return
-
-      const now = Date.now()
-      const toProcess = []
-      const toDelete = []
-
-      // Collect operations to process
-      for (const [key, item] of this.writeBuffer.entries()) {
-        // Remove stale operations
-        if (now - item.timestamp > this.maxBufferAge) {
-          toDelete.push(key)
-          logger.warn(`[Buffer] Discarding stale operation: ${key}`)
-          continue
-        }
-
-        // Skip if too many retries
-        if (item.retries >= 3) {
-          toDelete.push(key)
-          logger.error(`[Buffer] Max retries exceeded for: ${key}`)
-          continue
-        }
-
-        toProcess.push({ key, item })
-      }
-
-      // Process buffered operations
-      if (toProcess.length > 0) {
-        logger.info(`[Buffer] Processing ${toProcess.length} buffered operations...`)
-
-        for (const { key, item } of toProcess) {
-          try {
-            await item.operation()
-            toDelete.push(key)
-            logger.debug(`[Buffer] ✅ Processed: ${key}`)
-          } catch (error) {
-            item.retries++
-            logger.warn(`[Buffer] Retry ${item.retries} failed for ${key}: ${error.message}`)
-            
-            if (item.retries >= 3) {
-              toDelete.push(key)
-            }
-          }
-        }
-      }
-
-      // Clean up processed/failed operations
-      for (const key of toDelete) {
-        this.writeBuffer.delete(key)
-      }
-
-      if (toDelete.length > 0) {
-        logger.info(`[Buffer] Cleaned ${toDelete.length} operations (${this.writeBuffer.size} remaining)`)
-      }
-    }, 2000) // Check every 2 seconds
-  }
-
-  /**
-   * ✅ ENHANCED: Add to buffer if connection fails
-   */
-  async _executeWithBuffer(operation, operationName, bufferKey = null) {
-    // If we're connected, try to execute directly
-    if (this.isConnected && this.client) {
-      try {
-        if (this.client.topology && !this.client.topology.isConnected()) {
-          throw new Error("Topology not connected")
-        }
-
-        const result = await operation()
-        this.lastSuccessfulOperation = new Date()
-        this.consecutiveFailures = 0
-        return result
-      } catch (error) {
-        if (this._isConnectionError(error)) {
-          logger.warn(`${operationName}: Connection error - buffering if possible`)
-          this.isConnected = false
-          this.consecutiveFailures++
-          this._scheduleReconnection()
-          
-          // Fall through to buffering logic below
-        } else {
-          logger.error(`${operationName}: ${error.message}`)
-          return null
-        }
-      }
-    }
-
-    // ✅ Buffer write operations during disconnection
-    if (bufferKey && (operationName.includes('save') || operationName.includes('update') || operationName.includes('delete'))) {
-      // Check buffer size limit
-      if (this.writeBuffer.size >= this.maxBufferSize) {
-        logger.error(`[Buffer] Buffer full (${this.maxBufferSize}), dropping operation: ${operationName}`)
-        return null
-      }
-
-      // Add to buffer
-      if (!this.writeBuffer.has(bufferKey)) {
-        this.writeBuffer.set(bufferKey, {
-          operation,
-          timestamp: Date.now(),
-          retries: 0,
-          operationName
-        })
-        logger.info(`[Buffer] Queued: ${operationName} (buffer size: ${this.writeBuffer.size})`)
-      } else {
-        // Update existing buffer entry with latest operation
-        const existing = this.writeBuffer.get(bufferKey)
-        existing.operation = operation
-        existing.timestamp = Date.now()
-        logger.debug(`[Buffer] Updated: ${operationName}`)
-      }
-
-      // Schedule reconnection if not already scheduled
-      if (!this.isConnecting && !this.reconnectInterval) {
-        this._scheduleReconnection()
-      }
-
-      return null // Indicate buffered
-    }
-
-    // For read operations or unbufferable operations, just fail
-    logger.warn(`${operationName}: Not connected, operation skipped`)
-    return null
-  }
-
- async _initConnection() {
-  if (this.isConnecting) {
-    logger.debug("Connection attempt already in progress")
-    return
-  }
-
-  this.isConnecting = true
-  this.connectionAttempts++
-
-  try {
-    const mongoUrl = process.env.MONGODB_URI || "mongodb://localhost:27017/whatsapp_bot"
-
-    // FIXED: More conservative connection options
-    const options = {
-      maxPoolSize: 10, // Reduced from 30
-      minPoolSize: 2,  // Reduced from 5
-      maxIdleTimeMS: 600000, // Increased from 300000
-      serverSelectionTimeoutMS: 30000, // Increased from 15000
-      socketTimeoutMS: 45000, // Reduced from 300000
-      connectTimeoutMS: 30000, // Increased from 15000
-      retryWrites: true,
-      retryReads: true,
-      heartbeatFrequencyMS: 30000, // Increased from 10000 - less aggressive
-      waitQueueTimeoutMS: 10000, // Increased from 5000
-      monitorCommands: false,
-      compressors: ['zlib'],
-      zlibCompressionLevel: 6,
-      family: 4,
-      directConnection: false,
-      // CRITICAL: Don't auto-close connections
-      maxConnecting: 2,
-      minHeartbeatFrequencyMS: 10000
-    }
-
-    // FIXED: Don't force close existing client during reconnection
-    if (this.client) {
-      try {
-        // Only close if truly disconnected
-        const topology = this.client.topology
-        if (!topology || !topology.isConnected()) {
-          await this.client.close(false) // Graceful close, not force
-          this.client = null
-          await new Promise(resolve => setTimeout(resolve, 1000)) // Wait before new client
-        } else {
-          // Connection still alive, reuse it
-          logger.info("♻️ Reusing existing MongoDB connection")
-          this.isConnected = true
-          this.isConnecting = false
-          this.consecutiveFailures = 0
-          return
-        }
-      } catch (err) {
-        logger.debug(`Old client cleanup: ${err.message}`)
-        this.client = null
-      }
-    }
-
-    logger.info(`🔄 Attempting MongoDB connection (attempt ${this.connectionAttempts})...`)
-
-    this.client = new MongoClient(mongoUrl, options)
-
-    await Promise.race([
-      this.client.connect(),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Connection timeout")), 30000) // Increased timeout
-      )
-    ])
-
-    // FIXED: Give MongoDB time to stabilize before ping
-    await new Promise(resolve => setTimeout(resolve, 500))
-
-    await Promise.race([
-      this.client.db("admin").command({ ping: 1 }),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Ping timeout")), 10000) // Increased timeout
-      )
-    ])
-
-    this.db = this.client.db()
-    this.sessions = this.db.collection("sessions")
-
-    this._setupConnectionEvents()
-    await this._createIndexes()
-
-    this.isConnected = true
-    this.isConnecting = false
-    this.retryCount = 0
-    this.consecutiveFailures = 0
-    this.lastSuccessfulConnection = new Date()
-    this.lastSuccessfulOperation = new Date()
-
-    if (this.inEmergencyMode) {
-      this.inEmergencyMode = false
-      logger.info("✅ [RECOVERY] Exited emergency mode")
-    }
-
-    const attemptMsg = this.connectionAttempts > 1 
-      ? ` (recovered after ${this.connectionAttempts} attempts)` 
-      : ''
-    logger.info(`✅ MongoDB connected successfully${attemptMsg}`)
-
-    if (this.writeBuffer.size > 0) {
-      logger.info(`📦 [Buffer] ${this.writeBuffer.size} operations queued for processing`)
-    }
-
-    if (this.reconnectInterval) {
-      clearInterval(this.reconnectInterval)
-      this.reconnectInterval = null
-    }
-
-  } catch (error) {
-    this.isConnected = false
-    this.isConnecting = false
-    this.consecutiveFailures++
-    
-    if (this.consecutiveFailures >= this.emergencyModeThreshold && !this.inEmergencyMode) {
-      this.inEmergencyMode = true
-      logger.error(`❌ [EMERGENCY MODE] MongoDB failed ${this.consecutiveFailures} times`)
-    }
-
-    const logLevel = this.connectionAttempts <= 3 ? 'error' : 'warn'
-    logger[logLevel](`MongoDB connection failed (attempt ${this.connectionAttempts}): ${error.message}`)
-
-    this._scheduleReconnection()
-  }
-}
-
-  _setupConnectionEvents() {
-  if (!this.client) return
-  
-  // FIXED: Remove old listeners before adding new ones
-  this.client.removeAllListeners()
-
-  this.client.on('close', () => {
-    // FIXED: Don't immediately mark as disconnected if we're in a healthy state
-    if (this.consecutiveFailures < 2) {
-      logger.debug("⚠️ MongoDB connection closed (will monitor)")
-      return
-    }
-    
-    logger.warn("⚠️ MongoDB connection closed")
-    this.isConnected = false
-    this.consecutiveFailures++
-    this._scheduleReconnection()
-  })
-
-  this.client.on('error', (error) => {
-    logger.error(`❌ MongoDB error: ${error.message}`)
-    this.consecutiveFailures++
-    
-    // Only disconnect on serious errors
-    if (error.message?.includes('connection') || error.message?.includes('closed')) {
-      this.isConnected = false
-      this._scheduleReconnection()
-    }
-  })
-
-  this.client.on('timeout', () => {
-    logger.warn("⏱️ MongoDB timeout")
-    this.consecutiveFailures++
-    
-    // Don't immediately disconnect on timeout
-    if (this.consecutiveFailures >= 3) {
-      this.isConnected = false
-      this._scheduleReconnection()
-    }
-  })
-
-  this.client.on('serverHeartbeatFailed', (event) => {
-    this.consecutiveFailures++
-    
-    // Only disconnect after multiple heartbeat failures
-    if (this.consecutiveFailures >= 3) {
-      logger.warn(`💔 Multiple heartbeat failures (${this.consecutiveFailures}), reconnecting`)
-      this.isConnected = false
-      this._scheduleReconnection()
-    }
-  })
-
-  this.client.on('serverClosed', (event) => {
-    logger.warn(`🔌 Server closed: ${event.address}`)
-    this.isConnected = false
-    this._scheduleReconnection()
-  })
-
-  this.client.on('topologyDescriptionChanged', (event) => {
-    const newType = event.newDescription.type
-    const oldType = event.previousDescription.type
-    
-    if (newType === 'Unknown' || newType === 'ReplicaSetNoPrimary') {
-      logger.warn(`⚠️ Topology changed to ${newType}`)
-      this.consecutiveFailures++
-      
-      // Only disconnect after multiple topology issues
-      if (this.consecutiveFailures >= 2) {
-        this.isConnected = false
-        this._scheduleReconnection()
-      }
-    } else if (oldType === 'Unknown' && newType !== 'Unknown') {
-      logger.info(`✅ Topology recovered: ${oldType} -> ${newType}`)
-      this.isConnected = true
-      this.consecutiveFailures = 0
-    }
-  })
-}
-
-  _scheduleReconnection() {
-    if (this.reconnectInterval) return
-
-    let delay
-    if (this.inEmergencyMode) {
-      delay = this.emergencyCheckInterval
-    } else {
-      delay = Math.min(
-        this.maxReconnectDelay, 
-        this.minReconnectDelay * Math.pow(2, Math.min(this.retryCount, 3))
-      )
-    }
-    
-    this.retryCount++
-
-    const mode = this.inEmergencyMode ? '[EMERGENCY]' : ''
-    const bufferInfo = this.writeBuffer.size > 0 ? ` (${this.writeBuffer.size} ops buffered)` : ''
-    logger.info(`🔄 ${mode} Reconnecting in ${delay / 1000}s${bufferInfo}`)
-
-    this.reconnectInterval = setInterval(() => {
-      if (!this.isConnected && !this.isConnecting) {
-        this._initConnection()
-      }
-    }, delay)
-  }
-
-  // ALSO FIX: Less aggressive health check
-_startHealthCheck() {
-  this.healthCheckInterval = setInterval(async () => {
+  // ==================== CONNECTION ====================
+  async _initConnection() {
     if (this.isConnecting) return
+    this.isConnecting = true
 
-    if (this.isConnected && this.client) {
-      try {
-        // FIXED: Quick check without forcing reconnection on single failure
-        await Promise.race([
-          this.client.db("admin").command({ ping: 1 }),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("Health check timeout")), 5000)
-          )
-        ])
-        
-        this.lastSuccessfulOperation = new Date()
-        
-        if (this.consecutiveFailures > 0) {
-          this.consecutiveFailures = 0
-          if (this.retryCount > 0) {
-            logger.info("✅ Health check passed, connection stable")
-            this.retryCount = 0
-          }
-        }
-      } catch (error) {
-        this.consecutiveFailures++
-        
-        // FIXED: Only reconnect after 2 consecutive failures
-        if (this.consecutiveFailures >= 2) {
-          logger.warn(`⚠️ Health check failed ${this.consecutiveFailures} times: ${error.message}`)
-          this.isConnected = false
-          this._scheduleReconnection()
-        }
-      }
-    } else if (!this.isConnected && !this.reconnectInterval) {
-      this._scheduleReconnection()
-    }
-  }, 30000) // FIXED: Check every 30 seconds instead of 15
-}
+    try {
+      const mongoUrl = process.env.MONGODB_URI || "mongodb://localhost:27017/whatsapp_bot"
 
- _startAggressiveHealing() {
-  this.aggressiveHealingInterval = setInterval(async () => {
-    if (this.isConnecting || !this.lastSuccessfulOperation) return
+      logger.info("🔄 Connecting to MongoDB...")
 
-    const timeSinceLastSuccess = Date.now() - this.lastSuccessfulOperation
-    
-    // FIXED: Wait 5 minutes before force reconnect (was 2 minutes)
-    if (timeSinceLastSuccess > 300000 && this.isConnected) {
-      logger.warn(`⚠️ [AUTO-HEAL] No operations for ${Math.round(timeSinceLastSuccess/1000)}s, forcing reconnect`)
-      this.isConnected = false
-      this.consecutiveFailures++
-      
+      // Close old connection if exists
       if (this.client) {
         try {
-          await this.client.close(false) // Graceful close
-        } catch (err) {
-          logger.debug(`Force close error: ${err.message}`)
-        }
+          await this.client.close(false)
+        } catch (e) {}
       }
-      
-      this._scheduleReconnection()
-    }
-    
-    if (this.inEmergencyMode && timeSinceLastSuccess > 600000) {
-      logger.error("❌ [AUTO-HEAL] Emergency mode for 10+ minutes, attempting full reset")
-      
-      if (this.reconnectInterval) {
-        clearInterval(this.reconnectInterval)
-        this.reconnectInterval = null
-      }
-      
-      this.retryCount = 0
-      this.connectionAttempts = 0
+
+      this.client = new MongoClient(mongoUrl, {
+        maxPoolSize: 50,
+        minPoolSize: 5,
+        maxIdleTimeMS: 120000,
+        serverSelectionTimeoutMS: 30000,
+        socketTimeoutMS: 45000,
+        connectTimeoutMS: 30000,
+        retryWrites: true,
+        retryReads: true,
+      })
+
+      await this.client.connect()
+      this.db = this.client.db()
+      this.sessions = this.db.collection("sessions")
+
+      // Setup event listeners
+      this.client.on('close', () => {
+        logger.warn("MongoDB connection closed")
+        this.isConnected = false
+        this._scheduleReconnect()
+      })
+
+      this.client.on('error', (error) => {
+        logger.error(`MongoDB error: ${error.message}`)
+        this.isConnected = false
+        this._scheduleReconnect()
+      })
+
+      await this._createIndexes()
+
+      this.isConnected = true
       this.isConnecting = false
-      
-      setTimeout(() => {
-        this._initConnection()
-      }, 5000)
+      logger.info("✅ MongoDB connected successfully")
+
+      // Clear reconnect timer
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer)
+        this.reconnectTimer = null
+      }
+
+    } catch (error) {
+      this.isConnected = false
+      this.isConnecting = false
+      logger.error(`MongoDB connection failed: ${error.message}`)
+      this._scheduleReconnect()
     }
-  }, 60000) // FIXED: Check every 60 seconds instead of 30
-}
+  }
+
+  _scheduleReconnect() {
+    if (this.reconnectTimer) return
+    
+    logger.info(`🔄 Reconnecting in ${CONFIG.RECONNECT_DELAY / 1000}s...`)
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      this._initConnection()
+    }, CONFIG.RECONNECT_DELAY)
+  }
+
+  _startHealthCheck() {
+    this.healthCheckTimer = setInterval(async () => {
+      if (this.isConnecting) return
+
+      if (this.isConnected && this.client) {
+        try {
+          await this.client.db("admin").command({ ping: 1 })
+        } catch (error) {
+          logger.warn("Health check failed")
+          this.isConnected = false
+          this._scheduleReconnect()
+        }
+      } else if (!this.reconnectTimer) {
+        this._scheduleReconnect()
+      }
+    }, CONFIG.HEALTH_CHECK_INTERVAL)
+  }
 
   async _createIndexes() {
     if (!this.sessions) return
@@ -490,102 +162,104 @@ _startHealthCheck() {
     const indexes = [
       { key: { telegramId: 1 }, name: "telegramId_1" },
       { key: { phoneNumber: 1 }, name: "phoneNumber_1" },
-      { key: { source: 1, detected: 1 }, name: "source_detected_1" },
-      { key: { isConnected: 1, connectionStatus: 1 }, name: "connection_status_1" },
       { key: { sessionId: 1 }, unique: true, name: "sessionId_unique" },
-      { key: { phoneNumber: 1, sessionId: 1 }, name: "phoneNumber_sessionId_1" },
     ]
 
-    for (const indexDef of indexes) {
+    for (const idx of indexes) {
       try {
-        await Promise.race([
-          this.sessions.createIndex(indexDef.key, {
-            name: indexDef.name,
-            background: true,
-            unique: indexDef.unique || false,
-          }),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("Index creation timeout")), 10000)
-          )
-        ])
+        await this.sessions.createIndex(idx.key, {
+          name: idx.name,
+          unique: idx.unique || false,
+          background: true,
+        })
       } catch (error) {
-        if (!error.message.includes("already exists") && 
-            !error.message.includes("timeout")) {
-          logger.warn(`Index creation failed for ${indexDef.name}: ${error.message}`)
+        if (!error.message.includes("already exists")) {
+          logger.warn(`Index creation failed: ${idx.name}`)
         }
       }
     }
   }
 
-  _isConnectionError(error) {
-    const errorStr = error.message?.toLowerCase() || ''
-    const connectionErrors = [
-      'connection',
-      'disconnected',
-      'topology',
-      'econnrefused',
-      'etimedout',
-      'pool destroyed',
-      'server selection',
-      'mongonetworkerror',
-      'mongoservererror',
-      'must be connected',
-      'not connected',
-      'socket',
-      'closed'
-    ]
-    
-    return connectionErrors.some(msg => errorStr.includes(msg))
-  }
-
-  // ✅ UPDATED: All write operations now use buffering
+  // ==================== SAVE SESSION (WITH CACHE) ====================
   async saveSession(sessionId, sessionData) {
-    const bufferKey = `save:${sessionId}`
-    
-    return await this._executeWithBuffer(async () => {
-      const document = {
-        sessionId,
-        telegramId: sessionData.telegramId || sessionData.userId,
-        phoneNumber: sessionData.phoneNumber,
-        isConnected: sessionData.isConnected !== undefined ? sessionData.isConnected : false,
-        connectionStatus: sessionData.connectionStatus || "disconnected",
-        reconnectAttempts: sessionData.reconnectAttempts || 0,
-        source: sessionData.source || "telegram",
-        detected: sessionData.detected !== false,
-        createdAt: sessionData.createdAt || new Date(),
-        updatedAt: new Date(),
-      }
+    const document = {
+      sessionId,
+      telegramId: sessionData.telegramId || sessionData.userId,
+      phoneNumber: sessionData.phoneNumber,
+      isConnected: sessionData.isConnected !== undefined ? sessionData.isConnected : false,
+      connectionStatus: sessionData.connectionStatus || "disconnected",
+      reconnectAttempts: sessionData.reconnectAttempts || 0,
+      source: sessionData.source || "telegram",
+      detected: sessionData.detected !== false,
+      createdAt: sessionData.createdAt || new Date(),
+      updatedAt: new Date(),
+    }
 
-      await this.sessions.replaceOne({ sessionId }, document, { upsert: true })
-      return true
-    }, `saveSession(${sessionId})`, bufferKey) || false
+    // ALWAYS update cache immediately
+    this.cache.set(sessionId, document)
+
+    // Try MongoDB in background (don't wait)
+    if (this.isConnected && this.sessions) {
+      this.sessions.replaceOne({ sessionId }, document, { upsert: true })
+        .catch(error => {
+          logger.debug(`Background save failed for ${sessionId}: ${error.message}`)
+        })
+    }
+
+    return true // Always return success (cache updated)
   }
 
+  // ==================== GET SESSION (WITH CACHE) ====================
   async getSession(sessionId) {
-    return await this._executeWithBuffer(async () => {
-      const session = await this.sessions.findOne({ sessionId })
-      if (!session) return null
+    // 1. Check cache first
+    const cached = this.cache.get(sessionId)
+    if (cached) {
+      return cached
+    }
 
-      return {
-        sessionId: session.sessionId,
-        userId: session.telegramId,
-        telegramId: session.telegramId,
-        phoneNumber: session.phoneNumber,
-        isConnected: session.isConnected,
-        connectionStatus: session.connectionStatus,
-        reconnectAttempts: session.reconnectAttempts,
-        source: session.source || "telegram",
-        detected: session.detected !== false,
-        createdAt: session.createdAt,
-        updatedAt: session.updatedAt,
+    // 2. Try MongoDB
+    if (this.isConnected && this.sessions) {
+      try {
+        const session = await this.sessions.findOne({ sessionId })
+        
+        if (session) {
+          const mapped = {
+            sessionId: session.sessionId,
+            userId: session.telegramId,
+            telegramId: session.telegramId,
+            phoneNumber: session.phoneNumber,
+            isConnected: session.isConnected,
+            connectionStatus: session.connectionStatus,
+            reconnectAttempts: session.reconnectAttempts,
+            source: session.source || "telegram",
+            detected: session.detected !== false,
+            createdAt: session.createdAt,
+            updatedAt: session.updatedAt,
+          }
+          
+          // Update cache
+          this.cache.set(sessionId, mapped)
+          return mapped
+        }
+      } catch (error) {
+        logger.debug(`getSession(${sessionId}) failed: ${error.message}`)
       }
-    }, `getSession(${sessionId})`, null) // No buffering for reads
+    }
+
+    return null
   }
 
+  // ==================== UPDATE SESSION (WITH CACHE) ====================
   async updateSession(sessionId, updates) {
-    const bufferKey = `update:${sessionId}`
-    
-    return await this._executeWithBuffer(async () => {
+    // 1. Update cache first
+    const cached = this.cache.get(sessionId)
+    if (cached) {
+      Object.assign(cached, updates, { updatedAt: new Date() })
+      this.cache.set(sessionId, cached)
+    }
+
+    // 2. Try MongoDB in background
+    if (this.isConnected && this.sessions) {
       const updateDoc = { updatedAt: new Date() }
       const allowedFields = [
         "isConnected",
@@ -602,135 +276,148 @@ _startHealthCheck() {
         }
       }
 
-      const result = await this.sessions.updateOne({ sessionId }, { $set: updateDoc })
-      return result.modifiedCount > 0 || result.matchedCount > 0
-    }, `updateSession(${sessionId})`, bufferKey) || false
-  }
-
-  async deleteSession(sessionId) {
-    const bufferKey = `delete:${sessionId}`
-    
-    return await this._executeWithBuffer(async () => {
-      const result = await this.sessions.deleteOne({ sessionId })
-      return result.deletedCount > 0
-    }, `deleteSession(${sessionId})`, bufferKey) || false
-  }
-
-  async deleteAuthState(sessionId) {
-    const bufferKey = `deleteAuth:${sessionId}`
-    
-    return await this._executeWithBuffer(async () => {
-      const authCollection = this.db.collection("auth_baileys")
-      const result = await authCollection.deleteMany({ sessionId })
-      logger.info(`Deleted ${result.deletedCount} auth documents for ${sessionId}`)
-      return result.deletedCount > 0
-    }, `deleteAuthState(${sessionId})`, bufferKey) || false
-  }
-
-  async getAllSessions() {
-    const result = await this._executeWithBuffer(async () => {
-      const sessions = await this.sessions.find({}).sort({ updatedAt: -1 }).toArray()
-
-      return sessions.map((session) => ({
-        sessionId: session.sessionId,
-        userId: session.telegramId,
-        telegramId: session.telegramId,
-        phoneNumber: session.phoneNumber,
-        isConnected: session.isConnected,
-        connectionStatus: session.connectionStatus,
-        reconnectAttempts: session.reconnectAttempts,
-        source: session.source || "telegram",
-        detected: session.detected !== false,
-        createdAt: session.createdAt,
-        updatedAt: session.updatedAt,
-      }))
-    }, 'getAllSessions()', null) // No buffering for reads
-
-    return result || []
-  }
-
-  async getUndetectedWebSessions() {
-    const result = await this._executeWithBuffer(async () => {
-      const sessions = await this.sessions
-        .find({
-          source: "web",
-          connectionStatus: "connected",
-          isConnected: true,
-          detected: { $ne: true },
+      this.sessions.updateOne({ sessionId }, { $set: updateDoc })
+        .catch(error => {
+          logger.debug(`Background update failed for ${sessionId}: ${error.message}`)
         })
-        .sort({ updatedAt: -1 })
-        .toArray()
+    }
 
-      return sessions.map((session) => ({
-        sessionId: session.sessionId,
-        userId: session.telegramId,
-        telegramId: session.telegramId,
-        phoneNumber: session.phoneNumber,
-        isConnected: session.isConnected,
-        connectionStatus: session.connectionStatus,
-        source: session.source,
-        detected: session.detected || false,
-      }))
-    }, 'getUndetectedWebSessions()', null) // No buffering for reads
-
-    return result || []
+    return true // Always return success (cache updated)
   }
 
-  getConnectionStatus() {
-    const timeSinceLastSuccess = this.lastSuccessfulOperation 
-      ? Date.now() - this.lastSuccessfulOperation 
-      : null
+  // ==================== DELETE SESSION ====================
+  async deleteSession(sessionId) {
+    // Remove from cache
+    this.cache.delete(sessionId)
 
+    // Try MongoDB
+    if (this.isConnected && this.sessions) {
+      try {
+        await this.sessions.deleteOne({ sessionId })
+      } catch (error) {
+        logger.debug(`deleteSession(${sessionId}) failed: ${error.message}`)
+      }
+    }
+
+    return true
+  }
+
+  // ==================== DELETE AUTH STATE ====================
+  async deleteAuthState(sessionId) {
+    if (this.isConnected && this.db) {
+      try {
+        const authCollection = this.db.collection("auth_baileys")
+        const result = await authCollection.deleteMany({ sessionId })
+        logger.info(`Deleted ${result.deletedCount} auth documents for ${sessionId}`)
+        return true
+      } catch (error) {
+        logger.error(`deleteAuthState(${sessionId}) failed: ${error.message}`)
+      }
+    }
+    return false
+  }
+
+  // ==================== GET ALL SESSIONS (WITH CACHE) ====================
+  async getAllSessions() {
+    // 1. Check cache first
+    const cached = this.cache.getAllSessions()
+    if (cached) {
+      return cached
+    }
+
+    // 2. Try MongoDB
+    if (this.isConnected && this.sessions) {
+      try {
+        const sessions = await this.sessions.find({}).sort({ updatedAt: -1 }).toArray()
+        
+        const mapped = sessions.map((session) => ({
+          sessionId: session.sessionId,
+          userId: session.telegramId,
+          telegramId: session.telegramId,
+          phoneNumber: session.phoneNumber,
+          isConnected: session.isConnected,
+          connectionStatus: session.connectionStatus,
+          reconnectAttempts: session.reconnectAttempts,
+          source: session.source || "telegram",
+          detected: session.detected !== false,
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt,
+        }))
+
+        // Update cache
+        this.cache.setAllSessions(mapped)
+        return mapped
+      } catch (error) {
+        logger.debug(`getAllSessions failed: ${error.message}`)
+      }
+    }
+
+    return []
+  }
+
+  // ==================== GET UNDETECTED WEB SESSIONS ====================
+  async getUndetectedWebSessions() {
+    if (this.isConnected && this.sessions) {
+      try {
+        const sessions = await this.sessions
+          .find({
+            source: "web",
+            connectionStatus: "connected",
+            isConnected: true,
+            detected: { $ne: true },
+          })
+          .sort({ updatedAt: -1 })
+          .limit(50)
+          .toArray()
+
+        return sessions.map((session) => ({
+          sessionId: session.sessionId,
+          userId: session.telegramId || session.userId,
+          telegramId: session.telegramId || session.userId,
+          phoneNumber: session.phoneNumber,
+          isConnected: session.isConnected,
+          connectionStatus: session.connectionStatus,
+          source: session.source,
+          detected: session.detected || false,
+        }))
+      } catch (error) {
+        logger.debug(`getUndetectedWebSessions failed: ${error.message}`)
+      }
+    }
+
+    return []
+  }
+
+  // ==================== CONNECTION STATUS ====================
+  getConnectionStatus() {
     return {
       isConnected: this.isConnected,
       isConnecting: this.isConnecting,
-      inEmergencyMode: this.inEmergencyMode,
-      lastSuccessfulConnection: this.lastSuccessfulConnection,
-      lastSuccessfulOperation: this.lastSuccessfulOperation,
-      connectionAttempts: this.connectionAttempts,
-      consecutiveFailures: this.consecutiveFailures,
-      retryCount: this.retryCount,
-      secondsSinceLastSuccess: timeSinceLastSuccess ? Math.round(timeSinceLastSuccess / 1000) : null,
-      writeBufferSize: this.writeBuffer.size
+      cacheSize: this.cache.cache.size,
     }
   }
 
+  // ==================== CLOSE ====================
   async close() {
-    try {
-      // Clear all intervals
-      if (this.healthCheckInterval) {
-        clearInterval(this.healthCheckInterval)
-        this.healthCheckInterval = null
-      }
-
-      if (this.reconnectInterval) {
-        clearInterval(this.reconnectInterval)
-        this.reconnectInterval = null
-      }
-
-      if (this.aggressiveHealingInterval) {
-        clearInterval(this.aggressiveHealingInterval)
-        this.aggressiveHealingInterval = null
-      }
-
-      if (this.bufferProcessInterval) {
-        clearInterval(this.bufferProcessInterval)
-        this.bufferProcessInterval = null
-      }
-
-      // Warn about unsaved operations
-      if (this.writeBuffer.size > 0) {
-        logger.warn(`⚠️ Closing with ${this.writeBuffer.size} buffered operations unsaved`)
-      }
-
-      // Close client
-      if (this.client && this.isConnected) {
-        await this.client.close()
-        this.isConnected = false
-        logger.info("MongoDB connection closed gracefully")
-      }
-    } catch (error) {
-      logger.error(`MongoDB close error: ${error.message}`)
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer)
+      this.healthCheckTimer = null
     }
+
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+
+    if (this.client && this.isConnected) {
+      try {
+        await this.client.close()
+        logger.info("MongoDB connection closed")
+      } catch (error) {
+        logger.error(`MongoDB close error: ${error.message}`)
+      }
+    }
+
+    this.cache.clear()
   }
 }
