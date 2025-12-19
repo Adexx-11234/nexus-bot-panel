@@ -439,24 +439,39 @@ _endReconnection(sessionId, success = false) {
   /**
    * Handle connection timeout (408) - Uses types.js config
    */
-  async _handleConnectionTimeout(sessionId, config) {
-    try {
-      logger.info(`⏱️  ${config.message} for ${sessionId}`)
+  /**
+ * Handle connection timeout (408) - RECONNECT instead of cleanup
+ */
+async _handleConnectionTimeout(sessionId, config) {
+  try {
+    logger.info(`⏱️  ${config.message} for ${sessionId}`)
 
-      const session = await this.sessionManager.storage.getSession(sessionId)
-
-      await this.sessionManager.performCompleteUserCleanup(sessionId)
-
-      // ✅ Better notification error handling
-      if (requiresNotification(config.statusCode)) {
-        await this._sendDisconnectNotification(sessionId, config)
-      }
-
-      logger.info(`✅ Connection timeout cleanup completed for ${sessionId}`)
-    } catch (error) {
-      logger.error(`❌ Connection timeout handler error for ${sessionId}:`, error)
+    // ✅ REMOVED: Complete cleanup
+    // ✅ ADDED: Just reconnect
+    
+    const session = await this.sessionManager.storage.getSession(sessionId)
+    if (!session) {
+      logger.error(`❌ No session data found for ${sessionId}`)
+      return
     }
+      const sock = this.sessionManager.activeSockets?.get(sessionId)
+      if (sock) {
+        await this._cleanupSocketBeforeReconnect(sock, sessionId)
+      }
+    // Update status
+    await this.sessionManager.storage.updateSession(sessionId, {
+      isConnected: false,
+      connectionStatus: "reconnecting",
+    })
+
+    // Schedule reconnection
+    await this._scheduleReconnection(sessionId, config)
+
+    logger.info(`✅ Reconnection scheduled for ${sessionId}`)
+  } catch (error) {
+    logger.error(`❌ Connection timeout handler error for ${sessionId}:`, error)
   }
+}
 
   /**
    * Handle bad MAC/session error (500) - Uses types.js config
@@ -478,7 +493,7 @@ _endReconnection(sessionId, success = false) {
       }
 
       // Clear auth storage but preserve creds
-      await this._clearAuthStorageKeepCreds(sessionId)
+     // await this._clearAuthStorageKeepCreds(sessionId)
 
       // Update session status
       await this.sessionManager.storage.updateSession(sessionId, {

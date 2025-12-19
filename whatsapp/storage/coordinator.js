@@ -809,65 +809,82 @@ export class SessionStorage {
   }
 
   async cleanupOrphanedSessions() {
-    if (!this.mongoStorage.isConnected) {
-      logger.debug("MongoDB not connected - skipping orphan cleanup")
+  if (!this.mongoStorage.isConnected) {
+    logger.debug("MongoDB not connected - skipping orphan cleanup")
+    return { cleaned: 0, errors: 0 }
+  }
+
+  try {
+    logger.info("Starting orphaned sessions cleanup...")
+
+    const allSessions = await this.mongoStorage.sessions.find({}).toArray()
+
+    if (allSessions.length === 0) {
       return { cleaned: 0, errors: 0 }
     }
 
-    try {
-      logger.info("Starting orphaned sessions cleanup...")
+    const authCollection = this.mongoStorage.db.collection("auth_baileys")
+    let cleanedCount = 0
+    let errorCount = 0
 
-      const allSessions = await this.mongoStorage.sessions.find({}).toArray()
+    for (const session of allSessions) {
+      try {
+        const sessionId = session.sessionId
 
-      if (allSessions.length === 0) {
-        return { cleaned: 0, errors: 0 }
-      }
+        // FIXED: Check BOTH MongoDB AND file fallback
+        const credsExists = await authCollection.findOne({
+          sessionId: sessionId,
+          filename: "creds.json",
+        })
 
-      const authCollection = this.mongoStorage.db.collection("auth_baileys")
-      let cleanedCount = 0
-      let errorCount = 0
-
-      for (const session of allSessions) {
-        try {
-          const sessionId = session.sessionId
-
-          const credsExists = await authCollection.findOne({
-            sessionId: sessionId,
-            filename: "creds.json",
-          })
-
-          if (!credsExists) {
-            logger.warn(`Session ${sessionId} has no auth - cleaning up`)
-
-            if (this.mongoStorage.isConnected) {
-              await this.mongoStorage.deleteSession(sessionId)
-            }
-
-            await this.fileManager.cleanupSessionFiles(sessionId)
-
-            if (this.postgresStorage.isConnected) {
-              const source = session.source || "telegram"
-              await this.postgresStorage.cleanupOrphanedSession(sessionId, source)
-            }
-
-            this.sessionCache.delete(sessionId)
-            this._clearWriteBuffer(sessionId)
-
-            cleanedCount++
+        // CRITICAL: Also check file fallback before cleaning
+        let fileCredsExists = false
+        if (!credsExists) {
+          try {
+            const fs = await import('fs/promises')
+            const path = await import('path')
+            const fallbackPath = path.default.join('./auth_fallback', sessionId, 'creds.json')
+            await fs.default.access(fallbackPath)
+            fileCredsExists = true
+            logger.debug(`Session ${sessionId} has file fallback auth`)
+          } catch (err) {
+            // File doesn't exist
           }
-        } catch (error) {
-          logger.error(`Error cleaning orphaned session ${session.sessionId}:`, error.message)
-          errorCount++
         }
-      }
 
-      logger.info(`Orphaned cleanup: ${cleanedCount} cleaned, ${errorCount} errors`)
-      return { cleaned: cleanedCount, errors: errorCount }
-    } catch (error) {
-      logger.error("Orphaned sessions cleanup failed:", error.message)
-      return { cleaned: 0, errors: 1 }
+        // Only clean if NEITHER MongoDB NOR file fallback has creds
+        if (!credsExists && !fileCredsExists) {
+          logger.warn(`Session ${sessionId} has no auth (MongoDB or file) - cleaning up`)
+
+          if (this.mongoStorage.isConnected) {
+            await this.mongoStorage.deleteSession(sessionId)
+          }
+
+          await this.fileManager.cleanupSessionFiles(sessionId)
+
+          if (this.postgresStorage.isConnected) {
+            const source = session.source || "telegram"
+            await this.postgresStorage.cleanupOrphanedSession(sessionId, source)
+          }
+
+          this.sessionCache.delete(sessionId)
+          this._clearWriteBuffer(sessionId)
+
+          cleanedCount++
+        }
+      } catch (error) {
+        logger.error(`Error cleaning orphaned session ${session.sessionId}:`, error.message)
+        errorCount++
+      }
     }
+
+    logger.info(`Orphaned cleanup: ${cleanedCount} cleaned, ${errorCount} errors`)
+    return { cleaned: cleanedCount, errors: errorCount }
+  } catch (error) {
+    logger.error("Orphaned sessions cleanup failed:", error.message)
+    return { cleaned: 0, errors: 1 }
   }
+}
 
   async getAllSessions() {
     try {

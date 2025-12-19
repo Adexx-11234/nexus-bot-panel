@@ -159,71 +159,53 @@ class SyncWorker {
     }
   }
 
-  async sync() {
-    if (this.isRunning) return
-    this.isRunning = true
+ async sync() {
+  if (this.isRunning) return
+  this.isRunning = true
 
-    try {
-      // Check if we should move to file fallback
-      if (!this.cache.useFileFallback && this.cache.shouldUseFileFallback()) {
-        logger.warn(`[${this.sessionId}] 2 hours elapsed - switching to file fallback`)
-        await this.cache.saveToFile()
-        this.stop() // Stop syncing to MongoDB
-        return
-      }
+  try {
+    // REMOVED: Don't stop syncing after 2 hours
+    // Keep trying to sync to MongoDB forever
+    
+    // If using file fallback, ALSO sync to MongoDB (not just files)
+    const pending = this.cache.getPendingSync()
+    if (pending.length === 0) return
 
-      // If already using file fallback, just save to files
-      if (this.cache.useFileFallback) {
-        const pending = this.cache.getPendingSync()
-        for (const { fileName, data } of pending) {
-          await this.cache.saveFileToFallback(fileName, data)
-          this.cache.markSynced(fileName)
-        }
-        return
-      }
-
-      // Try MongoDB sync
-      const pending = this.cache.getPendingSync()
-      if (pending.length === 0) return
-
-      // Always return true for health (as requested)
-      const isHealthy = true
-
-      if (!isHealthy) return
-
-      let synced = 0
-      for (const { fileName, data } of pending) {
-        try {
-          await this.collection.updateOne(
-            { filename: this.fixFileName(fileName), sessionId: this.sessionId },
-            {
-              $set: {
-                filename: this.fixFileName(fileName),
-                sessionId: this.sessionId,
-                datajson: JSON.stringify(data, BufferJSON.replacer),
-                updatedAt: new Date(),
-              },
+    let synced = 0
+    let failedCount = 0
+    
+    for (const { fileName, data } of pending) {
+      try {
+        await this.collection.updateOne(
+          { filename: this.fixFileName(fileName), sessionId: this.sessionId },
+          {
+            $set: {
+              filename: this.fixFileName(fileName),
+              sessionId: this.sessionId,
+              datajson: JSON.stringify(data, BufferJSON.replacer),
+              updatedAt: new Date(),
             },
-            { upsert: true }
-          )
-          this.cache.markSynced(fileName)
-          synced++
-        } catch (error) {
-          // If sync fails, save to file fallback
-          await this.cache.saveFileToFallback(fileName, data)
-        }
+          },
+          { upsert: true }
+        )
+        this.cache.markSynced(fileName)
+        synced++
+      } catch (error) {
+        failedCount++
+        // Save to file fallback on MongoDB failure
+        await this.cache.saveFileToFallback(fileName, data)
       }
-
-      if (synced > 0) {
-        logger.debug(`[${this.sessionId}] Synced ${synced}/${pending.length} files to MongoDB`)
-      }
-    } catch (error) {
-      logger.error(`[${this.sessionId}] Sync error: ${error.message}`)
-    } finally {
-      this.isRunning = false
     }
-  }
 
+    if (synced > 0) {
+      logger.debug(`[${this.sessionId}] Synced ${synced}/${pending.length} files to MongoDB${failedCount > 0 ? ` (${failedCount} to file fallback)` : ''}`)
+    }
+  } catch (error) {
+    logger.error(`[${this.sessionId}] Sync error: ${error.message}`)
+  } finally {
+    this.isRunning = false
+  }
+}
   fixFileName(file) {
     return file?.replace(/\//g, "__")?.replace(/:/g, "-") || ""
   }
@@ -288,17 +270,41 @@ export const useMongoDBAuthState = async (collection, sessionId, isPairing = fal
   }
 
   // ==================== WRITE DATA ====================
-  const writeData = async (data, fileName) => {
-    // Always write to cache immediately (NEVER fails)
-    cacheManager.set(fileName, data)
+  // ==================== WRITE DATA ====================
+const writeData = async (data, fileName) => {
+  // CRITICAL: Always write to cache immediately (NEVER fails)
+  cacheManager.set(fileName, data)
 
-    // If using file fallback, write to file
-    if (cacheManager.useFileFallback) {
-      await cacheManager.saveFileToFallback(fileName, data)
-    }
-    
-    // Sync worker will handle MongoDB in background
+  // CRITICAL: Always try MongoDB first, THEN file fallback
+  let mongoWriteSuccess = false
+  
+  try {
+    await collection.updateOne(
+      { filename: fixFileName(fileName), sessionId },
+      {
+        $set: {
+          filename: fixFileName(fileName),
+          sessionId: sessionId,
+          datajson: JSON.stringify(data, BufferJSON.replacer),
+          updatedAt: new Date(),
+        },
+      },
+      { upsert: true }
+    )
+    mongoWriteSuccess = true
+    cacheManager.markSynced(fileName)
+    logger.debug(`[${sessionId}] ✅ Wrote ${fileName} to MongoDB`)
+  } catch (error) {
+    logger.warn(`[${sessionId}] MongoDB write failed for ${fileName}, using file fallback: ${error.message}`)
   }
+
+  // Also save to file fallback as backup (don't wait)
+  if (cacheManager.useFileFallback || !mongoWriteSuccess) {
+    cacheManager.saveFileToFallback(fileName, data).catch(err => {
+      logger.error(`[${sessionId}] File fallback failed for ${fileName}: ${err.message}`)
+    })
+  }
+}
 
   // ==================== REMOVE DATA ====================
   const removeData = async (fileName) => {

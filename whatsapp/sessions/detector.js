@@ -71,130 +71,134 @@ export class WebSessionDetector {
     logger.info('Web session detector stopped')
   }
 
-  /**
-   * Poll for undetected web sessions
-   * @private
-   */
-  async _pollForWebSessions() {
-    try {
-      // Get undetected web sessions from storage
-      const undetectedSessions = await this.storage.getUndetectedWebSessions()
-      
-      if (undetectedSessions.length === 0) {
-        return
-      }
-
-      logger.info(`Found ${undetectedSessions.length} undetected web sessions - FORCING IMMEDIATE TAKEOVER`)
-
-      // Process each session - FORCE PROCESS, NO SKIPPING
-      for (const sessionData of undetectedSessions) {
-        // CRITICAL: Clear any previous processing flags
-        this.processingNow.delete(sessionData.sessionId)
-        this.processedSessions.delete(sessionData.sessionId)
-        
-        logger.warn(`🚨 FORCING takeover for ${sessionData.sessionId}`)
-
-        await this._processWebSession(sessionData, true).catch(error => {
-          logger.error(`Failed to process ${sessionData.sessionId}:`, error)
-        })
-      }
-
-    } catch (error) {
-      logger.error('Error polling for web sessions:', error)
+ /**
+ * Poll for undetected web sessions
+ * @private
+ */
+async _pollForWebSessions() {
+  try {
+    // Get undetected web sessions from storage
+    const undetectedSessions = await this.storage.getUndetectedWebSessions()
+    
+    if (undetectedSessions.length === 0) {
+      return
     }
+
+    logger.info(`Found ${undetectedSessions.length} undetected web sessions ready for takeover`)
+
+    // Process each session - SMART CHECKS, NO FORCING
+    for (const sessionData of undetectedSessions) {
+      // ✅ Skip if already being processed or completed
+      if (this.processingNow.has(sessionData.sessionId) || 
+          this.processedSessions.has(sessionData.sessionId)) {
+        logger.debug(`Skipping ${sessionData.sessionId} - already processed`)
+        continue
+      }
+
+      // ✅ VERIFY: Must be connected and ready
+      if (sessionData.connectionStatus !== 'connected' || !sessionData.isConnected) {
+        logger.debug(`Skipping ${sessionData.sessionId} - not connected (status: ${sessionData.connectionStatus})`)
+        continue
+      }
+
+      // ✅ VERIFY: Must have been updated at least 5 seconds ago
+      if (sessionData.updatedAt) {
+        const timeSinceUpdate = Date.now() - new Date(sessionData.updatedAt).getTime()
+        if (timeSinceUpdate < 5000) {
+          logger.debug(`Skipping ${sessionData.sessionId} - too recent (${Math.round(timeSinceUpdate/1000)}s ago)`)
+          continue
+        }
+      }
+
+      logger.info(`✅ Taking over ${sessionData.sessionId} (ready for handoff)`)
+
+      await this._processWebSession(sessionData, false).catch(error => {
+        logger.error(`Failed to process ${sessionData.sessionId}:`, error)
+      })
+    }
+
+  } catch (error) {
+    logger.error('Error polling for web sessions:', error)
   }
+}
 
   /**
    * Process individual web session - Take over from web server
    * @private
    */
-  async _processWebSession(sessionData, forceProcess = false) {
-    const { sessionId, phoneNumber, userId } = sessionData
+  /**
+ * Process individual web session - Take over from web server
+ * @private
+ */
+async _processWebSession(sessionData, forceProcess = false) {
+  const { sessionId, phoneNumber, userId } = sessionData
 
-    try {
-      // FORCE MODE: Skip all checks, go straight to takeover
-      if (forceProcess) {
-        logger.warn(`🚨 FORCE MODE - Taking over ${sessionId} immediately`)
-        
-        // Mark as currently processing
-        this.processingNow.add(sessionId)
-        
-        // Take over the session from web server
-        const success = await this._takeOverSession(sessionData)
+  try {
+    // ✅ REMOVED FORCE MODE - Always use smart checks
+    
+    // Skip if already processed in this session
+    if (this.processedSessions.has(sessionId)) {
+      logger.debug(`Session ${sessionId} already processed, skipping`)
+      return
+    }
 
-        if (!success) {
-          logger.warn(`❌ Failed to take over web session: ${sessionId}`)
-          this.processingNow.delete(sessionId)
-        } else {
-          logger.info(`✅ Successfully took over web session: ${sessionId}`)
-          this.processedSessions.add(sessionId)
-          this.processingNow.delete(sessionId)
-        }
-        
-        return
-      }
+    // Mark as currently processing
+    this.processingNow.add(sessionId)
 
-      // NORMAL MODE: Regular checks
-      // Skip if already processed in this session
-      if (this.processedSessions.has(sessionId)) {
-        logger.debug(`Session ${sessionId} already processed, skipping`)
-        return
-      }
+    // Check database for current session state
+    const sessionInDB = await this.storage.getSession(sessionId);
+    
+    // Skip if session doesn't exist
+    if (!sessionInDB) {
+      logger.debug(`Session ${sessionId} not found in database, skipping`)
+      this.processingNow.delete(sessionId)
+      return;
+    }
+    
+    // Skip if already detected
+    if (sessionInDB.detected) {
+      logger.debug(`Session ${sessionId} already detected, skipping`)
+      this.processedSessions.add(sessionId)
+      this.processingNow.delete(sessionId)
+      return;
+    }
 
-      // Mark as currently processing
-      this.processingNow.add(sessionId)
+    // ✅ CRITICAL: Only takeover if CONNECTED
+    if (sessionInDB.connectionStatus !== 'connected' || !sessionInDB.isConnected) {
+      logger.debug(`Session ${sessionId} not ready - status: ${sessionInDB.connectionStatus}`)
+      this.processingNow.delete(sessionId)
+      return;
+    }
 
-      // Check database for current session state
-      const sessionInDB = await this.storage.getSession(sessionId);
-      
-      // Skip if session doesn't exist
-      if (!sessionInDB) {
-        logger.debug(`Session ${sessionId} not found in database, skipping`)
-        this.processingNow.delete(sessionId)
-        return;
-      }
-      
-      // Skip if already detected
-      if (sessionInDB.detected) {
-        logger.debug(`Session ${sessionId} already detected, skipping`)
-        this.processedSessions.add(sessionId)
-        this.processingNow.delete(sessionId)
-        return;
-      }
+    logger.info(`Taking over web session: ${sessionId} (status: ${sessionInDB.connectionStatus})`)
 
-      // CRITICAL FIX: Don't skip disconnected sessions - they need takeover!
-      logger.info(`Taking over web session: ${sessionId} (status: ${sessionInDB.connectionStatus})`)
+    // Check if session already has active socket in main server
+    const existingSocket = this.sessionManager.activeSockets.get(sessionId)
+    if (existingSocket && existingSocket.user && existingSocket.readyState === existingSocket.ws?.OPEN) {
+      logger.info(`Session ${sessionId} already active in main server, marking as detected`)
+      await this.storage.markSessionAsDetected(sessionId, true)
+      this.processedSessions.add(sessionId)
+      this.processingNow.delete(sessionId)
+      return
+    }
 
-      // Check if session already has active socket in main server
-      const existingSocket = this.sessionManager.activeSockets.get(sessionId)
-      if (existingSocket?.user && existingSocket.ws?.socket?._readyState === 1) {
-        logger.info(`Session ${sessionId} already active in main server, marking as detected`)
-        await this.storage.markSessionAsDetected(sessionId, true)
-        this.processedSessions.add(sessionId)
-        this.processingNow.delete(sessionId)
-        return
-      }
+    // Take over the session from web server
+    const success = await this._takeOverSession(sessionData)
 
-      // Take over the session from web server
-      const success = await this._takeOverSession(sessionData)
-
-      if (!success) {
-        logger.warn(`Failed to take over web session: ${sessionId}`)
-        // Remove from processing but NOT from processed - allow retry on next poll
-        this.processingNow.delete(sessionId)
-      } else {
-        logger.info(`Successfully took over web session: ${sessionId}`)
-        // Mark as processed
-        this.processedSessions.add(sessionId)
-        this.processingNow.delete(sessionId)
-      }
-
-    } catch (error) {
-      logger.error(`Error processing web session ${sessionId}:`, error)
-      // Remove from processing to allow retry
+    if (!success) {
+      logger.warn(`Failed to take over web session: ${sessionId}`)
+      this.processingNow.delete(sessionId)
+    } else {
+      logger.info(`Successfully took over web session: ${sessionId}`)
+      this.processedSessions.add(sessionId)
       this.processingNow.delete(sessionId)
     }
+
+  } catch (error) {
+    logger.error(`Error processing web session ${sessionId}:`, error)
+    this.processingNow.delete(sessionId)
   }
+}
 
   /**
    * Take over a web session from web server

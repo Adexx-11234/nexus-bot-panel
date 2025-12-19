@@ -200,19 +200,21 @@ export const DisconnectConfig = {
     handler: 'handleConnectionReplaced'
   },
   
-  [DisconnectReason.CONNECTION_LOST]: {
-    statusCode: 408,
-    shouldReconnect: true,
-    isPermanent: false,
-    requiresCleanup: false,
-    requiresAuthClear: true, // ✅ Auth clear needed
-    keepCredentials: true,
-    reconnectDelay: 6000,
-    maxAttempts: 4,
-    message: 'Connection lost - network issue detected',
-    userAction: 'Reconnecting automatically...',
-    handler: 'handleConnectionLost'
-  },
+  // In types.js - Change 408 configuration
+
+[DisconnectReason.TIMED_OUT]: {
+  statusCode: 408,
+  shouldReconnect: true, // ✅ Changed from false to true
+  isPermanent: false, // ✅ Changed from true to false
+  requiresCleanup: false, // ✅ Changed from true to false
+  requiresNotification: false, // ✅ Changed from true to false
+  requiresAuthClear: false, // ✅ No auth clear for timeout
+  reconnectDelay: 5000,
+  maxAttempts: 3,
+  message: 'Connection request timed out - reconnecting',
+  userAction: 'Reconnecting automatically...', // ✅ Changed message
+  handler: 'handleConnectionTimeout'
+},
   
   [DisconnectReason.INTERNAL_SERVER_ERROR]: {
     statusCode: 500,

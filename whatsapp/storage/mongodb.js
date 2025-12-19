@@ -356,37 +356,48 @@ export class MongoDBStorage {
   }
 
   // ==================== GET UNDETECTED WEB SESSIONS ====================
-  async getUndetectedWebSessions() {
-    if (this.isConnected && this.sessions) {
-      try {
-        const sessions = await this.sessions
-          .find({
-            source: "web",
-            connectionStatus: "connected",
-            isConnected: true,
-            detected: { $ne: true },
-          })
-          .sort({ updatedAt: -1 })
-          .limit(50)
-          .toArray()
+  /**
+ * Get undetected web sessions (PURE operation)
+ * CRITICAL: Only return sessions that are READY for takeover
+ */
+async getUndetectedWebSessions() {
+  if (!this.isConnected) return []
 
-        return sessions.map((session) => ({
-          sessionId: session.sessionId,
-          userId: session.telegramId || session.userId,
-          telegramId: session.telegramId || session.userId,
-          phoneNumber: session.phoneNumber,
-          isConnected: session.isConnected,
-          connectionStatus: session.connectionStatus,
-          source: session.source,
-          detected: session.detected || false,
-        }))
-      } catch (error) {
-        logger.debug(`getUndetectedWebSessions failed: ${error.message}`)
-      }
-    }
+  try {
+    const sessions = await this.sessions.find({
+      source: 'web',
+      connectionStatus: 'connected',  // ✅ Must be connected
+      isConnected: true,               // ✅ Must be connected
+      detected: { $ne: true }          // ✅ Not yet detected
+    })
+    .sort({ updatedAt: -1 })
+    .limit(50)
+    .toArray()
 
+    // ✅ ADDITIONAL FILTER: Only return sessions updated 5+ seconds ago
+    const now = Date.now()
+    const readySessions = sessions.filter(session => {
+      const timeSinceUpdate = now - new Date(session.updatedAt).getTime()
+      return timeSinceUpdate >= 5000 // Wait 5 seconds after last update
+    })
+
+    return readySessions.map(session => ({
+      sessionId: session.sessionId,
+      userId: session.telegramId,
+      telegramId: session.telegramId,
+      phoneNumber: session.phoneNumber,
+      isConnected: session.isConnected,
+      connectionStatus: session.connectionStatus,
+      source: session.source,
+      detected: session.detected || false,
+      updatedAt: session.updatedAt // ✅ Include for time checks
+    }))
+
+  } catch (error) {
+    logger.error('MongoDB get undetected web sessions error:', error.message)
     return []
   }
+}
 
   // ==================== CONNECTION STATUS ====================
   getConnectionStatus() {
