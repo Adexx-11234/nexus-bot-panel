@@ -204,6 +204,10 @@ export class WebSessionDetector {
  * Take over a web session from web server
  * @private
  */
+/**
+ * Take over a web session from web server
+ * @private
+ */
 async _takeOverSession(sessionData) {
   const { sessionId, phoneNumber, userId, telegramId } = sessionData
 
@@ -231,7 +235,7 @@ async _takeOverSession(sessionData) {
     const existingSocket = this.sessionManager.activeSockets.get(sessionId)
     if (existingSocket && existingSocket.user && existingSocket.readyState === existingSocket.ws?.OPEN) {
       logger.info(`Session ${sessionId} already connected, marking as detected`)
-      await this.storage.markSessionAsDetected(sessionId, true)
+      await this.storage.updateSession(sessionId, { detected: true })
       return true
     }
 
@@ -245,8 +249,10 @@ async _takeOverSession(sessionData) {
         onConnected: async () => {
           logger.info(`✅ Successfully took over ${sessionId}`)
           
-          // Mark as detected in database
-          await this.storage.markSessionAsDetected(sessionId, true)
+          // Mark as detected in database - FIXED: use updateSession instead of markSessionAsDetected
+          await this.storage.updateSession(sessionId, { detected: true }).catch(error => {
+            logger.error(`Failed to mark ${sessionId} as detected:`, error)
+          })
           
           // Setup full event handlers if enabled
           if (this.sessionManager.eventHandlersEnabled && !sock.eventHandlersSetup) {
