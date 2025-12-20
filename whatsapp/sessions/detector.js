@@ -196,14 +196,6 @@ export class WebSessionDetector {
     }
   }
 
-  /**
-   * Take over a web session from web server
-   * @private
-   */
-  /**
- * Take over a web session from web server
- * @private
- */
 /**
  * Take over a web session from web server
  * @private
@@ -249,10 +241,13 @@ async _takeOverSession(sessionData) {
         onConnected: async () => {
           logger.info(`✅ Successfully took over ${sessionId}`)
           
-          // Mark as detected in database - FIXED: use updateSession instead of markSessionAsDetected
+          // Mark as detected in database - FIXED: use updateSession
           await this.storage.updateSession(sessionId, { detected: true }).catch(error => {
             logger.error(`Failed to mark ${sessionId} as detected:`, error)
           })
+          
+          // Wait for write buffer to flush (default is 500ms + buffer time)
+          await new Promise(resolve => setTimeout(resolve, 1000))
           
           // Setup full event handlers if enabled
           if (this.sessionManager.eventHandlersEnabled && !sock.eventHandlersSetup) {
