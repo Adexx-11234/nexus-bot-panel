@@ -175,53 +175,62 @@ export class SessionStorage {
 
   // ==================== UPDATE SESSION ====================
   
-  async updateSession(sessionId, updates) {
-    // Update cache immediately
-    if (this.sessionCache.has(sessionId)) {
-      const cachedSession = this.sessionCache.get(sessionId)
-      Object.assign(cachedSession, updates)
-      cachedSession.lastCached = Date.now()
-    }
+  // ==================== UPDATE SESSION ====================
 
-    // Buffer the write
-    const bufferId = `${sessionId}_update`
-    if (this.writeBuffer.has(bufferId)) {
-      const existing = this.writeBuffer.get(bufferId)
-      if (existing.timeout) clearTimeout(existing.timeout)
-      Object.assign(existing.data, updates)
-    } else {
-      this.writeBuffer.set(bufferId, { data: { ...updates }, timeout: null })
-    }
-
-    const timeoutId = setTimeout(async () => {
-      const bufferedData = this.writeBuffer.get(bufferId)?.data
-      if (!bufferedData) return
-
-      bufferedData.updatedAt = new Date()
-
-      // Save based on mode
-      if (this.storageMode === 'file') {
-        await this.fileManager.updateSession(sessionId, bufferedData)
-      } else {
-        if (this.mongoStorage.isConnected) {
-          await this.mongoStorage.updateSession(sessionId, bufferedData)
-        } else {
-          await this.fileManager.updateSession(sessionId, bufferedData)
-        }
-      }
-
-      // Always update PostgreSQL
-      if (this.postgresStorage.isConnected) {
-        this.postgresStorage.updateSession(sessionId, bufferedData)
-          .catch(() => {})
-      }
-
-      this.writeBuffer.delete(bufferId)
-    }, WRITE_BUFFER_FLUSH_INTERVAL)
-
-    this.writeBuffer.get(bufferId).timeout = timeoutId
-    return true
+async updateSession(sessionId, updates) {
+  // Update cache immediately
+  if (this.sessionCache.has(sessionId)) {
+    const cachedSession = this.sessionCache.get(sessionId)
+    Object.assign(cachedSession, updates)
+    cachedSession.lastCached = Date.now()
   }
+
+  // Buffer the write
+  const bufferId = `${sessionId}_update`
+  if (this.writeBuffer.has(bufferId)) {
+    const existing = this.writeBuffer.get(bufferId)
+    if (existing.timeout) clearTimeout(existing.timeout)
+    Object.assign(existing.data, updates)
+  } else {
+    this.writeBuffer.set(bufferId, { data: { ...updates }, timeout: null })
+  }
+
+  const timeoutId = setTimeout(async () => {
+    const bufferedData = this.writeBuffer.get(bufferId)?.data
+    if (!bufferedData) return
+
+    bufferedData.updatedAt = new Date()
+
+    // Save based on mode
+    if (this.storageMode === 'file') {
+      await this.fileManager.updateSession(sessionId, bufferedData)
+      
+      // 🔴 FIX: For web sessions, ALWAYS update MongoDB even in file mode
+      // because getUndetectedWebSessions() ONLY queries MongoDB
+      if (bufferedData.source === 'web' && this.mongoStorage.isConnected) {
+        await this.mongoStorage.updateSession(sessionId, bufferedData)
+          .catch(err => logger.debug(`MongoDB update failed for web session ${sessionId}: ${err.message}`))
+      }
+    } else {
+      if (this.mongoStorage.isConnected) {
+        await this.mongoStorage.updateSession(sessionId, bufferedData)
+      } else {
+        await this.fileManager.updateSession(sessionId, bufferedData)
+      }
+    }
+
+    // Always update PostgreSQL
+    if (this.postgresStorage.isConnected) {
+      this.postgresStorage.updateSession(sessionId, bufferedData)
+        .catch(() => {})
+    }
+
+    this.writeBuffer.delete(bufferId)
+  }, WRITE_BUFFER_FLUSH_INTERVAL)
+
+  this.writeBuffer.get(bufferId).timeout = timeoutId
+  return true
+}
 
   // ==================== DELETE SESSION ====================
   
