@@ -2,7 +2,7 @@
 
 import downloader, { downloadMedia } from '../../lib/downloaders/index.js';
 import { generateWAMessageFromContent, WAProto as proto, prepareWAMessageMedia } from '@whiskeysockets/baileys';
-
+import fs from 'fs'
 export default {
   name: "tiktok",
   commands: ["tiktok", "tt", "ttdl", "tiktokdl"],
