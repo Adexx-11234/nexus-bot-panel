@@ -200,85 +200,95 @@ export class WebSessionDetector {
    * Take over a web session from web server
    * @private
    */
-  async _takeOverSession(sessionData) {
-    const { sessionId, phoneNumber, userId, telegramId } = sessionData
-   logger.warn(`DEBUG - Looking for session with ID: "${sessionId}"`)
+  /**
+ * Take over a web session from web server
+ * @private
+ */
+async _takeOverSession(sessionData) {
+  const { sessionId, phoneNumber, userId, telegramId } = sessionData
+
+  logger.warn(`DEBUG - Looking for session with ID: "${sessionId}"`)
   logger.warn(`DEBUG - Session data received:`, JSON.stringify(sessionData))
 
-    try {
-      const actualUserId = userId || telegramId || sessionId.replace('session_', '')
-logger.warn(`DEBUG - getSession returned:`, JSON.stringify(currentSession))
-      // Get current session state from database
-      const currentSession = await this.storage.getSession(sessionId);
-      if (!currentSession) {
-        logger.warn(`Session ${sessionId} no longer exists`)
-        return false;
-      }
+  let currentSession = null
 
-      // Wait briefly for any pending web server operations
-      await new Promise(resolve => setTimeout(resolve, 1000));
+  try {
+    const actualUserId = userId || telegramId || sessionId.replace('session_', '')
 
-      // Check again if session is already active
-      const existingSocket = this.sessionManager.activeSockets.get(sessionId)
-      if (existingSocket && existingSocket.user && existingSocket.readyState === existingSocket.ws?.OPEN) {
-        logger.info(`Session ${sessionId} already connected, marking as detected`)
-        await this.storage.markSessionAsDetected(sessionId, true)
-        return true
-      }
+    // Get current session state from database
+    currentSession = await this.storage.getSession(sessionId);
+    logger.warn(`DEBUG - getSession returned:`, JSON.stringify(currentSession))
+    
+    if (!currentSession) {
+      logger.warn(`Session ${sessionId} no longer exists`)
+      return false;
+    }
 
-      logger.info(`Creating takeover connection for ${sessionId} (previous status: ${currentSession.connectionStatus})`)
+    // Wait briefly for any pending web server operations
+    await new Promise(resolve => setTimeout(resolve, 1000));
 
-      // Create session with takeover callbacks
-      const sock = await this.sessionManager.createSession(
-        actualUserId,
-        phoneNumber,
-        {
-          onConnected: async () => {
-            logger.info(`✅ Successfully took over ${sessionId}`)
-            
-            // Mark as detected in database
-            await this.storage.markSessionAsDetected(sessionId, true)
-            
-            // Setup full event handlers if enabled
-            if (this.sessionManager.eventHandlersEnabled && !sock.eventHandlersSetup) {
-              await this.sessionManager._setupEventHandlers(sock, sessionId).catch(error => {
-                logger.error(`Failed to setup handlers for ${sessionId}:`, error)
-              })
-            }
-          },
-          onError: (error) => {
-            logger.error(`Takeover error for ${sessionId}:`, error)
-            // Remove from processed to allow retry
-            this.processedSessions.delete(sessionId)
-            this.processingNow.delete(sessionId)
+    // Check again if session is already active
+    const existingSocket = this.sessionManager.activeSockets.get(sessionId)
+    if (existingSocket && existingSocket.user && existingSocket.readyState === existingSocket.ws?.OPEN) {
+      logger.info(`Session ${sessionId} already connected, marking as detected`)
+      await this.storage.markSessionAsDetected(sessionId, true)
+      return true
+    }
+
+    logger.info(`Creating takeover connection for ${sessionId} (previous status: ${currentSession.connectionStatus})`)
+
+    // Create session with takeover callbacks
+    const sock = await this.sessionManager.createSession(
+      actualUserId,
+      phoneNumber,
+      {
+        onConnected: async () => {
+          logger.info(`✅ Successfully took over ${sessionId}`)
+          
+          // Mark as detected in database
+          await this.storage.markSessionAsDetected(sessionId, true)
+          
+          // Setup full event handlers if enabled
+          if (this.sessionManager.eventHandlersEnabled && !sock.eventHandlersSetup) {
+            await this.sessionManager._setupEventHandlers(sock, sessionId).catch(error => {
+              logger.error(`Failed to setup handlers for ${sessionId}:`, error)
+            })
           }
         },
-        true, // isReconnect - use existing auth from web server
-        'web', // source
-        false // Don't allow pairing - already paired by web server
-      )
+        onError: (error) => {
+          logger.error(`Takeover error for ${sessionId}:`, error)
+          // Remove from processed to allow retry
+          this.processedSessions.delete(sessionId)
+          this.processingNow.delete(sessionId)
+        }
+      },
+      true, // isReconnect - use existing auth from web server
+      'web', // source
+      false // Don't allow pairing - already paired by web server
+    )
 
-      if (!sock) {
-        logger.warn(`Failed to create socket for takeover: ${sessionId}`)
-        return false
-      }
-
-      logger.info(`Successfully initiated takeover for ${sessionId}`)
-      return true
-
-    } catch (error) {
-      logger.error(`Takeover failed for ${sessionId}:`, error.message)
-      
-      // Update session with error info
-      await this.storage.updateSession(sessionId, {
-        detected: false,
-        detectionError: error.message,
-        lastDetectionAttempt: new Date()
-      }).catch(() => {})
-      
+    if (!sock) {
+      logger.warn(`Failed to create socket for takeover: ${sessionId}`)
       return false
     }
+
+    logger.info(`Successfully initiated takeover for ${sessionId}`)
+    return true
+
+  } catch (error) {
+    logger.error(`Takeover failed for ${sessionId}:`, error.message)
+    logger.error(`Full error:`, error)
+    
+    // Update session with error info
+    await this.storage.updateSession(sessionId, {
+      detected: false,
+      detectionError: error.message,
+      lastDetectionAttempt: new Date()
+    }).catch(() => {})
+    
+    return false
   }
+}
 
   /**
    * Check if detector is running
