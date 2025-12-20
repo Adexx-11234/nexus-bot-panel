@@ -1,129 +1,70 @@
-import fs from 'fs'
-import path from 'path'
-import { fileURLToPath } from 'url'
-import { createComponentLogger } from '../../utils/logger.js'
+import fs from "fs/promises"
+import path from "path"
+import fsSync from "fs"
+import { createComponentLogger } from "../../utils/logger.js"
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
-
-const logger = createComponentLogger('FILE_MANAGER')
+const logger = createComponentLogger("FILE_MANAGER")
 
 /**
- * FileManager - File-based storage (FALLBACK when DB unavailable)
- * Handles both auth state AND session data in files
+ * FileManager - Handles METADATA storage only
+ * 
+ * DOES NOT HANDLE AUTH (creds.json, keys) - that's handled by auth-state.js
+ * 
+ * Structure:
+ * ./sessions/{sessionId}/metadata.json - Session metadata only
+ * 
+ * Auth files (creds.json, keys) are in the same folder but managed by auth-state.js
  */
 export class FileManager {
-  constructor(sessionDir = './sessions') {
-    this.sessionsDir = path.resolve(process.cwd(), sessionDir)
-    this._ensureSessionsDirectory()
-  }
-
-  _ensureSessionsDirectory() {
-    try {
-      if (!fs.existsSync(this.sessionsDir)) {
-        fs.mkdirSync(this.sessionsDir, { recursive: true })
-        logger.info(`Created sessions directory: ${this.sessionsDir}`)
-      }
-    } catch (error) {
-      logger.error('Failed to create sessions directory:', error)
-      throw error
+  constructor(sessionDir = "./sessions") {
+    this.sessionDir = sessionDir
+    this.ensureDirectoryExists(this.sessionDir)
+    
+    const storageMode = process.env.STORAGE_MODE || 'mongodb'
+    if (storageMode === 'file') {
+      logger.info('📁 File storage ACTIVE - handling metadata')
+    } else {
+      logger.info('📁 File storage BACKUP - metadata fallback only')
     }
   }
 
+  async ensureDirectoryExists(dirPath) {
+    try {
+      await fs.mkdir(dirPath, { recursive: true })
+    } catch (error) {
+      if (error.code !== "EEXIST") {
+        logger.error(`Failed to create directory ${dirPath}:`, error)
+      }
+    }
+  }
+
+  /**
+   * Get session folder path
+   */
   getSessionPath(sessionId) {
-    let normalizedSessionId = sessionId.startsWith('session_')
-      ? sessionId
-      : sessionId.startsWith('user_')
-        ? sessionId.replace('user_', 'session_')
-        : `session_${sessionId}`
-
-    return path.join(this.sessionsDir, normalizedSessionId)
+    return path.join(this.sessionDir, sessionId)
   }
 
-  ensureSessionDirectory(sessionId) {
-    try {
-      const sessionPath = this.getSessionPath(sessionId)
-      if (!fs.existsSync(sessionPath)) {
-        fs.mkdirSync(sessionPath, { recursive: true })
-      }
-      return true
-    } catch (error) {
-      logger.error(`Failed to create session directory ${sessionId}:`, error)
-      return false
-    }
+  /**
+   * Get metadata file path (NOT creds.json - that's auth-state.js)
+   */
+  getMetadataPath(sessionId) {
+    return path.join(this.getSessionPath(sessionId), "metadata.json")
   }
 
-  hasValidCredentials(sessionId) {
-    try {
-      const sessionPath = this.getSessionPath(sessionId)
-      const credsFile = path.join(sessionPath, 'creds.json')
-
-      if (!fs.existsSync(credsFile)) return false
-
-      const stats = fs.statSync(credsFile)
-      if (stats.size === 0) return false
-
-      const data = fs.readFileSync(credsFile, 'utf8')
-      const parsed = JSON.parse(data)
-
-      return !!(parsed?.noiseKey || parsed?.signedIdentityKey || parsed?.registrationId)
-
-    } catch (error) {
-      return false
-    }
-  }
-
-  readCredentials(sessionId) {
-    try {
-      const sessionPath = this.getSessionPath(sessionId)
-      const credsFile = path.join(sessionPath, 'creds.json')
-
-      if (!fs.existsSync(credsFile)) return null
-
-      const data = fs.readFileSync(credsFile, 'utf8')
-      if (!data.trim()) return null
-
-      return JSON.parse(data)
-
-    } catch (error) {
-      logger.error(`Failed to read credentials ${sessionId}:`, error)
-      return null
-    }
-  }
-
-  writeCredentials(sessionId, credentials) {
-    try {
-      if (!credentials || typeof credentials !== 'object') return false
-
-      const sessionPath = this.getSessionPath(sessionId)
-      this.ensureSessionDirectory(sessionId)
-
-      const credsFile = path.join(sessionPath, 'creds.json')
-      const tempFile = credsFile + '.tmp'
-
-      fs.writeFileSync(tempFile, JSON.stringify(credentials, null, 2))
-      fs.renameSync(tempFile, credsFile)
-
-      return true
-
-    } catch (error) {
-      logger.error(`Failed to write credentials ${sessionId}:`, error)
-      return false
-    }
-  }
-
-  // NEW: File-based session data storage (fallback)
+  /**
+   * Save session metadata ONLY
+   * Does NOT touch auth files (creds.json, keys)
+   */
   async saveSession(sessionId, sessionData) {
     try {
       const sessionPath = this.getSessionPath(sessionId)
-      this.ensureSessionDirectory(sessionId)
-
-      const metadataFile = path.join(sessionPath, 'session.json')
-      const tempFile = metadataFile + '.tmp'
+      await this.ensureDirectoryExists(sessionPath)
 
       const metadata = {
         sessionId,
         telegramId: sessionData.telegramId || sessionData.userId,
+        userId: sessionData.userId || sessionData.telegramId,
         phoneNumber: sessionData.phoneNumber,
         isConnected: sessionData.isConnected !== undefined ? sessionData.isConnected : false,
         connectionStatus: sessionData.connectionStatus || 'disconnected',
@@ -131,308 +72,310 @@ export class FileManager {
         source: sessionData.source || 'telegram',
         detected: sessionData.detected !== false,
         createdAt: sessionData.createdAt || new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date().toISOString(),
       }
 
-      fs.writeFileSync(tempFile, JSON.stringify(metadata, null, 2))
-      fs.renameSync(tempFile, metadataFile)
+      const metadataPath = this.getMetadataPath(sessionId)
+      await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2), "utf8")
 
       return true
-
     } catch (error) {
-      logger.error(`Failed to save session ${sessionId}:`, error)
+      logger.error(`Failed to save metadata ${sessionId}:`, error.message)
       return false
     }
   }
 
-  // NEW: Read session data from file
+  /**
+   * Get session metadata ONLY
+   */
   async getSession(sessionId) {
     try {
-      const sessionPath = this.getSessionPath(sessionId)
-      const metadataFile = path.join(sessionPath, 'session.json')
-
-      if (!fs.existsSync(metadataFile)) return null
-
-      const data = fs.readFileSync(metadataFile, 'utf8')
-      if (!data.trim()) return null
-
-      const metadata = JSON.parse(data)
-
-      return {
-        sessionId: metadata.sessionId,
-        userId: metadata.telegramId,
-        telegramId: metadata.telegramId,
-        phoneNumber: metadata.phoneNumber,
-        isConnected: metadata.isConnected,
-        connectionStatus: metadata.connectionStatus,
-        reconnectAttempts: metadata.reconnectAttempts,
-        source: metadata.source || 'telegram',
-        detected: metadata.detected !== false,
-        createdAt: metadata.createdAt,
-        updatedAt: metadata.updatedAt
+      const metadataPath = this.getMetadataPath(sessionId)
+      
+      try {
+        const data = await fs.readFile(metadataPath, "utf8")
+        const metadata = JSON.parse(data)
+        
+        return {
+          sessionId: metadata.sessionId,
+          userId: metadata.userId || metadata.telegramId,
+          telegramId: metadata.telegramId || metadata.userId,
+          phoneNumber: metadata.phoneNumber,
+          isConnected: metadata.isConnected,
+          connectionStatus: metadata.connectionStatus,
+          reconnectAttempts: metadata.reconnectAttempts || 0,
+          source: metadata.source || 'telegram',
+          detected: metadata.detected !== false,
+          createdAt: metadata.createdAt,
+          updatedAt: metadata.updatedAt,
+        }
+      } catch (readError) {
+        // Metadata doesn't exist
+        return null
       }
-
     } catch (error) {
-      logger.error(`Failed to get session ${sessionId}:`, error)
+      logger.error(`Failed to get session ${sessionId}:`, error.message)
       return null
     }
   }
 
-  // NEW: Update session data in file
+  /**
+   * Update session metadata ONLY
+   */
   async updateSession(sessionId, updates) {
     try {
-      const existingSession = await this.getSession(sessionId)
-      if (!existingSession) return false
-
-      const updatedSession = {
-        ...existingSession,
-        ...updates,
-        updatedAt: new Date().toISOString()
+      // Get existing metadata
+      let metadata = await this.getSession(sessionId)
+      
+      if (!metadata) {
+        // Create new metadata if doesn't exist
+        metadata = {
+          sessionId,
+          userId: sessionId.replace('session_', ''),
+          telegramId: sessionId.replace('session_', ''),
+          phoneNumber: null,
+          isConnected: false,
+          connectionStatus: 'disconnected',
+          reconnectAttempts: 0,
+          source: 'telegram',
+          detected: true,
+          createdAt: new Date().toISOString(),
+        }
       }
 
-      return await this.saveSession(sessionId, updatedSession)
+      // Apply updates
+      const allowedFields = [
+        'isConnected',
+        'connectionStatus',
+        'phoneNumber',
+        'reconnectAttempts',
+        'source',
+        'detected',
+        'detectedAt',
+      ]
 
+      for (const field of allowedFields) {
+        if (updates[field] !== undefined) {
+          metadata[field] = updates[field]
+        }
+      }
+
+      metadata.updatedAt = new Date().toISOString()
+
+      // Save updated metadata
+      const metadataPath = this.getMetadataPath(sessionId)
+      await this.ensureDirectoryExists(path.dirname(metadataPath))
+      await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2), "utf8")
+
+      return true
     } catch (error) {
-      logger.error(`Failed to update session ${sessionId}:`, error)
+      logger.error(`Failed to update session ${sessionId}:`, error.message)
       return false
     }
   }
 
-  // NEW: Get all sessions from files
+  /**
+   * Delete session metadata ONLY
+   * Does NOT delete auth files - that's handled by auth-state.js cleanup()
+   */
+  async deleteSession(sessionId) {
+    try {
+      const metadataPath = this.getMetadataPath(sessionId)
+      
+      try {
+        await fs.unlink(metadataPath)
+        logger.debug(`Deleted metadata for ${sessionId}`)
+        return true
+      } catch (error) {
+        if (error.code !== 'ENOENT') {
+          logger.error(`Failed to delete metadata ${sessionId}:`, error.message)
+        }
+        return false
+      }
+    } catch (error) {
+      logger.error(`Failed to delete session ${sessionId}:`, error.message)
+      return false
+    }
+  }
+
+  /**
+   * Complete cleanup - delete entire session folder
+   * This includes metadata.json AND auth files (creds.json, keys)
+   * Only use this for full logout/cleanup
+   */
+  async cleanupSessionFiles(sessionId) {
+    try {
+      const sessionPath = this.getSessionPath(sessionId)
+      
+      try {
+        await fs.rm(sessionPath, { recursive: true, force: true })
+        logger.info(`Cleaned up session folder: ${sessionId}`)
+        return true
+      } catch (error) {
+        if (error.code !== 'ENOENT') {
+          logger.error(`Failed to cleanup ${sessionId}:`, error.message)
+        }
+        return false
+      }
+    } catch (error) {
+      logger.error(`Cleanup error for ${sessionId}:`, error.message)
+      return false
+    }
+  }
+
+/**
+ * Check if session has valid credentials (creds.json with required fields)
+ * Already async - this is CORRECT in your code
+ */
+async hasValidCredentials(sessionId) {
+  try {
+    const credsPath = path.join(this.getSessionPath(sessionId), 'creds.json')
+    
+    try {
+      const data = await fs.readFile(credsPath, 'utf8')
+      const creds = JSON.parse(data)
+      
+      // Validate required fields
+      const isValid = !!(creds?.noiseKey && creds?.signedIdentityKey)
+      
+      if (isValid) {
+        logger.debug(`✅ Session ${sessionId} has valid file credentials`)
+      } else {
+        logger.debug(`❌ Session ${sessionId} file exists but missing required fields`)
+      }
+      
+      return isValid
+    } catch (error) {
+      logger.debug(`❌ Session ${sessionId} has no creds.json: ${error.message}`)
+      return false
+    }
+  } catch (error) {
+    logger.error(`Failed to check credentials for ${sessionId}:`, error.message)
+    return false
+  }
+}
+
+/**
+ * Ensure session directory exists (already async compatible)
+ */
+async ensureSessionDirectory(sessionId) {
+  try {
+    const sessionPath = this.getSessionPath(sessionId)
+    await this.ensureDirectoryExists(sessionPath)
+  } catch (error) {
+    logger.error(`Failed to ensure directory for ${sessionId}:`, error.message)
+  }
+}
+
+/**
+ * Get credentials file path
+ */
+getCredsPath(sessionId) {
+  return path.join(this.getSessionPath(sessionId), 'creds.json')
+}
+
+/**
+ * Check if session has auth files
+ */
+async hasAuthFiles(sessionId) {
+  try {
+    const credsPath = this.getCredsPath(sessionId)
+    await fs.access(credsPath)
+    
+    // Read and validate
+    const data = await fs.readFile(credsPath, 'utf8')
+    const creds = JSON.parse(data)
+    
+    return !!(creds?.noiseKey && creds?.signedIdentityKey)
+  } catch (error) {
+    return false
+  }
+}
+
+  /**
+   * Get all sessions from file storage
+   */
   async getAllSessions() {
     try {
-      if (!fs.existsSync(this.sessionsDir)) return []
-
-      const sessionDirs = fs.readdirSync(this.sessionsDir, { withFileTypes: true })
-        .filter(dirent => dirent.isDirectory() && dirent.name.startsWith('session_'))
-        .map(dirent => dirent.name)
+      const entries = await fs.readdir(this.sessionDir, { withFileTypes: true })
+      const sessionFolders = entries.filter(entry => entry.isDirectory())
 
       const sessions = []
 
-      for (const dirName of sessionDirs) {
-        const sessionData = await this.getSession(dirName)
-        if (sessionData) {
-          sessions.push(sessionData)
+      for (const folder of sessionFolders) {
+        const sessionId = folder.name
+        const metadata = await this.getSession(sessionId)
+        
+        if (metadata) {
+          sessions.push(metadata)
         }
       }
 
-      return sessions.sort((a, b) => 
-        new Date(b.updatedAt) - new Date(a.updatedAt)
-      )
-
+      return sessions
     } catch (error) {
-      logger.error('Failed to get all sessions:', error)
+      logger.error("Failed to get all sessions:", error.message)
       return []
     }
   }
 
-  async cleanupSessionFiles(sessionId) {
+  /**
+   * Check if session folder exists
+   */
+  async sessionExists(sessionId) {
     try {
       const sessionPath = this.getSessionPath(sessionId)
-      if (!fs.existsSync(sessionPath)) return true
-
-      return await this._removeDirectory(sessionPath)
-
-    } catch (error) {
-      logger.error(`Failed to cleanup session files ${sessionId}:`, error)
+      await fs.access(sessionPath)
+      return true
+    } catch {
       return false
     }
   }
 
-  async _removeDirectory(dirPath, maxRetries = 3) {
-    let attempt = 0
-
-    while (attempt < maxRetries) {
-      try {
-        if (fs.rmSync) {
-          fs.rmSync(dirPath, { recursive: true, force: true })
-          return true
-        }
-
-        const files = fs.readdirSync(dirPath)
-        for (const file of files) {
-          const filePath = path.join(dirPath, file)
-          const stat = fs.statSync(filePath)
-
-          if (stat.isDirectory()) {
-            await this._removeDirectory(filePath, 1)
-          } else {
-            fs.unlinkSync(filePath)
-          }
-        }
-
-        fs.rmdirSync(dirPath)
-        return true
-
-      } catch (error) {
-        attempt++
-        if (attempt >= maxRetries) {
-          logger.error(`Failed to remove directory ${dirPath}:`, error)
-          return false
-        }
-        await new Promise(resolve => setTimeout(resolve, 500 * attempt))
-      }
-    }
-
-    return false
-  }
-
-  async cleanupOrphanedSessions(database) {
+  /**
+   * Cleanup orphaned sessions
+   * A session is orphaned if it has neither metadata nor auth files
+   */
+  async cleanupOrphanedSessions(storageCoordinator) {
     try {
-      if (!fs.existsSync(this.sessionsDir)) return 0
-
-      const sessionDirs = fs.readdirSync(this.sessionsDir, { withFileTypes: true })
-        .filter(dirent => dirent.isDirectory() &&
-          (dirent.name.startsWith('user_') || dirent.name.startsWith('session_')))
-        .map(dirent => dirent.name)
+      const entries = await fs.readdir(this.sessionDir, { withFileTypes: true })
+      const sessionFolders = entries.filter(entry => entry.isDirectory())
 
       let cleanedCount = 0
 
-      for (const dirName of sessionDirs) {
-        try {
-          let sessionId
-
-          if (dirName.startsWith('user_')) {
-            const userId = dirName.replace('user_', '')
-            if (!userId) continue
-            sessionId = `session_${userId}`
-
-            const oldPath = path.join(this.sessionsDir, dirName)
-            const newPath = path.join(this.sessionsDir, sessionId)
-
-            if (!fs.existsSync(newPath)) {
-              fs.renameSync(oldPath, newPath)
-            } else {
-              await this._removeDirectory(oldPath)
-            }
-
-          } else if (dirName.startsWith('session_')) {
-            sessionId = dirName
-          } else {
-            continue
-          }
-
-          const hasDbSession = database && await database.getSession?.(sessionId)
-
-          if (!hasDbSession) {
-            const dirPath = path.join(this.sessionsDir, sessionId)
-            if (!fs.existsSync(dirPath)) continue
-
-            const stats = fs.statSync(dirPath)
-            const dirAge = Date.now() - stats.mtime.getTime()
-            const twoHours = 2 * 60 * 60 * 1000
-
-            if (dirAge > twoHours) {
-              await this._removeDirectory(dirPath)
-              cleanedCount++
-            }
-          }
-        } catch (error) {
-          logger.error(`Error processing directory ${dirName}:`, error)
+      for (const folder of sessionFolders) {
+        const sessionId = folder.name
+        const sessionPath = this.getSessionPath(sessionId)
+        
+        // Check if folder has any files
+        const files = await fs.readdir(sessionPath)
+        
+        // If folder is empty or only has old temp files, clean it up
+        if (files.length === 0) {
+          logger.warn(`Empty session folder detected: ${sessionId}`)
+          await this.cleanupSessionFiles(sessionId)
+          cleanedCount++
         }
       }
 
       if (cleanedCount > 0) {
-        logger.info(`Cleaned ${cleanedCount} orphaned session directories`)
+        logger.info(`Cleaned up ${cleanedCount} orphaned session folders`)
       }
 
-      return cleanedCount
-
+      return { cleaned: cleanedCount, errors: 0 }
     } catch (error) {
-      logger.error('Failed to cleanup orphaned sessions:', error)
-      return 0
+      logger.error("Orphaned cleanup error:", error.message)
+      return { cleaned: 0, errors: 1 }
     }
   }
 
-  getSessionSize(sessionId) {
-    try {
-      const sessionPath = this.getSessionPath(sessionId)
-      if (!fs.existsSync(sessionPath)) return 0
-
-      let totalSize = 0
-      const files = fs.readdirSync(sessionPath)
-
-      for (const file of files) {
-        const filePath = path.join(sessionPath, file)
-        const stats = fs.statSync(filePath)
-        totalSize += stats.size
-      }
-
-      return totalSize
-
-    } catch (error) {
-      return 0
-    }
-  }
-
-  listSessionFiles(sessionId) {
-    try {
-      const sessionPath = this.getSessionPath(sessionId)
-      if (!fs.existsSync(sessionPath)) return []
-
-      return fs.readdirSync(sessionPath).map(file => ({
-        name: file,
-        path: path.join(sessionPath, file),
-        size: fs.statSync(path.join(sessionPath, file)).size
-      }))
-
-    } catch (error) {
-      return []
-    }
-  }
-
-  validateSessionDirectory(sessionId) {
-    try {
-      const sessionPath = this.getSessionPath(sessionId)
-
-      return {
-        exists: fs.existsSync(sessionPath),
-        hasCredentials: this.hasValidCredentials(sessionId),
-        size: this.getSessionSize(sessionId),
-        files: this.listSessionFiles(sessionId).length,
-        path: sessionPath
-      }
-
-    } catch (error) {
-      return {
-        exists: false,
-        hasCredentials: false,
-        size: 0,
-        files: 0,
-        path: null
-      }
-    }
-  }
-
+  /**
+   * Get storage stats
+   */
   getStats() {
-    try {
-      if (!fs.existsSync(this.sessionsDir)) return { total: 0, size: 0 }
-
-      const sessionDirs = fs.readdirSync(this.sessionsDir, { withFileTypes: true })
-        .filter(dirent => dirent.isDirectory())
-
-      let totalSize = 0
-      let validSessions = 0
-
-      for (const dir of sessionDirs) {
-        const sessionId = dir.name
-        const size = this.getSessionSize(sessionId)
-        totalSize += size
-
-        if (this.hasValidCredentials(sessionId)) {
-          validSessions++
-        }
-      }
-
-      return {
-        total: sessionDirs.length,
-        validSessions,
-        totalSize,
-        directory: this.sessionsDir
-      }
-
-    } catch (error) {
-      return { total: 0, validSessions: 0, totalSize: 0 }
+    return {
+      sessionDir: this.sessionDir,
+      storageMode: process.env.STORAGE_MODE || 'mongodb',
+      handles: 'metadata.json only (auth handled by auth-state.js)',
     }
   }
 }

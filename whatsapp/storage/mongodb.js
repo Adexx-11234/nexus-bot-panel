@@ -1,120 +1,92 @@
+// ============================================================================
+// mongodb.js - SIMPLIFIED FOR WEB DETECTION ONLY IN FILE MODE
+// ============================================================================
+
 import { MongoClient } from "mongodb"
 import { createComponentLogger } from "../../utils/logger.js"
 
 const logger = createComponentLogger("MONGODB_STORAGE")
 
-// ==================== CONFIGURATION ====================
 const CONFIG = {
-  RECONNECT_DELAY: 5000, // 5 seconds
-  HEALTH_CHECK_INTERVAL: 30000, // 30 seconds
-  CACHE_DURATION: 5 * 60 * 1000, // 5 minutes
+  RECONNECT_DELAY: 5000,
+  HEALTH_CHECK_INTERVAL: 30000,
+  CONNECTION_TIMEOUT: 30000,
+  SOCKET_TIMEOUT: 45000,
+  MAX_RECONNECT_ATTEMPTS: 5,
+  OPERATION_TIMEOUT: 10000,
 }
 
-// ==================== SESSION CACHE ====================
-class SessionCache {
-  constructor() {
-    this.cache = new Map() // sessionId -> { data, timestamp }
-    this.allSessions = { data: null, timestamp: 0 }
-  }
-
-  get(sessionId) {
-    const cached = this.cache.get(sessionId)
-    if (!cached) return null
-    
-    // Return cached data (even if stale - better than nothing)
-    return cached.data
-  }
-
-  set(sessionId, data) {
-    this.cache.set(sessionId, { data, timestamp: Date.now() })
-  }
-
-  delete(sessionId) {
-    this.cache.delete(sessionId)
-  }
-
-  getAllSessions() {
-    return this.allSessions.data
-  }
-
-  setAllSessions(data) {
-    this.allSessions = { data, timestamp: Date.now() }
-  }
-
-  clear() {
-    this.cache.clear()
-    this.allSessions = { data: null, timestamp: 0 }
-  }
-}
-
-// ==================== MONGODB STORAGE ====================
 export class MongoDBStorage {
   constructor() {
     this.client = null
     this.db = null
     this.sessions = null
+    this.authBaileys = null
     this.isConnected = false
     this.isConnecting = false
     this.reconnectTimer = null
     this.healthCheckTimer = null
-    this.cache = new SessionCache()
+    this.reconnectAttempts = 0
+    this.shutdownRequested = false
+
+    const storageMode = process.env.STORAGE_MODE || 'mongodb'
     
+    // Always try to connect
     this._initConnection()
     this._startHealthCheck()
+    
+    if (storageMode === 'mongodb') {
+      logger.info('📦 MongoDB PRIMARY - handles metadata + auth')
+    } else {
+      logger.info('📁 MongoDB SECONDARY - web detection only')
+    }
   }
 
   // ==================== CONNECTION ====================
+  
   async _initConnection() {
-    if (this.isConnecting) return
+    if (this.isConnecting || this.shutdownRequested) return
     this.isConnecting = true
 
     try {
       const mongoUrl = process.env.MONGODB_URI || "mongodb://localhost:27017/whatsapp_bot"
 
-      logger.info("🔄 Connecting to MongoDB...")
+      logger.info(`Connecting to MongoDB (attempt ${this.reconnectAttempts + 1}/${CONFIG.MAX_RECONNECT_ATTEMPTS})...`)
 
-      // Close old connection if exists
       if (this.client) {
         try {
-          await this.client.close(false)
+          await this.client.close(true)
         } catch (e) {}
       }
 
       this.client = new MongoClient(mongoUrl, {
         maxPoolSize: 50,
         minPoolSize: 5,
-        maxIdleTimeMS: 120000,
-        serverSelectionTimeoutMS: 30000,
-        socketTimeoutMS: 45000,
-        connectTimeoutMS: 30000,
-        retryWrites: true,
-        retryReads: true,
+        serverSelectionTimeoutMS: CONFIG.CONNECTION_TIMEOUT,
+        socketTimeoutMS: CONFIG.SOCKET_TIMEOUT,
       })
 
-      await this.client.connect()
+      await Promise.race([
+        this.client.connect(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('timeout')), CONFIG.CONNECTION_TIMEOUT)
+        ),
+      ])
+
+      await this.client.db('admin').command({ ping: 1 })
+
       this.db = this.client.db()
-      this.sessions = this.db.collection("sessions")
-
-      // Setup event listeners
-      this.client.on('close', () => {
-        logger.warn("MongoDB connection closed")
-        this.isConnected = false
-        this._scheduleReconnect()
-      })
-
-      this.client.on('error', (error) => {
-        logger.error(`MongoDB error: ${error.message}`)
-        this.isConnected = false
-        this._scheduleReconnect()
-      })
+      this.sessions = this.db.collection('sessions')
+      this.authBaileys = this.db.collection('auth_baileys')
 
       await this._createIndexes()
 
       this.isConnected = true
       this.isConnecting = false
-      logger.info("✅ MongoDB connected successfully")
+      this.reconnectAttempts = 0
+      
+      logger.info('✅ MongoDB connected')
 
-      // Clear reconnect timer
       if (this.reconnectTimer) {
         clearTimeout(this.reconnectTimer)
         this.reconnectTimer = null
@@ -123,34 +95,58 @@ export class MongoDBStorage {
     } catch (error) {
       this.isConnected = false
       this.isConnecting = false
+      this.reconnectAttempts++
+
       logger.error(`MongoDB connection failed: ${error.message}`)
-      this._scheduleReconnect()
+
+      if (this.client) {
+        try {
+          await this.client.close(true)
+        } catch (e) {}
+        this.client = null
+        this.db = null
+        this.sessions = null
+        this.authBaileys = null
+      }
+
+      if (this.reconnectAttempts < CONFIG.MAX_RECONNECT_ATTEMPTS) {
+        this._scheduleReconnect()
+      }
     }
   }
 
   _scheduleReconnect() {
-    if (this.reconnectTimer) return
-    
-    logger.info(`🔄 Reconnecting in ${CONFIG.RECONNECT_DELAY / 1000}s...`)
+    if (this.reconnectTimer || this.shutdownRequested) return
+
+    const delay = Math.min(
+      CONFIG.RECONNECT_DELAY * Math.pow(2, this.reconnectAttempts),
+      CONFIG.RECONNECT_DELAY * 16
+    )
+
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
       this._initConnection()
-    }, CONFIG.RECONNECT_DELAY)
+    }, delay)
   }
 
   _startHealthCheck() {
     this.healthCheckTimer = setInterval(async () => {
-      if (this.isConnecting) return
+      if (this.isConnecting || this.shutdownRequested) return
 
       if (this.isConnected && this.client) {
         try {
-          await this.client.db("admin").command({ ping: 1 })
+          await Promise.race([
+            this.client.db('admin').command({ ping: 1 }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
+          ])
         } catch (error) {
-          logger.warn("Health check failed")
           this.isConnected = false
           this._scheduleReconnect()
         }
       } else if (!this.reconnectTimer) {
+        if (this.reconnectAttempts >= CONFIG.MAX_RECONNECT_ATTEMPTS) {
+          this.reconnectAttempts = 0
+        }
         this._scheduleReconnect()
       }
     }, CONFIG.HEALTH_CHECK_INTERVAL)
@@ -160,256 +156,208 @@ export class MongoDBStorage {
     if (!this.sessions) return
 
     const indexes = [
-      { key: { telegramId: 1 }, name: "telegramId_1" },
-      { key: { phoneNumber: 1 }, name: "phoneNumber_1" },
-      { key: { sessionId: 1 }, unique: true, name: "sessionId_unique" },
+      { key: { sessionId: 1 }, unique: true },
+      { key: { source: 1, detected: 1 } },
+      { key: { source: 1, connectionStatus: 1, isConnected: 1, detected: 1 } },
+      { key: { updatedAt: -1 } },
     ]
 
     for (const idx of indexes) {
       try {
-        await this.sessions.createIndex(idx.key, {
-          name: idx.name,
-          unique: idx.unique || false,
-          background: true,
-        })
+        await this.sessions.createIndex(idx.key, { unique: idx.unique || false })
       } catch (error) {
-        if (!error.message.includes("already exists")) {
-          logger.warn(`Index creation failed: ${idx.name}`)
+        if (!error.message.includes('already exists')) {
+          logger.debug(`Index creation failed: ${error.message}`)
+        }
+      }
+    }
+
+    if (this.authBaileys) {
+      try {
+        await this.authBaileys.createIndex({ sessionId: 1, filename: 1 }, { unique: true })
+      } catch (error) {
+        if (!error.message.includes('already exists')) {
+          logger.debug(`Auth index creation failed: ${error.message}`)
         }
       }
     }
   }
 
-  // ==================== SAVE SESSION (WITH CACHE) ====================
+  // ==================== OPERATIONS ====================
+
   async saveSession(sessionId, sessionData) {
-    const document = {
-      sessionId,
-      telegramId: sessionData.telegramId || sessionData.userId,
-      phoneNumber: sessionData.phoneNumber,
-      isConnected: sessionData.isConnected !== undefined ? sessionData.isConnected : false,
-      connectionStatus: sessionData.connectionStatus || "disconnected",
-      reconnectAttempts: sessionData.reconnectAttempts || 0,
-      source: sessionData.source || "telegram",
-      detected: sessionData.detected !== false,
-      createdAt: sessionData.createdAt || new Date(),
-      updatedAt: new Date(),
+    if (!this.isConnected || !this.sessions) return false
+
+    try {
+      const document = {
+        sessionId,
+        telegramId: sessionData.telegramId || sessionData.userId,
+        phoneNumber: sessionData.phoneNumber,
+        isConnected: sessionData.isConnected !== undefined ? sessionData.isConnected : false,
+        connectionStatus: sessionData.connectionStatus || 'disconnected',
+        reconnectAttempts: sessionData.reconnectAttempts || 0,
+        source: sessionData.source || 'telegram',
+        detected: sessionData.detected !== false,
+        isWeb: sessionData.source === 'web',
+        createdAt: sessionData.createdAt || new Date(),
+        updatedAt: new Date(),
+      }
+
+      const result = await this.sessions.replaceOne(
+        { sessionId },
+        document,
+        { upsert: true }
+      )
+
+      return result.acknowledged
+    } catch (error) {
+      logger.error(`MongoDB save failed: ${error.message}`)
+      return false
     }
-
-    // ALWAYS update cache immediately
-    this.cache.set(sessionId, document)
-
-    // Try MongoDB in background (don't wait)
-    if (this.isConnected && this.sessions) {
-      this.sessions.replaceOne({ sessionId }, document, { upsert: true })
-        .catch(error => {
-          logger.debug(`Background save failed for ${sessionId}: ${error.message}`)
-        })
-    }
-
-    return true // Always return success (cache updated)
   }
 
-  // ==================== GET SESSION (WITH CACHE) ====================
   async getSession(sessionId) {
-    // 1. Check cache first
-    const cached = this.cache.get(sessionId)
-    if (cached) {
-      return cached
-    }
+    if (!this.isConnected || !this.sessions) return null
 
-    // 2. Try MongoDB
-    if (this.isConnected && this.sessions) {
-      try {
-        const session = await this.sessions.findOne({ sessionId })
-        
-        if (session) {
-          const mapped = {
-            sessionId: session.sessionId,
-            userId: session.telegramId,
-            telegramId: session.telegramId,
-            phoneNumber: session.phoneNumber,
-            isConnected: session.isConnected,
-            connectionStatus: session.connectionStatus,
-            reconnectAttempts: session.reconnectAttempts,
-            source: session.source || "telegram",
-            detected: session.detected !== false,
-            createdAt: session.createdAt,
-            updatedAt: session.updatedAt,
-          }
-          
-          // Update cache
-          this.cache.set(sessionId, mapped)
-          return mapped
-        }
-      } catch (error) {
-        logger.debug(`getSession(${sessionId}) failed: ${error.message}`)
+    try {
+      const session = await this.sessions.findOne({ sessionId })
+      if (!session) return null
+
+      return {
+        sessionId: session.sessionId,
+        userId: session.telegramId,
+        telegramId: session.telegramId,
+        phoneNumber: session.phoneNumber,
+        isConnected: session.isConnected,
+        connectionStatus: session.connectionStatus,
+        reconnectAttempts: session.reconnectAttempts,
+        source: session.source || 'telegram',
+        detected: session.detected !== false,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
       }
+    } catch (error) {
+      return null
     }
-
-    return null
   }
 
-  // ==================== UPDATE SESSION (WITH CACHE) ====================
   async updateSession(sessionId, updates) {
-    // 1. Update cache first
-    const cached = this.cache.get(sessionId)
-    if (cached) {
-      Object.assign(cached, updates, { updatedAt: new Date() })
-      this.cache.set(sessionId, cached)
-    }
+    if (!this.isConnected || !this.sessions) return false
 
-    // 2. Try MongoDB in background
-    if (this.isConnected && this.sessions) {
-      const updateDoc = { updatedAt: new Date() }
-      const allowedFields = [
-        "isConnected",
-        "connectionStatus",
-        "phoneNumber",
-        "reconnectAttempts",
-        "source",
-        "detected",
-      ]
-
-      for (const field of allowedFields) {
-        if (updates[field] !== undefined) {
-          updateDoc[field] = updates[field]
-        }
+    try {
+      const updateDoc = { ...updates, updatedAt: new Date() }
+      
+      if (updates.source === 'web') {
+        updateDoc.isWeb = true
+      } else if (updates.source === 'telegram') {
+        updateDoc.isWeb = false
       }
 
-      this.sessions.updateOne({ sessionId }, { $set: updateDoc })
-        .catch(error => {
-          logger.debug(`Background update failed for ${sessionId}: ${error.message}`)
-        })
-    }
+      const result = await this.sessions.updateOne(
+        { sessionId },
+        { $set: updateDoc }
+      )
 
-    return true // Always return success (cache updated)
+      return result.acknowledged
+    } catch (error) {
+      return false
+    }
   }
 
-  // ==================== DELETE SESSION ====================
   async deleteSession(sessionId) {
-    // Remove from cache
-    this.cache.delete(sessionId)
+    if (!this.isConnected || !this.sessions) return false
 
-    // Try MongoDB
-    if (this.isConnected && this.sessions) {
-      try {
-        await this.sessions.deleteOne({ sessionId })
-      } catch (error) {
-        logger.debug(`deleteSession(${sessionId}) failed: ${error.message}`)
-      }
+    try {
+      const result = await this.sessions.deleteOne({ sessionId })
+      return result.deletedCount > 0
+    } catch (error) {
+      return false
     }
-
-    return true
   }
 
-  // ==================== DELETE AUTH STATE ====================
   async deleteAuthState(sessionId) {
-    if (this.isConnected && this.db) {
-      try {
-        const authCollection = this.db.collection("auth_baileys")
-        const result = await authCollection.deleteMany({ sessionId })
-        logger.info(`Deleted ${result.deletedCount} auth documents for ${sessionId}`)
-        return true
-      } catch (error) {
-        logger.error(`deleteAuthState(${sessionId}) failed: ${error.message}`)
-      }
+    if (!this.isConnected || !this.authBaileys) return false
+
+    try {
+      const result = await this.authBaileys.deleteMany({ sessionId })
+      return result.deletedCount > 0
+    } catch (error) {
+      return false
     }
-    return false
   }
 
-  // ==================== GET ALL SESSIONS (WITH CACHE) ====================
   async getAllSessions() {
-    // 1. Check cache first
-    const cached = this.cache.getAllSessions()
-    if (cached) {
-      return cached
+    if (!this.isConnected || !this.sessions) return []
+
+    try {
+      const sessions = await this.sessions
+        .find({})
+        .sort({ updatedAt: -1 })
+        .limit(1000)
+        .toArray()
+
+      return sessions.map(s => ({
+        sessionId: s.sessionId,
+        userId: s.telegramId,
+        telegramId: s.telegramId,
+        phoneNumber: s.phoneNumber,
+        isConnected: s.isConnected,
+        connectionStatus: s.connectionStatus,
+        reconnectAttempts: s.reconnectAttempts,
+        source: s.source || 'telegram',
+        detected: s.detected !== false,
+        createdAt: s.createdAt,
+        updatedAt: s.updatedAt,
+      }))
+    } catch (error) {
+      return []
     }
+  }
 
-    // 2. Try MongoDB
-    if (this.isConnected && this.sessions) {
-      try {
-        const sessions = await this.sessions.find({}).sort({ updatedAt: -1 }).toArray()
-        
-        const mapped = sessions.map((session) => ({
-          sessionId: session.sessionId,
-          userId: session.telegramId,
-          telegramId: session.telegramId,
-          phoneNumber: session.phoneNumber,
-          isConnected: session.isConnected,
-          connectionStatus: session.connectionStatus,
-          reconnectAttempts: session.reconnectAttempts,
-          source: session.source || "telegram",
-          detected: session.detected !== false,
-          createdAt: session.createdAt,
-          updatedAt: session.updatedAt,
-        }))
+  async getUndetectedWebSessions() {
+    if (!this.isConnected || !this.sessions) return []
 
-        // Update cache
-        this.cache.setAllSessions(mapped)
-        return mapped
-      } catch (error) {
-        logger.debug(`getAllSessions failed: ${error.message}`)
+    try {
+      const sessions = await this.sessions
+        .find({
+          isWeb: true,
+          connectionStatus: 'connected',
+          isConnected: true,
+          detected: { $ne: true },
+        })
+        .sort({ updatedAt: -1 })
+        .limit(50)
+        .toArray()
+
+      const now = Date.now()
+      const readySessions = sessions.filter(s => {
+        const age = now - new Date(s.updatedAt).getTime()
+        return age >= 5000 // 5 seconds
+      })
+
+      if (readySessions.length > 0) {
+        logger.info(`Found ${readySessions.length} undetected web sessions`)
       }
-    }
 
-    return []
-  }
-
-  // ==================== GET UNDETECTED WEB SESSIONS ====================
-  /**
- * Get undetected web sessions (PURE operation)
- * CRITICAL: Only return sessions that are READY for takeover
- */
-async getUndetectedWebSessions() {
-  if (!this.isConnected) return []
-
-  try {
-    const sessions = await this.sessions.find({
-      source: 'web',
-      connectionStatus: 'connected',  // ✅ Must be connected
-      isConnected: true,               // ✅ Must be connected
-      detected: { $ne: true }          // ✅ Not yet detected
-    })
-    .sort({ updatedAt: -1 })
-    .limit(50)
-    .toArray()
-
-    // ✅ ADDITIONAL FILTER: Only return sessions updated 5+ seconds ago
-    const now = Date.now()
-    const readySessions = sessions.filter(session => {
-      const timeSinceUpdate = now - new Date(session.updatedAt).getTime()
-      return timeSinceUpdate >= 5000 // Wait 5 seconds after last update
-    })
-
-    return readySessions.map(session => ({
-      sessionId: session.sessionId,
-      userId: session.telegramId,
-      telegramId: session.telegramId,
-      phoneNumber: session.phoneNumber,
-      isConnected: session.isConnected,
-      connectionStatus: session.connectionStatus,
-      source: session.source,
-      detected: session.detected || false,
-      updatedAt: session.updatedAt // ✅ Include for time checks
-    }))
-
-  } catch (error) {
-    logger.error('MongoDB get undetected web sessions error:', error.message)
-    return []
-  }
-}
-
-  // ==================== CONNECTION STATUS ====================
-  getConnectionStatus() {
-    return {
-      isConnected: this.isConnected,
-      isConnecting: this.isConnecting,
-      cacheSize: this.cache.cache.size,
+      return readySessions.map(s => ({
+        sessionId: s.sessionId,
+        userId: s.telegramId,
+        telegramId: s.telegramId,
+        phoneNumber: s.phoneNumber,
+        isConnected: s.isConnected,
+        connectionStatus: s.connectionStatus,
+        source: s.source,
+        detected: s.detected || false,
+        updatedAt: s.updatedAt,
+      }))
+    } catch (error) {
+      return []
     }
   }
 
-  // ==================== CLOSE ====================
   async close() {
+    this.shutdownRequested = true
+
     if (this.healthCheckTimer) {
       clearInterval(this.healthCheckTimer)
       this.healthCheckTimer = null
@@ -422,13 +370,17 @@ async getUndetectedWebSessions() {
 
     if (this.client && this.isConnected) {
       try {
-        await this.client.close()
-        logger.info("MongoDB connection closed")
+        await this.client.close(true)
+        logger.info('MongoDB closed')
       } catch (error) {
         logger.error(`MongoDB close error: ${error.message}`)
       }
     }
 
-    this.cache.clear()
+    this.isConnected = false
+    this.client = null
+    this.db = null
+    this.sessions = null
+    this.authBaileys = null
   }
 }

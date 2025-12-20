@@ -20,12 +20,16 @@ export class ConnectionHealthMonitor {
     this.activeMonitoredSessions = new Set()
     this.staleCheckInterval = null
 
-    // Config
-    this.HEALTH_CHECK_INTERVAL = 30 * 1000 // Check activity every 30 seconds
-    this.STALE_CHECK_INTERVAL = 5 * 60 * 1000 // ✅ Check for stale/partial every 5 minutes
-    this.INACTIVITY_THRESHOLD = 30 * 60 * 1000 // 30 minutes no activity
-    this.REINIT_WAIT_TIME = 15000 // ✅ 15 seconds (not 5) for reinit to complete
-    this.MAX_FAILED_PINGS = 3
+  this.reinitializingNow = new Set() // ✅ ADD THIS LINE
+
+  // Config
+  this.HEALTH_CHECK_INTERVAL = 60 * 1000 // ✅ CHANGED: 60 seconds instead of 30
+  this.STALE_CHECK_INTERVAL = 10 * 60 * 1000 // ✅ CHANGED: 10 minutes instead of 5
+  this.INACTIVITY_THRESHOLD = 30 * 60 * 1000
+  this.REINIT_COOLDOWN = 60000 // ✅ ADD THIS LINE
+  this.MAX_FAILED_PINGS = 3
+
+  this.lastReinitAttempts = new Map() // ✅ ADD THIS LINE
 
     // ✅ Start periodic stale session checker
     this._startStaleSessionChecker()
@@ -61,39 +65,45 @@ export class ConnectionHealthMonitor {
       let staleCount = 0
 
       for (const [sessionId, sock] of activeSockets) {
-        try {
+  try {
+    // ✅ Skip if already reinitializing
+    if (this.reinitializingNow.has(sessionId)) {
+      logger.debug(`⏭️ Skipping ${sessionId} - already reinitializing`)
+      continue
+    }
 
-        // ✅ Skip if reconnection in progress
-        const eventDispatcher = this.sessionManager.getEventDispatcher()
-        const connectionHandler = eventDispatcher?.connectionEventHandler
-        
-        if (connectionHandler && !connectionHandler.canReinitialize(sessionId)) {
-          continue
-        }
-          const hasUserJid = !!sock?.user?.id
-          const readyState = sock?.ws?.socket?._readyState
-          const isOpen = readyState === 1
+    // ✅ Skip if reconnection in progress
+    const eventDispatcher = this.sessionManager.getEventDispatcher()
+    const connectionHandler = eventDispatcher?.connectionEventHandler
+    
+    if (connectionHandler && !connectionHandler.canReinitialize(sessionId)) {
+      logger.debug(`⏭️ Skipping ${sessionId} - reconnection handler active`)
+      continue
+    }
 
-          // ✅ Partial session: Socket exists but no user JID
-          if (!hasUserJid) {
-            partialCount++
-            logger.warn(`🚨 Partial session detected: ${sessionId} (no user JID)`)
-            await this._reinitializeSession(sessionId, sock)
-            continue
-          }
+    const hasUserJid = !!sock?.user?.id
+    const readyState = sock?.ws?.socket?._readyState
+    const isOpen = readyState === 1
 
-          // ✅ Stale socket: Has user but websocket not open
-          if (hasUserJid && !isOpen) {
-            staleCount++
-            logger.warn(`🚨 Stale session detected: ${sessionId} (readyState: ${readyState})`)
-            await this._reinitializeSession(sessionId, sock)
-            continue
-          }
+    // Only reinit if genuinely stale/partial
+    if (!hasUserJid) {
+      partialCount++
+      logger.warn(`🚨 Partial session detected: ${sessionId} (no user JID)`)
+      await this._reinitializeSession(sessionId)
+      continue
+    }
 
-        } catch (error) {
-          logger.error(`Error checking ${sessionId}:`, error.message)
-        }
-      }
+    if (hasUserJid && !isOpen) {
+      staleCount++
+      logger.warn(`🚨 Stale session detected: ${sessionId} (readyState: ${readyState})`)
+      await this._reinitializeSession(sessionId)
+      continue
+    }
+
+  } catch (error) {
+    logger.error(`Error checking ${sessionId}:`, error.message)
+  }
+}
 
       if (partialCount > 0 || staleCount > 0) {
         logger.info(`✅ Stale check complete: ${partialCount} partial, ${staleCount} stale - triggered reinitialization`)
@@ -207,15 +217,31 @@ export class ConnectionHealthMonitor {
    * ✅ OPTIMIZED: Reinitialize session with longer wait time
    */
   async _reinitializeSession(sessionId) {
+  // ✅ CRITICAL: Check if already reinitializing
+  if (this.reinitializingNow.has(sessionId)) {
+    logger.info(`⏭️ Already reinitializing ${sessionId} - skipping duplicate`)
+    return false
+  }
+
+  // ✅ Check cooldown period
+  const lastAttempt = this.lastReinitAttempts.get(sessionId)
+  if (lastAttempt && Date.now() - lastAttempt < this.REINIT_COOLDOWN) {
+    logger.info(`⏸️ ${sessionId} in cooldown period - skipping reinit`)
+    return false
+  }
+
+  // ✅ CRITICAL: Check if reconnection handler is already working
+  const eventDispatcher = this.sessionManager.getEventDispatcher()
+  const connectionHandler = eventDispatcher?.connectionEventHandler
+  
+  if (connectionHandler && !connectionHandler.canReinitialize(sessionId)) {
+    logger.info(`⛔ Skipping reinitialization for ${sessionId} - reconnection handler active`)
+    return false
+  }
+
   try {
-    // ✅ CRITICAL: Check if reconnection already in progress
-    const eventDispatcher = this.sessionManager.getEventDispatcher()
-    const connectionHandler = eventDispatcher?.connectionEventHandler
-    
-    if (connectionHandler && !connectionHandler.canReinitialize(sessionId)) {
-      logger.info(`⏭️ Skipping reinitialization for ${sessionId} - reconnection handler active`)
-      return false
-    }
+    this.reinitializingNow.add(sessionId)
+    this.lastReinitAttempts.set(sessionId, Date.now())
     
     logger.info(`🔄 Reinitializing session: ${sessionId}`)
     
@@ -224,8 +250,6 @@ export class ConnectionHealthMonitor {
       logger.error(`❌ No session data for ${sessionId}`)
       return false
     }
-
-    // ✅ REMOVED: MongoDB health check - not needed, cache handles it
 
     // Cleanup socket first
     const sock = this.sessionManager.activeSockets.get(sessionId)
@@ -237,12 +261,11 @@ export class ConnectionHealthMonitor {
     this.sessionManager.activeSockets.delete(sessionId)
     this.sessionManager.sessionState.delete(sessionId)
 
-    // Wait a moment for cleanup to complete
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    // Wait for cleanup
+    await new Promise(resolve => setTimeout(resolve, 2000))
 
     logger.info(`🔄 Starting reinitialization for ${sessionId}`)
 
-    // Create new session - will use cached auth state if MongoDB unavailable
     const newSock = await this.sessionManager.createSession(
       session.userId,
       session.phoneNumber,
@@ -262,6 +285,11 @@ export class ConnectionHealthMonitor {
   } catch (error) {
     logger.error(`❌ Reinitialization error for ${sessionId}:`, error)
     return false
+  } finally {
+    // ✅ Always remove from reinitializing set
+    setTimeout(() => {
+      this.reinitializingNow.delete(sessionId)
+    }, 5000) // Keep flag for 5 seconds to prevent rapid retries
   }
 }
 

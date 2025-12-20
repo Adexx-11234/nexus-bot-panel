@@ -1,3 +1,7 @@
+// ============================================================================
+// session-coordinator.js - SIMPLIFIED FILE-FIRST ARCHITECTURE
+// ============================================================================
+
 import crypto from "crypto"
 import { createComponentLogger } from "../../utils/logger.js"
 import { MongoDBStorage } from "./mongodb.js"
@@ -7,13 +11,15 @@ import { FileManager } from "./file.js"
 const logger = createComponentLogger("SESSION_STORAGE")
 
 const SESSION_CACHE_MAX_SIZE = 200
-const SESSION_CACHE_TTL = 300000 // 5 minutes for normal operation
-const SESSION_CACHE_EXTENDED_TTL = 7200000 // ✅ 2 hours when MongoDB is down
+const SESSION_CACHE_TTL = 300000
 const WRITE_BUFFER_FLUSH_INTERVAL = 500
-const FILE_SYNC_INTERVAL = 30000 // ✅ Sync cache to files every 30 seconds when DB is down
 
 export class SessionStorage {
   constructor() {
+    // Storage mode determines primary storage
+    this.storageMode = process.env.STORAGE_MODE || 'mongodb'
+    
+    // Always initialize all storages
     this.mongoStorage = new MongoDBStorage()
     this.postgresStorage = new PostgreSQLStorage()
     this.fileManager = new FileManager()
@@ -25,29 +31,20 @@ export class SessionStorage {
     this.healthCheckInterval = null
     this.orphanCleanupInterval = null
     this.cacheCleanupInterval = null
-    this.fileSyncInterval = null // ✅ NEW: Sync cache to files periodically
-
-    // ✅ Track storage health
-    this.storageHealth = {
-      mongodb: { available: false, lastCheck: null, consecutiveFailures: 0, lastSuccessfulOperation: null },
-      postgres: { available: false, lastCheck: null, consecutiveFailures: 0, lastSuccessfulOperation: null },
-      files: { available: true, lastCheck: Date.now(), consecutiveFailures: 0, lastSuccessfulOperation: Date.now() }
-    }
-
-    // ✅ NEW: Track if we're in emergency file-only mode
-    this.emergencyMode = false
-    this.lastDatabaseSuccess = Date.now()
 
     this._startHealthCheck()
     this._startOrphanCleanup()
-    this._startAggressiveCacheCleanup()
-    this._startFileSyncMonitor() // ✅ NEW: Monitor and sync to files when DB is down
+    this._startCacheCleanup()
 
-    logger.info("Session storage coordinator initialized (cache: 200 max, 5min TTL, auto file sync)")
+    if (this.storageMode === 'file') {
+      logger.info("📁 FILE MODE: Files primary, MongoDB for web detection only, PostgreSQL always saves")
+    } else {
+      logger.info("📦 MONGODB MODE: Files → MongoDB migration enabled, PostgreSQL always saves")
+    }
   }
 
   get isConnected() {
-    return this.mongoStorage.isConnected || this.postgresStorage.isConnected || this.fileManager !== null
+    return true // Always connected via files
   }
 
   get isMongoConnected() {
@@ -70,927 +67,373 @@ export class SessionStorage {
     return this.postgresStorage.pool
   }
 
-  /**
-   * ✅ NEW: Smart storage selection based on health
-   */
-  _getAvailableStorage() {
-    // Priority: MongoDB > PostgreSQL > Files
-    if (this.mongoStorage.isConnected && this.storageHealth.mongodb.consecutiveFailures < 3) {
-      return { type: 'mongodb', storage: this.mongoStorage }
-    }
-    
-    if (this.postgresStorage.isConnected && this.storageHealth.postgres.consecutiveFailures < 3) {
-      return { type: 'postgres', storage: this.postgresStorage }
-    }
-    
-    return { type: 'files', storage: this.fileManager }
-  }
+  // ==================== SAVE SESSION ====================
+  
+  async saveSession(sessionId, sessionData, credentials = null) {
+    logger.info(`💾 Saving session ${sessionId} (mode: ${this.storageMode})`)
 
-  /**
-   * ✅ NEW: Check if databases are operational
-   */
-  _isDatabaseAvailable() {
-    return (this.mongoStorage.isConnected && this.storageHealth.mongodb.consecutiveFailures < 3) ||
-           (this.postgresStorage.isConnected && this.storageHealth.postgres.consecutiveFailures < 3)
-  }
-
-  /**
-   * ✅ NEW: Record storage operation result for health tracking
-   */
-  _recordStorageHealth(storageType, success) {
-  if (!this.storageHealth[storageType]) return
-
-  const health = this.storageHealth[storageType]
-  health.lastCheck = Date.now()
-
-  if (success) {
-    health.consecutiveFailures = 0
-    health.available = true
-    health.lastSuccessfulOperation = Date.now()
-    
-    // Exit emergency mode when database is back
-    if (storageType !== 'files' && this.emergencyMode) {
-      const dbAvailable = this._isDatabaseAvailable()
-      if (dbAvailable) {
-        this.emergencyMode = false
-        this.lastDatabaseSuccess = Date.now()
-        logger.info(`✅ [RECOVERY] ${storageType} restored, exiting emergency mode`)
-      }
-    }
-  } else {
-    health.consecutiveFailures++
-    
-    if (health.consecutiveFailures >= 3) {
-      health.available = false
-      if (health.consecutiveFailures === 3) {
-        logger.warn(`⚠️ Storage '${storageType}' marked unavailable after 3 failures`)
-      }
-    }
-    
-    // Enter emergency mode if all databases are down
-    if (!this._isDatabaseAvailable() && !this.emergencyMode) {
-      this.emergencyMode = true
-      logger.error(`❌ [EMERGENCY] All databases down, entering file-only mode`)
-      logger.info(`📁 [EMERGENCY] Cache extended to 2 hours, syncing to files every ${FILE_SYNC_INTERVAL/1000}s`)
-    }
-  }
-}
-
-  /**
-   * ✅ NEW: Monitor and sync cache to files when DB is down
-   */
-  _startFileSyncMonitor() {
-  this.fileSyncInterval = setInterval(async () => {
-    const timeSinceDbSuccess = Date.now() - this.lastDatabaseSuccess
-    const shouldSync = this.emergencyMode || timeSinceDbSuccess > 300000
-    
-    if (!shouldSync || this.sessionCache.size === 0) {
-      return
-    }
-
-    // Check if we should exit emergency mode
-    if (this.emergencyMode) {
-      const hasDb = await this._checkStorageHealth()
-      if (hasDb) {
-        this.emergencyMode = false
-        this.lastDatabaseSuccess = Date.now()
-        logger.info(`✅ [RECOVERY] Database restored, exiting emergency mode`)
-        return // Don't sync if database is back
-      }
-    }
-
-    let syncedCount = 0
-    let failedCount = 0
-
-    // Sync cached sessions to files
-    for (const [sessionId, sessionData] of this.sessionCache.entries()) {
-      try {
-        await this.fileManager.saveSession(sessionId, sessionData)
-        syncedCount++
-      } catch (error) {
-        failedCount++
-        if (failedCount <= 3) { // Only log first 3 errors
-          logger.error(`Failed to sync ${sessionId} to file: ${error.message}`)
-        }
-      }
-    }
-
-    if (syncedCount > 0) {
-      const mode = this.emergencyMode ? '[EMERGENCY]' : '[BACKUP]'
-      logger.info(`${mode} Synced ${syncedCount} sessions to file storage${failedCount > 0 ? ` (${failedCount} failed)` : ''}`)
-    }
-  }, FILE_SYNC_INTERVAL)
-}
-
-  _startAggressiveCacheCleanup() {
-    this.cacheCleanupInterval = setInterval(() => {
-      this._cleanupStaleCache()
-    }, 15000)
-  }
-
- _cleanupStaleCache() {
-  const now = Date.now()
-  let removed = 0
-
-  try {
-    // Use extended TTL in emergency mode (2 hours vs 5 minutes)
-    const effectiveTTL = this.emergencyMode ? SESSION_CACHE_EXTENDED_TTL : SESSION_CACHE_TTL
-    
-    for (const [key, value] of this.sessionCache.entries()) {
-      if (value.lastCached && now - value.lastCached > effectiveTTL) {
-        // In emergency mode, don't delete if no database available
-        if (this.emergencyMode && !this._isDatabaseAvailable()) {
-          continue // Keep cache entries
-        }
-        this.sessionCache.delete(key)
-        removed++
-      }
-    }
-
-    // More aggressive cleanup when not in emergency
-    if (this.sessionCache.size > SESSION_CACHE_MAX_SIZE && !this.emergencyMode) {
-      const entries = Array.from(this.sessionCache.entries())
-        .sort((a, b) => a[1].lastCached - b[1].lastCached)
-
-      const toRemove = entries.slice(0, this.sessionCache.size - SESSION_CACHE_MAX_SIZE / 2)
-      toRemove.forEach(([key]) => {
-        this.sessionCache.delete(key)
-        removed++
+    // 1. Always update cache
+    if (this.sessionCache.size < SESSION_CACHE_MAX_SIZE) {
+      this.sessionCache.set(sessionId, {
+        ...sessionData,
+        credentials,
+        lastCached: Date.now(),
       })
     }
 
-    if (this.writeBuffer.size > 50) {
-      this._flushWriteBuffer()
+    let saved = false
+
+    // 2. Always save to PostgreSQL (background, non-blocking)
+    if (this.postgresStorage.isConnected) {
+      this.postgresStorage.saveSession(sessionId, sessionData)
+        .catch(err => logger.debug(`PostgreSQL save failed: ${err.message}`))
     }
 
-    if (removed > 0) {
-      const mode = this.emergencyMode ? '[EMERGENCY MODE]' : ''
-      const ttl = effectiveTTL / 60000
-      logger.debug(`${mode} Cleaned ${removed} cache entries (TTL: ${ttl}min, size: ${this.sessionCache.size}/${SESSION_CACHE_MAX_SIZE})`)
-    }
-  } catch (error) {
-    logger.error("Cache cleanup error:", error.message)
-  }
-}
-
-  async _flushWriteBuffer() {
-    if (this.writeBuffer.size === 0) return
-
-    const entries = Array.from(this.writeBuffer.entries())
-    this.writeBuffer.clear()
-
-    for (const [sessionId, data] of entries) {
+    // 3. Save based on mode
+    if (this.storageMode === 'file') {
+      // FILE MODE: Only files (MongoDB only for web detection)
       try {
-        await this._writeToStorage(sessionId, data)
-      } catch (error) {
-        logger.error(`Failed to flush buffer for ${sessionId}:`, error.message)
-      }
-    }
-  }
-
-  /**
-   * ✅ ENHANCED: Smart write with immediate file backup in emergency mode
-   */
-  async _writeToStorage(sessionId, sessionData) {
-    const storages = [
-      { type: 'mongodb', storage: this.mongoStorage, condition: () => this.mongoStorage.isConnected },
-      { type: 'postgres', storage: this.postgresStorage, condition: () => this.postgresStorage.isConnected },
-      { type: 'files', storage: this.fileManager, condition: () => true }
-    ]
-
-    let dbWriteSucceeded = false
-
-    for (const { type, storage, condition } of storages) {
-      if (!condition()) continue
-
-      try {
-        const result = await storage.saveSession(sessionId, sessionData)
-        if (result) {
-          this._recordStorageHealth(type, true)
-          if (type !== 'files') {
-            dbWriteSucceeded = true
-            this.lastDatabaseSuccess = Date.now()
-          }
-          return true
+        saved = await this.fileManager.saveSession(sessionId, sessionData)
+        if (saved) {
+          logger.info(`✅ Saved to file storage: ${sessionId}`)
         }
       } catch (error) {
-        this._recordStorageHealth(type, false)
-        logger.debug(`${type} write failed for ${sessionId}, trying next storage`)
+        logger.error(`File save failed for ${sessionId}:`, error.message)
       }
-    }
 
-    // ✅ If no database write succeeded and we have file storage, ensure it's there
-    if (!dbWriteSucceeded) {
-      try {
-        await this.fileManager.saveSession(sessionId, sessionData)
-        this._recordStorageHealth('files', true)
-        return true
-      } catch (error) {
-        this._recordStorageHealth('files', false)
-        logger.error(`All storages failed for ${sessionId}`)
+      // If web session, also mark in MongoDB for detection
+      if (sessionData.source === 'web' && this.mongoStorage.isConnected) {
+        this.mongoStorage.saveSession(sessionId, sessionData)
+          .catch(err => logger.debug(`MongoDB web detection save failed: ${err.message}`))
       }
-    }
 
-    return false
-  }
-
-  /**
-   * ✅ ULTRA-RESILIENT: Save with guaranteed cache update + immediate file backup in emergency
-   */
-  async saveSession(sessionId, sessionData, credentials = null) {
-    // ✅ ALWAYS update cache first (never fails)
-    try {
-      if (this.sessionCache.size < SESSION_CACHE_MAX_SIZE) {
-        this.sessionCache.set(sessionId, {
-          ...sessionData,
-          credentials,
-          lastCached: Date.now(),
-        })
-      }
-    } catch (cacheError) {
-      logger.error(`Cache update failed for ${sessionId}:`, cacheError.message)
-    }
-
-    // ✅ In emergency mode, write to files immediately
-    if (this.emergencyMode) {
-      try {
-        await this.fileManager.saveSession(sessionId, sessionData)
-        this._recordStorageHealth('files', true)
-        logger.debug(`[EMERGENCY] Saved ${sessionId} to file storage`)
-        return true
-      } catch (error) {
-        this._recordStorageHealth('files', false)
-        logger.error(`[EMERGENCY] File save failed for ${sessionId}: ${error.message}`)
-      }
-    }
-
-    // ✅ Try all available storages
-    try {
-      let saved = false
-
-      // Try MongoDB
+    } else {
+      // MONGODB MODE: Try MongoDB, fallback to file
       if (this.mongoStorage.isConnected) {
         try {
           saved = await this.mongoStorage.saveSession(sessionId, sessionData)
-          this._recordStorageHealth('mongodb', saved)
-          if (saved) this.lastDatabaseSuccess = Date.now()
+          if (saved) {
+            logger.info(`✅ Saved to MongoDB: ${sessionId}`)
+          }
         } catch (error) {
-          this._recordStorageHealth('mongodb', false)
-          logger.debug(`MongoDB save failed: ${error.message}`)
+          logger.error(`MongoDB save failed for ${sessionId}:`, error.message)
         }
       }
 
-      // Try PostgreSQL
-      if (this.postgresStorage.isConnected) {
-        try {
-          const pgSaved = await this.postgresStorage.saveSession(sessionId, sessionData)
-          this._recordStorageHealth('postgres', pgSaved)
-          if (pgSaved) this.lastDatabaseSuccess = Date.now()
-          saved = saved || pgSaved
-        } catch (error) {
-          this._recordStorageHealth('postgres', false)
-          logger.debug(`PostgreSQL save failed: ${error.message}`)
-        }
-      }
-
-      // Fallback to files (always available)
+      // Fallback to file if MongoDB failed
       if (!saved) {
         try {
           saved = await this.fileManager.saveSession(sessionId, sessionData)
-          this._recordStorageHealth('files', saved)
           if (saved) {
-            logger.debug(`Saved ${sessionId} to file storage (DB unavailable)`)
+            logger.info(`✅ Saved to file (MongoDB fallback): ${sessionId}`)
           }
         } catch (error) {
-          this._recordStorageHealth('files', false)
-          logger.error(`File storage save failed: ${error.message}`)
+          logger.error(`File fallback save failed for ${sessionId}:`, error.message)
         }
       }
-
-      return saved
-    } catch (error) {
-      logger.error(`Error saving session ${sessionId}:`, error.message)
-      // ✅ Even if all storage fails, cache was updated
-      return false
     }
+
+    return saved
   }
 
-  /**
-   * ✅ ULTRA-RESILIENT: Get with guaranteed cache fallback (extended TTL in emergency)
-   */
+  // ==================== GET SESSION ====================
+  
   async getSession(sessionId) {
-    try {
-      // ✅ ALWAYS check cache first
-      const cached = this.sessionCache.get(sessionId)
-      const effectiveTTL = this.emergencyMode ? SESSION_CACHE_EXTENDED_TTL : SESSION_CACHE_TTL
-      
-      if (cached && Date.now() - cached.lastCached < effectiveTTL) {
-        return this._formatSessionData(cached)
-      }
+    // Check cache first
+    const cached = this.sessionCache.get(sessionId)
+    if (cached && Date.now() - cached.lastCached < SESSION_CACHE_TTL) {
+      return this._formatSessionData(cached)
+    }
 
-      // ✅ Try storages in priority order
-      let sessionData = null
+    let sessionData = null
 
-      // Try MongoDB
+    // Get based on mode
+    if (this.storageMode === 'file') {
+      // FILE MODE: Only check files
+      sessionData = await this.fileManager.getSession(sessionId)
+    } else {
+      // MONGODB MODE: Check MongoDB first, then file
       if (this.mongoStorage.isConnected) {
-        try {
-          sessionData = await this.mongoStorage.getSession(sessionId)
-          this._recordStorageHealth('mongodb', true)
-          if (sessionData) this.lastDatabaseSuccess = Date.now()
-        } catch (error) {
-          this._recordStorageHealth('mongodb', false)
-          logger.debug(`MongoDB get failed: ${error.message}`)
-        }
+        sessionData = await this.mongoStorage.getSession(sessionId)
       }
-
-      // Try PostgreSQL
-      if (!sessionData && this.postgresStorage.isConnected) {
-        try {
-          sessionData = await this.postgresStorage.getSession(sessionId)
-          this._recordStorageHealth('postgres', true)
-          if (sessionData) this.lastDatabaseSuccess = Date.now()
-        } catch (error) {
-          this._recordStorageHealth('postgres', false)
-          logger.debug(`PostgreSQL get failed: ${error.message}`)
-        }
-      }
-
-      // Try files
+      
       if (!sessionData) {
-        try {
-          sessionData = await this.fileManager.getSession(sessionId)
-          this._recordStorageHealth('files', !!sessionData)
-        } catch (error) {
-          this._recordStorageHealth('files', false)
-          logger.debug(`File storage get failed: ${error.message}`)
-        }
+        sessionData = await this.fileManager.getSession(sessionId)
       }
-
-      // ✅ Update cache on successful read
-      if (sessionData) {
-        if (this.sessionCache.size < SESSION_CACHE_MAX_SIZE) {
-          this.sessionCache.set(sessionId, {
-            ...sessionData,
-            lastCached: Date.now(),
-          })
-        }
-        return this._formatSessionData(sessionData)
-      }
-
-      // ✅ LAST RESORT: Use stale/expired cache if available (in emergency mode)
-      if (cached) {
-        const age = Date.now() - cached.lastCached
-        const ageMinutes = Math.round(age / 60000)
-        logger.warn(`[EMERGENCY] Using ${ageMinutes}min old cache for ${sessionId}`)
-        return this._formatSessionData(cached)
-      }
-
-      this.sessionCache.delete(sessionId)
-      return null
-    } catch (error) {
-      logger.error(`Error retrieving session ${sessionId}:`, error.message)
-      
-      // ✅ Try cache as last resort
-      const cached = this.sessionCache.get(sessionId)
-      if (cached) {
-        logger.warn(`[EMERGENCY] Using cache fallback for ${sessionId}`)
-        return this._formatSessionData(cached)
-      }
-      
-      return null
     }
+
+    // Update cache
+    if (sessionData && this.sessionCache.size < SESSION_CACHE_MAX_SIZE) {
+      this.sessionCache.set(sessionId, {
+        ...sessionData,
+        lastCached: Date.now(),
+      })
+    }
+
+    return sessionData ? this._formatSessionData(sessionData) : null
   }
 
-  /**
-   * ✅ ULTRA-RESILIENT: Update with guaranteed execution
-   */
-  async updateSessionImmediate(sessionId, updates) {
-    try {
-      logger.info(`🚀 IMMEDIATE update for ${sessionId}:`, updates)
-
-      this._clearWriteBuffer(sessionId)
-      updates.updatedAt = new Date()
-
-      // ✅ ALWAYS update cache first
-      try {
-        if (this.sessionCache.has(sessionId)) {
-          const cachedSession = this.sessionCache.get(sessionId)
-          Object.assign(cachedSession, updates)
-          cachedSession.lastCached = Date.now()
-        }
-      } catch (cacheError) {
-        logger.error(`Cache update failed: ${cacheError.message}`)
-      }
-
-      let updated = false
-
-      // Try MongoDB
-      if (this.mongoStorage.isConnected) {
-        try {
-          updated = await this.mongoStorage.updateSession(sessionId, updates)
-          this._recordStorageHealth('mongodb', updated)
-          if (updated) {
-            logger.info(`✅ MongoDB updated immediately for ${sessionId}`)
-          }
-        } catch (error) {
-          this._recordStorageHealth('mongodb', false)
-          logger.debug(`MongoDB update failed: ${error.message}`)
-        }
-      }
-
-      // Try PostgreSQL
-      if (this.postgresStorage.isConnected) {
-        try {
-          const pgUpdated = await this.postgresStorage.updateSession(sessionId, updates)
-          this._recordStorageHealth('postgres', pgUpdated)
-          if (pgUpdated) {
-            logger.info(`✅ PostgreSQL updated immediately for ${sessionId}`)
-          }
-          updated = updated || pgUpdated
-        } catch (error) {
-          this._recordStorageHealth('postgres', false)
-          logger.debug(`PostgreSQL update failed: ${error.message}`)
-        }
-      }
-
-      // Fallback to files
-      if (!updated) {
-        try {
-          await this.fileManager.updateSession(sessionId, updates)
-          this._recordStorageHealth('files', true)
-          logger.info(`✅ File storage updated immediately for ${sessionId}`)
-          updated = true
-        } catch (error) {
-          this._recordStorageHealth('files', false)
-          logger.error(`File storage update failed: ${error.message}`)
-        }
-      }
-
-      return updated
-    } catch (error) {
-      logger.error(`Error in immediate update for ${sessionId}:`, error.message)
-      // ✅ Cache was updated, so not a complete failure
-      return false
-    }
-  }
-
-  /**
-   * ✅ ULTRA-RESILIENT: Buffered update with guaranteed cache update
-   */
+  // ==================== UPDATE SESSION ====================
+  
   async updateSession(sessionId, updates) {
-    try {
-      // ✅ ALWAYS update cache immediately
-      try {
-        if (this.sessionCache.has(sessionId)) {
-          const cachedSession = this.sessionCache.get(sessionId)
-          Object.assign(cachedSession, updates)
-          cachedSession.lastCached = Date.now()
-        }
-      } catch (cacheError) {
-        logger.error(`Cache update failed: ${cacheError.message}`)
-      }
+    // Update cache immediately
+    if (this.sessionCache.has(sessionId)) {
+      const cachedSession = this.sessionCache.get(sessionId)
+      Object.assign(cachedSession, updates)
+      cachedSession.lastCached = Date.now()
+    }
 
-      // ✅ Buffer database updates
-      const bufferId = `${sessionId}_update`
+    // Buffer the write
+    const bufferId = `${sessionId}_update`
+    if (this.writeBuffer.has(bufferId)) {
+      const existing = this.writeBuffer.get(bufferId)
+      if (existing.timeout) clearTimeout(existing.timeout)
+      Object.assign(existing.data, updates)
+    } else {
+      this.writeBuffer.set(bufferId, { data: { ...updates }, timeout: null })
+    }
 
-      if (this.writeBuffer.has(bufferId)) {
-        const existingBuffer = this.writeBuffer.get(bufferId)
-        if (existingBuffer.timeout) {
-          clearTimeout(existingBuffer.timeout)
-        }
-        Object.assign(existingBuffer.data, updates)
+    const timeoutId = setTimeout(async () => {
+      const bufferedData = this.writeBuffer.get(bufferId)?.data
+      if (!bufferedData) return
+
+      bufferedData.updatedAt = new Date()
+
+      // Save based on mode
+      if (this.storageMode === 'file') {
+        await this.fileManager.updateSession(sessionId, bufferedData)
       } else {
-        this.writeBuffer.set(bufferId, {
-          data: { ...updates },
-          timeout: null,
-        })
-      }
-
-      const timeoutId = setTimeout(async () => {
-        const bufferedData = this.writeBuffer.get(bufferId)?.data
-        if (!bufferedData) return
-
-        try {
-          bufferedData.updatedAt = new Date()
-
-          let updated = false
-          
-          // Try MongoDB
-          if (this.mongoStorage.isConnected) {
-            try {
-              updated = await this.mongoStorage.updateSession(sessionId, bufferedData)
-              this._recordStorageHealth('mongodb', updated)
-            } catch (error) {
-              this._recordStorageHealth('mongodb', false)
-            }
-          }
-
-          // Try PostgreSQL
-          if (this.postgresStorage.isConnected) {
-            try {
-              const pgUpdated = await this.postgresStorage.updateSession(sessionId, bufferedData)
-              this._recordStorageHealth('postgres', pgUpdated)
-              updated = updated || pgUpdated
-            } catch (error) {
-              this._recordStorageHealth('postgres', false)
-            }
-          }
-
-          // Fallback to files
-          if (!updated) {
-            try {
-              await this.fileManager.updateSession(sessionId, bufferedData)
-              this._recordStorageHealth('files', true)
-            } catch (error) {
-              this._recordStorageHealth('files', false)
-            }
-          }
-
-          this.writeBuffer.delete(bufferId)
-        } catch (error) {
-          logger.error(`Error in buffered update for ${sessionId}:`, error.message)
-          this.writeBuffer.delete(bufferId)
-        }
-      }, WRITE_BUFFER_FLUSH_INTERVAL)
-
-      this.writeBuffer.get(bufferId).timeout = timeoutId
-      return true
-    } catch (error) {
-      logger.error(`Error buffering update for ${sessionId}:`, error.message)
-      // ✅ Cache was updated, so not a complete failure
-      return true
-    }
-  }
-
-  /**
-   * ✅ RESILIENT: Delete with multi-storage cleanup
-   */
-  async deleteSessionKeepUser(sessionId) {
-    try {
-      this.sessionCache.delete(sessionId)
-      this._clearWriteBuffer(sessionId)
-
-      const results = {
-        mongoSessionDeleted: false,
-        authBaileysDeleted: false,
-        postgresUpdated: false,
-        postgresDeleted: false,
-        fileDeleted: false,
-        hadWebAuth: false,
-      }
-
-      // Try MongoDB (don't fail if unavailable)
-      if (this.mongoStorage.isConnected) {
-        try {
-          results.authBaileysDeleted = await this.mongoStorage.deleteAuthState(sessionId)
-          results.mongoSessionDeleted = await this.mongoStorage.deleteSession(sessionId)
-          this._recordStorageHealth('mongodb', true)
-        } catch (error) {
-          this._recordStorageHealth('mongodb', false)
-          logger.debug(`MongoDB delete failed: ${error.message}`)
+        if (this.mongoStorage.isConnected) {
+          await this.mongoStorage.updateSession(sessionId, bufferedData)
+        } else {
+          await this.fileManager.updateSession(sessionId, bufferedData)
         }
       }
 
-      // Try files
-      try {
-        results.fileDeleted = await this.fileManager.cleanupSessionFiles(sessionId)
-        this._recordStorageHealth('files', true)
-      } catch (error) {
-        this._recordStorageHealth('files', false)
-        logger.debug(`File delete failed: ${error.message}`)
-      }
-
-      // Try PostgreSQL
+      // Always update PostgreSQL
       if (this.postgresStorage.isConnected) {
-        try {
-          const pgResult = await this.postgresStorage.deleteSessionKeepUser(sessionId)
-          results.postgresUpdated = pgResult.updated
-          results.postgresDeleted = pgResult.deleted
-          results.hadWebAuth = pgResult.hadWebAuth
-          this._recordStorageHealth('postgres', true)
-        } catch (error) {
-          this._recordStorageHealth('postgres', false)
-          logger.debug(`PostgreSQL delete failed: ${error.message}`)
-        }
+        this.postgresStorage.updateSession(sessionId, bufferedData)
+          .catch(() => {})
       }
 
-      logger.info(`Logout cleanup for ${sessionId}:`, results)
+      this.writeBuffer.delete(bufferId)
+    }, WRITE_BUFFER_FLUSH_INTERVAL)
 
-      return (
-        results.authBaileysDeleted || results.mongoSessionDeleted || results.postgresUpdated || results.postgresDeleted
-      )
-    } catch (error) {
-      logger.error(`Error in deleteSessionKeepUser for ${sessionId}:`, error.message)
-      return false
-    }
+    this.writeBuffer.get(bufferId).timeout = timeoutId
+    return true
   }
 
-  async _checkStorageHealth() {
-  // Check MongoDB
-  if (this.mongoStorage.isConnected) {
-    try {
-      await Promise.race([
-        this.mongoStorage.client.db("admin").command({ ping: 1 }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Ping timeout')), 2000))
-      ])
-      this._recordStorageHealth('mongodb', true)
-      return true
-    } catch (error) {
-      this._recordStorageHealth('mongodb', false)
-    }
-  }
-
-  // Check PostgreSQL
-  if (this.postgresStorage.isConnected) {
-    try {
-      const client = await this.postgresStorage.pool.connect()
-      await client.query("SELECT 1")
-      client.release()
-      this._recordStorageHealth('postgres', true)
-      return true
-    } catch (error) {
-      this._recordStorageHealth('postgres', false)
-    }
-  }
-
-  return false
-}
-
-  /**
-   * All other methods follow the same pattern...
-   */
+  // ==================== DELETE SESSION ====================
+  
   async deleteSession(sessionId) {
-    try {
-      this.sessionCache.delete(sessionId)
-      this._clearWriteBuffer(sessionId)
+    this.sessionCache.delete(sessionId)
+    this._clearWriteBuffer(sessionId)
 
-      let deleted = false
+    const results = []
 
-      if (this.mongoStorage.isConnected) {
-        try {
-          deleted = await this.mongoStorage.deleteSession(sessionId)
-          this._recordStorageHealth('mongodb', deleted)
-        } catch (error) {
-          this._recordStorageHealth('mongodb', false)
-        }
-      }
-
-      if (this.postgresStorage.isConnected) {
-        try {
-          const pgDeleted = await this.postgresStorage.deleteSession(sessionId)
-          this._recordStorageHealth('postgres', pgDeleted)
-          deleted = deleted || pgDeleted
-        } catch (error) {
-          this._recordStorageHealth('postgres', false)
-        }
-      }
-
-      try {
-        await this.fileManager.cleanupSessionFiles(sessionId)
-        this._recordStorageHealth('files', true)
-      } catch (error) {
-        this._recordStorageHealth('files', false)
-      }
-
-      return deleted
-    } catch (error) {
-      logger.error(`Error deleting session ${sessionId}:`, error.message)
-      return false
+    // Delete from all storages
+    results.push(this.fileManager.cleanupSessionFiles(sessionId))
+    
+    if (this.mongoStorage.isConnected) {
+      results.push(this.mongoStorage.deleteSession(sessionId))
     }
+    
+    if (this.postgresStorage.isConnected) {
+      results.push(this.postgresStorage.deleteSession(sessionId))
+    }
+
+    await Promise.allSettled(results)
+    return true
+  }
+
+  async deleteSessionKeepUser(sessionId) {
+    this.sessionCache.delete(sessionId)
+    this._clearWriteBuffer(sessionId)
+
+    const results = {
+      fileDeleted: false,
+      mongoDeleted: false,
+      postgresUpdated: false,
+    }
+
+    // Delete from file and MongoDB
+    results.fileDeleted = await this.fileManager.cleanupSessionFiles(sessionId)
+    
+    if (this.mongoStorage.isConnected) {
+      results.mongoDeleted = await this.mongoStorage.deleteSession(sessionId)
+    }
+
+    // Keep PostgreSQL record for web users
+    if (this.postgresStorage.isConnected) {
+      const pgResult = await this.postgresStorage.deleteSessionKeepUser(sessionId)
+      results.postgresUpdated = pgResult.updated
+    }
+
+    return results.fileDeleted || results.mongoDeleted || results.postgresUpdated
   }
 
   async completelyDeleteSession(sessionId) {
-    try {
-      this.sessionCache.delete(sessionId)
-      this._clearWriteBuffer(sessionId)
+    this.sessionCache.delete(sessionId)
+    this._clearWriteBuffer(sessionId)
 
-      const deletePromises = []
+    const results = []
 
-      if (this.mongoStorage.isConnected) {
-        deletePromises.push(
-          this.mongoStorage.deleteSession(sessionId).catch(e => {
-            this._recordStorageHealth('mongodb', false)
-            return false
-          })
-        )
-        deletePromises.push(
-          this.mongoStorage.deleteAuthState(sessionId).catch(e => {
-            this._recordStorageHealth('mongodb', false)
-            return false
-          })
-        )
-      }
-
-      if (this.postgresStorage.isConnected) {
-        deletePromises.push(
-          this.postgresStorage.completelyDeleteSession(sessionId).catch(e => {
-            this._recordStorageHealth('postgres', false)
-            return false
-          })
-        )
-      }
-
-      deletePromises.push(
-        this.fileManager.cleanupSessionFiles(sessionId).catch(e => {
-          this._recordStorageHealth('files', false)
-          return false
-        })
-      )
-
-      const results = await Promise.allSettled(deletePromises)
-      const success = results.some((r) => r.status === "fulfilled" && r.value)
-
-      logger.info(`Complete deletion for ${sessionId}: ${success}`)
-      return success
-    } catch (error) {
-      logger.error(`Error completely deleting session ${sessionId}:`, error.message)
-      return false
+    results.push(this.fileManager.cleanupSessionFiles(sessionId))
+    
+    if (this.mongoStorage.isConnected) {
+      results.push(this.mongoStorage.deleteSession(sessionId))
+      results.push(this.mongoStorage.deleteAuthState(sessionId))
     }
-  }
-
-  async cleanupOrphanedSessions() {
-  if (!this.mongoStorage.isConnected) {
-    logger.debug("MongoDB not connected - skipping orphan cleanup")
-    return { cleaned: 0, errors: 0 }
-  }
-
-  try {
-    logger.info("Starting orphaned sessions cleanup...")
-
-    const allSessions = await this.mongoStorage.sessions.find({}).toArray()
-
-    if (allSessions.length === 0) {
-      return { cleaned: 0, errors: 0 }
+    
+    if (this.postgresStorage.isConnected) {
+      results.push(this.postgresStorage.completelyDeleteSession(sessionId))
     }
 
-    const authCollection = this.mongoStorage.db.collection("auth_baileys")
-    let cleanedCount = 0
-    let errorCount = 0
-
-    for (const session of allSessions) {
-      try {
-        const sessionId = session.sessionId
-
-        // FIXED: Check BOTH MongoDB AND file fallback
-        const credsExists = await authCollection.findOne({
-          sessionId: sessionId,
-          filename: "creds.json",
-        })
-
-        // CRITICAL: Also check file fallback before cleaning
-        let fileCredsExists = false
-        if (!credsExists) {
-          try {
-            const fs = await import('fs/promises')
-            const path = await import('path')
-            const fallbackPath = path.default.join('./auth_fallback', sessionId, 'creds.json')
-            await fs.default.access(fallbackPath)
-            fileCredsExists = true
-            logger.debug(`Session ${sessionId} has file fallback auth`)
-          } catch (err) {
-            // File doesn't exist
-          }
-        }
-
-        // Only clean if NEITHER MongoDB NOR file fallback has creds
-        if (!credsExists && !fileCredsExists) {
-          logger.warn(`Session ${sessionId} has no auth (MongoDB or file) - cleaning up`)
-
-          if (this.mongoStorage.isConnected) {
-            await this.mongoStorage.deleteSession(sessionId)
-          }
-
-          await this.fileManager.cleanupSessionFiles(sessionId)
-
-          if (this.postgresStorage.isConnected) {
-            const source = session.source || "telegram"
-            await this.postgresStorage.cleanupOrphanedSession(sessionId, source)
-          }
-
-          this.sessionCache.delete(sessionId)
-          this._clearWriteBuffer(sessionId)
-
-          cleanedCount++
-        }
-      } catch (error) {
-        logger.error(`Error cleaning orphaned session ${session.sessionId}:`, error.message)
-        errorCount++
-      }
-    }
-
-    logger.info(`Orphaned cleanup: ${cleanedCount} cleaned, ${errorCount} errors`)
-    return { cleaned: cleanedCount, errors: errorCount }
-  } catch (error) {
-    logger.error("Orphaned sessions cleanup failed:", error.message)
-    return { cleaned: 0, errors: 1 }
+    await Promise.allSettled(results)
+    return true
   }
-}
 
+  // ==================== GET ALL SESSIONS ====================
+  
   async getAllSessions() {
-    try {
-      let sessions = []
+    let sessions = []
 
-      // Try PostgreSQL first
-      if (this.postgresStorage.isConnected) {
-        try {
-          sessions = await this.postgresStorage.getAllSessions()
-          this._recordStorageHealth('postgres', true)
-        } catch (error) {
-          this._recordStorageHealth('postgres', false)
-        }
+    // Always check PostgreSQL first (most reliable)
+    if (this.postgresStorage.isConnected) {
+      sessions = await this.postgresStorage.getAllSessions()
+      if (sessions.length > 0) {
+        return sessions.map(s => this._formatSessionData(s))
       }
-      
-      // Try MongoDB
-      if (sessions.length === 0 && this.mongoStorage.isConnected) {
-        try {
-          sessions = await this.mongoStorage.getAllSessions()
-          this._recordStorageHealth('mongodb', true)
-        } catch (error) {
-          this._recordStorageHealth('mongodb', false)
-        }
-      }
-      
-      // Try files
-      if (sessions.length === 0) {
-        try {
-          sessions = await this.fileManager.getAllSessions()
-          this._recordStorageHealth('files', true)
-        } catch (error) {
-          this._recordStorageHealth('files', false)
-        }
-      }
-
-      return sessions.map((session) => this._formatSessionData(session))
-    } catch (error) {
-      logger.error("Error retrieving all sessions:", error.message)
-      return []
     }
+
+    // Then check based on mode
+    if (this.storageMode === 'file') {
+      sessions = await this.fileManager.getAllSessions()
+    } else if (this.mongoStorage.isConnected) {
+      sessions = await this.mongoStorage.getAllSessions()
+    } else {
+      sessions = await this.fileManager.getAllSessions()
+    }
+
+    return sessions.map(s => this._formatSessionData(s))
   }
 
+  // ==================== WEB SESSION DETECTION ====================
+  
   async getUndetectedWebSessions() {
-    try {
-      let sessions = []
-
-      if (this.mongoStorage.isConnected) {
-        try {
-          sessions = await this.mongoStorage.getUndetectedWebSessions()
-          this._recordStorageHealth('mongodb', true)
-        } catch (error) {
-          this._recordStorageHealth('mongodb', false)
-        }
-      }
-      
-      if (sessions.length === 0 && this.postgresStorage.isConnected) {
-        try {
-          sessions = await this.postgresStorage.getUndetectedWebSessions()
-          this._recordStorageHealth('postgres', true)
-        } catch (error) {
-          this._recordStorageHealth('postgres', false)
-        }
-      }
-
-      return sessions.map((session) => this._formatSessionData(session))
-    } catch (error) {
-      logger.error("Error getting undetected web sessions:", error.message)
+    // Web detection ALWAYS uses MongoDB
+    if (!this.mongoStorage.isConnected) {
       return []
     }
+
+    const sessions = await this.mongoStorage.getUndetectedWebSessions()
+    return sessions.map(s => this._formatSessionData(s))
   }
 
   async markSessionAsDetected(sessionId, detected = true) {
-    try {
-      const updateData = {
-        detected,
-        detectedAt: detected ? new Date() : null,
-      }
+    const updateData = {
+      detected,
+      detectedAt: detected ? new Date() : null,
+    }
 
-      let updated = false
+    // Mark in MongoDB for web detection
+    if (this.mongoStorage.isConnected) {
+      await this.mongoStorage.updateSession(sessionId, updateData)
+    }
 
-      if (this.mongoStorage.isConnected) {
-        try {
-          updated = await this.mongoStorage.updateSession(sessionId, updateData)
-          this._recordStorageHealth('mongodb', updated)
-        } catch (error) {
-          this._recordStorageHealth('mongodb', false)
-        }
-      }
+    // Also update in primary storage
+    if (this.storageMode === 'file') {
+      await this.fileManager.updateSession(sessionId, updateData)
+    }
 
-      if (this.postgresStorage.isConnected) {
-        try {
-          const pgUpdated = await this.postgresStorage.updateSession(sessionId, updateData)
-          this._recordStorageHealth('postgres', pgUpdated)
-          updated = updated || pgUpdated
-        } catch (error) {
-          this._recordStorageHealth('postgres', false)
-        }
-      }
+    return true
+  }
 
-      return updated
-    } catch (error) {
-      logger.error(`Error marking ${sessionId} as detected:`, error.message)
-      return false
+  // ==================== ORPHAN CLEANUP ====================
+  
+  async cleanupOrphanedSessions() {
+    if (this.storageMode === 'file') {
+      // FILE MODE: Only cleanup file orphans
+      return await this._cleanupFileOrphans()
+    } else {
+      // MONGODB MODE: Cleanup MongoDB orphans
+      return await this._cleanupMongoOrphans()
     }
   }
 
+  async _cleanupFileOrphans() {
+    logger.info("Starting file orphan cleanup...")
+    
+    const fileSessions = await this.fileManager.getAllSessions()
+    let cleaned = 0
+
+    for (const session of fileSessions) {
+      const sessionId = session.sessionId
+      const age = Date.now() - new Date(session.createdAt || session.updatedAt).getTime()
+      
+      if (age < 180000) continue // 3 minute grace period
+
+      const hasAuth = await this.fileManager.hasValidCredentials(sessionId)
+      
+      if (!hasAuth) {
+        logger.warn(`Cleaning orphan: ${sessionId}`)
+        await this.fileManager.cleanupSessionFiles(sessionId)
+        this.sessionCache.delete(sessionId)
+        cleaned++
+      }
+    }
+
+    logger.info(`File orphan cleanup: ${cleaned} cleaned`)
+    return { cleaned, errors: 0 }
+  }
+
+  async _cleanupMongoOrphans() {
+    if (!this.mongoStorage.isConnected) {
+      return { cleaned: 0, errors: 0 }
+    }
+
+    logger.info("Starting MongoDB orphan cleanup...")
+    
+    const allSessions = await this.mongoStorage.sessions.find({}).toArray()
+    const authCollection = this.mongoStorage.db.collection("auth_baileys")
+    let cleaned = 0
+
+    for (const session of allSessions) {
+      const sessionId = session.sessionId
+      const age = Date.now() - new Date(session.createdAt || session.updatedAt).getTime()
+      
+      if (age < 180000) continue
+
+      // Check both MongoDB and file auth
+      const mongoAuth = await authCollection.findOne({
+        sessionId,
+        filename: "creds.json"
+      })
+
+      const fileAuth = await this.fileManager.hasValidCredentials(sessionId)
+
+      if (!mongoAuth && !fileAuth) {
+        logger.warn(`Cleaning orphan: ${sessionId}`)
+        
+        await this.mongoStorage.deleteSession(sessionId)
+        await this.mongoStorage.deleteAuthState(sessionId)
+        await this.fileManager.cleanupSessionFiles(sessionId)
+        
+        if (this.postgresStorage.isConnected) {
+          await this.postgresStorage.cleanupOrphanedSession(sessionId, session.source || 'telegram')
+        }
+        
+        this.sessionCache.delete(sessionId)
+        cleaned++
+      }
+    }
+
+    logger.info(`MongoDB orphan cleanup: ${cleaned} cleaned`)
+    return { cleaned, errors: 0 }
+  }
+
+  // ==================== HELPERS ====================
+  
   _formatSessionData(sessionData) {
     if (!sessionData) return null
 
@@ -1005,8 +448,6 @@ export class SessionStorage {
       source: sessionData.source || "telegram",
       detected: sessionData.detected !== false,
       detectedAt: sessionData.detectedAt,
-      credentials: sessionData.credentials || null,
-      authState: sessionData.authState || null,
       createdAt: sessionData.createdAt,
       updatedAt: sessionData.updatedAt,
     }
@@ -1014,14 +455,11 @@ export class SessionStorage {
 
   _clearWriteBuffer(sessionId) {
     const bufferId = `${sessionId}_update`
-    const bufferData = this.writeBuffer.get(bufferId)
-
-    if (bufferData) {
-      if (bufferData.timeout) {
-        clearTimeout(bufferData.timeout)
-      }
-      this.writeBuffer.delete(bufferId)
+    const buffer = this.writeBuffer.get(bufferId)
+    if (buffer?.timeout) {
+      clearTimeout(buffer.timeout)
     }
+    this.writeBuffer.delete(bufferId)
   }
 
   _getEncryptionKey() {
@@ -1030,207 +468,85 @@ export class SessionStorage {
   }
 
   _startHealthCheck() {
-    this.healthCheckInterval = setInterval(async () => {
-      // Check MongoDB
-      if (this.mongoStorage.isConnected) {
-        try {
-          await this.mongoStorage.client.db("admin").command({ ping: 1 })
-          this._recordStorageHealth('mongodb', true)
-        } catch (error) {
-          this._recordStorageHealth('mongodb', false)
-        }
-      } else {
-        this.storageHealth.mongodb.available = false
-      }
-
-      // Check PostgreSQL
-      if (this.postgresStorage.isConnected) {
-        try {
-          const client = await this.postgresStorage.pool.connect()
-          await client.query("SELECT 1")
-          client.release()
-          this._recordStorageHealth('postgres', true)
-        } catch (error) {
-          this._recordStorageHealth('postgres', false)
-        }
-      } else {
-        this.storageHealth.postgres.available = false
-      }
+    this.healthCheckInterval = setInterval(() => {
+      // Just check connections, no actions needed
     }, 60000)
   }
 
   _startOrphanCleanup() {
     this.orphanCleanupInterval = setInterval(async () => {
-      await this.cleanupOrphanedSessions().catch((error) => {
-        logger.error("Periodic orphan cleanup error:", error.message)
-      })
-    }, 1800000)
+      await this.cleanupOrphanedSessions().catch(() => {})
+    }, 1800000) // Every 30 minutes
 
+    // Initial cleanup after 2 minutes
     setTimeout(async () => {
-      await this.cleanupOrphanedSessions().catch((error) => {
-        logger.error("Initial orphan cleanup error:", error.message)
-      })
+      await this.cleanupOrphanedSessions().catch(() => {})
     }, 120000)
   }
 
-  getConnectionStatus() {
-    return {
-      mongodb: this.mongoStorage.isConnected,
-      postgresql: this.postgresStorage.isConnected,
-      fileManager: this.fileManager !== null,
-      overall: this.isConnected,
-      cacheSize: this.sessionCache.size,
-      cacheMaxSize: SESSION_CACHE_MAX_SIZE,
-      bufferSize: this.writeBuffer.size,
-      health: {
-        mongodb: {
-          available: this.storageHealth.mongodb.available,
-          failures: this.storageHealth.mongodb.consecutiveFailures
-        },
-        postgres: {
-          available: this.storageHealth.postgres.available,
-          failures: this.storageHealth.postgres.consecutiveFailures
-        },
-        files: {
-          available: this.storageHealth.files.available,
-          failures: this.storageHealth.files.consecutiveFailures
+  _startCacheCleanup() {
+    this.cacheCleanupInterval = setInterval(() => {
+      const now = Date.now()
+      for (const [key, value] of this.sessionCache.entries()) {
+        if (value.lastCached && now - value.lastCached > SESSION_CACHE_TTL) {
+          this.sessionCache.delete(key)
         }
       }
-    }
+    }, 15000)
   }
 
   async flushWriteBuffers() {
-    const bufferKeys = Array.from(this.writeBuffer.keys())
-    const flushPromises = []
-
-    for (const bufferId of bufferKeys) {
-      const bufferData = this.writeBuffer.get(bufferId)
-      if (!bufferData) continue
-
-      if (bufferData.timeout) {
-        clearTimeout(bufferData.timeout)
+    const buffers = Array.from(this.writeBuffer.keys())
+    for (const bufferId of buffers) {
+      const buffer = this.writeBuffer.get(bufferId)
+      if (buffer?.timeout) {
+        clearTimeout(buffer.timeout)
       }
-
-      const sessionId = bufferId.replace("_update", "")
-
-      const flushPromise = (async () => {
-        try {
-          const updates = { ...bufferData.data, updatedAt: new Date() }
-
-          if (this.mongoStorage.isConnected) {
-            try {
-              await this.mongoStorage.updateSession(sessionId, updates)
-              this._recordStorageHealth('mongodb', true)
-            } catch (error) {
-              this._recordStorageHealth('mongodb', false)
-            }
-          }
-
-          if (this.postgresStorage.isConnected) {
-            try {
-              await this.postgresStorage.updateSession(sessionId, updates)
-              this._recordStorageHealth('postgres', true)
-            } catch (error) {
-              this._recordStorageHealth('postgres', false)
-            }
-          }
-
-          this.writeBuffer.delete(bufferId)
-        } catch (error) {
-          logger.error(`Error flushing buffer for ${sessionId}:`, error.message)
-        }
-      })()
-
-      flushPromises.push(flushPromise)
-    }
-
-    if (flushPromises.length > 0) {
-      await Promise.allSettled(flushPromises)
-      logger.info(`Flushed ${flushPromises.length} write buffers`)
+      this.writeBuffer.delete(bufferId)
     }
   }
 
   async close() {
-    try {
-      logger.info("Closing session storage...")
+    if (this.healthCheckInterval) clearInterval(this.healthCheckInterval)
+    if (this.orphanCleanupInterval) clearInterval(this.orphanCleanupInterval)
+    if (this.cacheCleanupInterval) clearInterval(this.cacheCleanupInterval)
 
-      if (this.healthCheckInterval) {
-        clearInterval(this.healthCheckInterval)
-      }
+    await this.flushWriteBuffers()
+    this.sessionCache.clear()
 
-      if (this.orphanCleanupInterval) {
-        clearInterval(this.orphanCleanupInterval)
-      }
+    await Promise.allSettled([
+      this.mongoStorage.close(),
+      this.postgresStorage.close()
+    ])
+  }
 
-      if (this.cacheCleanupInterval) {
-        clearInterval(this.cacheCleanupInterval)
-      }
-
-      if (this.fileSyncInterval) {
-        clearInterval(this.fileSyncInterval)
-      }
-
-      await this.flushWriteBuffers()
-      this.sessionCache.clear()
-
-      await Promise.allSettled([this.mongoStorage.close(), this.postgresStorage.close()])
-
-      logger.info("Session storage closed")
-    } catch (error) {
-      logger.error("Storage close error:", error.message)
+  getConnectionStatus() {
+    return {
+      mode: this.storageMode,
+      mongodb: this.mongoStorage.isConnected,
+      postgresql: this.postgresStorage.isConnected,
+      fileManager: true,
+      cacheSize: this.sessionCache.size,
+      bufferSize: this.writeBuffer.size,
     }
   }
 
- getStats() {
-  const timeSinceDbSuccess = Date.now() - this.lastDatabaseSuccess
-  
-  return {
-    connections: {
-      mongodb: this.mongoStorage.isConnected,
-      postgresql: this.postgresStorage.isConnected,
-      fileManager: this.fileManager !== null,
-      overall: this.isConnected,
-    },
-    emergencyMode: {
-      active: this.emergencyMode,
-      secondsSinceDbSuccess: Math.round(timeSinceDbSuccess / 1000),
-      minutesSinceDbSuccess: Math.round(timeSinceDbSuccess / 60000),
-      cacheTTL: this.emergencyMode ? '2 hours' : '5 minutes',
-      fileSyncInterval: `${FILE_SYNC_INTERVAL / 1000}s`,
-    },
-    cache: {
-      size: this.sessionCache.size,
-      maxSize: SESSION_CACHE_MAX_SIZE,
-      ttlMinutes: this.emergencyMode ? SESSION_CACHE_EXTENDED_TTL / 60000 : SESSION_CACHE_TTL / 60000,
-      entries: Array.from(this.sessionCache.keys()).slice(0, 10),
-    },
-    writeBuffer: {
-      size: this.writeBuffer.size,
-      entries: Array.from(this.writeBuffer.keys()).slice(0, 10),
-    },
-    health: {
-      mongodb: {
-        available: this.storageHealth.mongodb.available,
-        failures: this.storageHealth.mongodb.consecutiveFailures,
-        lastSuccess: this.storageHealth.mongodb.lastSuccessfulOperation 
-          ? new Date(this.storageHealth.mongodb.lastSuccessfulOperation).toISOString()
-          : null
+  getStats() {
+    return {
+      mode: this.storageMode,
+      connections: {
+        mongodb: this.mongoStorage.isConnected,
+        postgresql: this.postgresStorage.isConnected,
       },
-      postgres: {
-        available: this.storageHealth.postgres.available,
-        failures: this.storageHealth.postgres.consecutiveFailures,
-        lastSuccess: this.storageHealth.postgres.lastSuccessfulOperation
-          ? new Date(this.storageHealth.postgres.lastSuccessfulOperation).toISOString()
-          : null
+      cache: {
+        size: this.sessionCache.size,
+        maxSize: SESSION_CACHE_MAX_SIZE,
       },
-      files: {
-        available: this.storageHealth.files.available,
-        failures: this.storageHealth.files.consecutiveFailures
-      }
-    },
-    fileManager: this.fileManager.getStats(),
+      writeBuffer: {
+        size: this.writeBuffer.size,
+      },
+    }
   }
-}
 }
 
 let storageInstance = null

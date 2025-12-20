@@ -40,7 +40,6 @@ export {
   hasValidAuthData,
   getSessionStorage,
   initializeStorage,
-  getAuthCacheStats,
   FileBasedStore,
   createFileStore,
   getFileStore,

@@ -98,10 +98,10 @@ _endReconnection(sessionId, success = false) {
     try {
 
           // ✅ CRITICAL: Check if already reconnecting
-    if (this._isReconnecting(sessionId)) {
+  /*  if (this._isReconnecting(sessionId)) {
       logger.warn(`⚠️ ${sessionId} already reconnecting - skipping duplicate handler`)
       return
-    }
+    }*/
 
       // ✅ Check if this is a health-triggered disconnect
       const isHealthTriggered = lastDisconnect?.isHealthTriggered === true

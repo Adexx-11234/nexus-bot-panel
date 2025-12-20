@@ -7,7 +7,6 @@ export {
   useMongoDBAuthState,
   cleanupSessionAuthData,
   hasValidAuthData,
-  getAuthCacheStats, // Export new stats function
 } from "./auth-state.js"
 
 export {

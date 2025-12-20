@@ -342,82 +342,103 @@ async createConnection(sessionId, phoneNumber = null, callbacks = {}, allowPairi
   }
 }
 
- async _getAuthState(sessionId, allowPairing = true) {
-    try {
-      // Try MongoDB first if available
-      if (this.mongoClient) {
+// ==================== FIX _getAuthState in connection-manager.js ====================
+// Replace the _getAuthState method
+
+async _getAuthState(sessionId, allowPairing = true) {
+  try {
+    // Try MongoDB first if available
+    if (this.mongoClient) {
+      try {
+        const { useMongoDBAuthState } = await import('../storage/index.js')
+        
+        // ✅ FIX: Verify MongoDB client is actually connected
+        const topology = this.mongoClient.topology
+        if (!topology || topology.isDestroyed()) {
+          logger.warn(`MongoDB client not connected for ${sessionId}`)
+          throw new Error('MongoDB not connected')
+        }
+        
+        const db = this.mongoClient.db()
+        const collection = db.collection('auth_baileys')
+        
+        // ✅ FIX: Verify collection is accessible
+        if (!collection) {
+          logger.error(`Failed to get auth_baileys collection for ${sessionId}`)
+          throw new Error('Collection not available')
+        }
+        
+        // ✅ FIX: Test collection with a simple operation
         try {
-          const { useMongoDBAuthState } = await import('../storage/index.js')
-          const db = this.mongoClient.db()
-          const collection = db.collection('auth_baileys')
+          await collection.findOne({ _id: '__test__' })
+          logger.debug(`✅ Collection accessible for ${sessionId}`)
+        } catch (collError) {
+          logger.error(`Collection not accessible: ${collError.message}`)
+          throw new Error('Collection not accessible')
+        }
+        
+        logger.info(`[${sessionId}] � Auth mode: MONGODB | Source: telegram`)
+        
+        const mongoAuth = await useMongoDBAuthState(collection, sessionId, allowPairing, 'telegram')
+
+        if (mongoAuth?.state?.creds?.noiseKey && mongoAuth.state.creds?.signedIdentityKey) {
+          logger.info(`Using MongoDB auth for ${sessionId}`)
           
-          // ✅ CRITICAL: Pass isPairing flag (true if allowPairing is true)
-          const mongoAuth = await useMongoDBAuthState(collection, sessionId, allowPairing)
-
-          // Validate MongoDB auth
-          if (mongoAuth?.state?.creds?.noiseKey && mongoAuth.state.creds?.signedIdentityKey) {
-            logger.info(`Using MongoDB auth for ${sessionId}`)
-            
-            // ✅ CRITICAL: Wrap keys with makeCacheableSignalKeyStore
-            const authState = {
-              creds: mongoAuth.state.creds,
-              keys: makeCacheableSignalKeyStore(
-                mongoAuth.state.keys,
-                pino({ level: 'silent' })
-              )
-            }
-            
-            return {
-              state: authState,
-              saveCreds: mongoAuth.saveCreds,
-              cleanup: mongoAuth.cleanup,
-              method: 'mongodb'
-            }
-          } else {
-            logger.warn(`Invalid MongoDB auth for ${sessionId}, falling back to file`)
+          const authState = {
+            creds: mongoAuth.state.creds,
+            keys: makeCacheableSignalKeyStore(
+              mongoAuth.state.keys,
+              pino({ level: 'silent' })
+            )
           }
-        } catch (mongoError) {
-          logger.warn(`MongoDB auth failed for ${sessionId}: ${mongoError.message}`)
+          
+          return {
+            state: authState,
+            saveCreds: mongoAuth.saveCreds,
+            cleanup: mongoAuth.cleanup,
+            method: 'mongodb'
+          }
         }
+      } catch (mongoError) {
+        logger.warn(`MongoDB auth failed for ${sessionId}: ${mongoError.message}`)
       }
-
-      // Fall back to file-based auth
-      if (!this.fileManager) {
-        throw new Error('No auth state provider available')
-      }
-
-      this.fileManager.ensureSessionDirectory(sessionId)
-      const sessionPath = this.fileManager.getSessionPath(sessionId)
-      const fileAuth = await useMultiFileAuthState(sessionPath)
-
-      // Validate file auth
-      if (fileAuth?.state?.creds?.noiseKey && fileAuth.state.creds?.signedIdentityKey) {
-        logger.info(`Using file auth for ${sessionId}`)
-        
-        // ✅ CRITICAL: Wrap keys with makeCacheableSignalKeyStore
-        const authState = {
-          creds: fileAuth.state.creds,
-          keys: makeCacheableSignalKeyStore(
-            fileAuth.state.keys,
-            pino({ level: 'silent' })
-          )
-        }
-        
-        return {
-          state: authState,
-          saveCreds: fileAuth.saveCreds,
-          cleanup: () => {},
-          method: 'file'
-        }
-      }
-
-      throw new Error('No valid auth state found')
-
-    } catch (error) {
-      logger.error(`Auth state retrieval failed for ${sessionId}:`, error)
-      return null
     }
+
+    // Fall back to file-based auth
+    if (!this.fileManager) {
+      throw new Error('No auth state provider available')
+    }
+
+    await this.fileManager.ensureSessionDirectory(sessionId)
+    const sessionPath = this.fileManager.getSessionPath(sessionId)
+    const fileAuth = await useMultiFileAuthState(sessionPath)
+
+    if (fileAuth?.state?.creds?.noiseKey && fileAuth.state.creds?.signedIdentityKey) {
+      logger.info(`Using file auth for ${sessionId}`)
+      
+      const authState = {
+        creds: fileAuth.state.creds,
+        keys: makeCacheableSignalKeyStore(
+          fileAuth.state.keys,
+          pino({ level: 'silent' })
+        )
+      }
+      
+      return {
+        state: authState,
+        saveCreds: fileAuth.saveCreds,
+        cleanup: () => {},
+        method: 'file'
+      }
+    }
+
+    throw new Error('No valid auth state found')
+
+  } catch (error) {
+    logger.error(`Auth state retrieval failed for ${sessionId}:`, error)
+    return null
   }
+}
 
   _schedulePairing(sock, sessionId, phoneNumber, callbacks) {
     if (this.pairingInProgress.has(sessionId)) {
@@ -489,32 +510,33 @@ async createConnection(sessionId, phoneNumber = null, callbacks = {}, allowPairi
   }
 
   async checkAuthAvailability(sessionId) {
-    const availability = {
-      mongodb: false,
-      file: false,
-      preferred: 'none'
-    }
-
-    if (this.mongoClient) {
-      try {
-        const { hasValidAuthData } = await import('../storage/index.js')
-        const db = this.mongoClient.db()
-        const collection = db.collection('auth_baileys')
-        availability.mongodb = await hasValidAuthData(collection, sessionId)
-      } catch (error) {
-        availability.mongodb = false
-      }
-    }
-
-    if (this.fileManager) {
-      availability.file = this.fileManager.hasValidCredentials(sessionId)
-    }
-
-    availability.preferred = availability.mongodb ? 'mongodb' : 
-                            availability.file ? 'file' : 'none'
-
-    return availability
+  const availability = {
+    mongodb: false,
+    file: false,
+    preferred: 'none'
   }
+
+  if (this.mongoClient) {
+    try {
+      const { hasValidAuthData } = await import('../storage/index.js')
+      const db = this.mongoClient.db()
+      const collection = db.collection('auth_baileys')
+      availability.mongodb = await hasValidAuthData(collection, sessionId)
+    } catch (error) {
+      availability.mongodb = false
+    }
+  }
+
+  if (this.fileManager) {
+    // Now async
+    availability.file = await this.fileManager.hasValidCredentials(sessionId)
+  }
+
+  availability.preferred = availability.mongodb ? 'mongodb' : 
+                          availability.file ? 'file' : 'none'
+
+  return availability
+}
 
   async cleanupAuthState(sessionId) {
     const results = { mongodb: false, file: false }
