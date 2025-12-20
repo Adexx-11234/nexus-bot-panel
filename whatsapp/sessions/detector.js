@@ -241,13 +241,24 @@ async _takeOverSession(sessionData) {
         onConnected: async () => {
           logger.info(`✅ Successfully took over ${sessionId}`)
           
-          // Mark as detected in database - FIXED: use updateSession
-          await this.storage.updateSession(sessionId, { detected: true }).catch(error => {
-            logger.error(`Failed to mark ${sessionId} as detected:`, error)
-          })
+          // ✅ CRITICAL: Direct MongoDB update for web detection
+          // Don't rely on write buffer for web session detection
+          if (this.storage.mongoStorage?.isConnected) {
+            try {
+              await this.storage.mongoStorage.updateSession(sessionId, { 
+                detected: true,
+                detectedAt: new Date()
+              })
+              logger.info(`✅ Web session ${sessionId} marked as detected in MongoDB`)
+            } catch (error) {
+              logger.error(`Failed to mark ${sessionId} as detected in MongoDB:`, error)
+            }
+          }
           
-          // Wait for write buffer to flush (default is 500ms + buffer time)
-          await new Promise(resolve => setTimeout(resolve, 1000))
+          // Also update via normal storage (for file backup)
+          await this.storage.updateSession(sessionId, { detected: true }).catch(error => {
+            logger.error(`Failed to mark ${sessionId} as detected via storage:`, error)
+          })
           
           // Setup full event handlers if enabled
           if (this.sessionManager.eventHandlersEnabled && !sock.eventHandlersSetup) {
