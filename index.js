@@ -2,6 +2,15 @@
 import dotenv from "dotenv"
 dotenv.config()
 
+import { EventEmitter } from 'events'
+
+// Increase max listeners globally
+EventEmitter.defaultMaxListeners = 900
+process.setMaxListeners(900)
+
+// Also increase for process warnings
+process.setMaxListeners(0)
+
 if (process.env.SUPPRESS_LIBRARY_LOGS !== 'false') {
   const originalStdoutWrite = process.stdout.write.bind(process.stdout)
   const originalStderrWrite = process.stderr.write.bind(process.stderr)
