@@ -253,77 +253,79 @@ class MongoDBStorageManager {
     }
   }
 
-  fixFileName(file) {
-    return file?.replace(/\//g, "__")?.replace(/:/g, "-") || ""
-  }
-
   async readData(fileName) {
-    return await this._safeOperation(
-      `read(${fileName})`,
-      async () => {
-        const result = await this.collection.findOne(
-          { filename: this.fixFileName(fileName), sessionId: this.sessionId },
-          { projection: { datajson: 1 } }
-        )
+  return await this._safeOperation(
+    `read(${fileName})`,
+    async () => {
+      const result = await this.collection.findOne(
+        { 
+          filename: sanitizeFileName(fileName), // ✅ Changed from this.fixFileName
+          sessionId: this.sessionId 
+        },
+        { projection: { datajson: 1 } }
+      )
 
-        if (result?.datajson) {
-          return JSON.parse(result.datajson, BufferJSON.reviver)
-        }
-        return null
-      },
-      null
-    )
-  }
+      if (result?.datajson) {
+        return JSON.parse(result.datajson, BufferJSON.reviver)
+      }
+      return null
+    },
+    null
+  )
+}
 
-  async writeData(fileName, data) {
-    const result = await this._safeOperation(
-      `write(${fileName})`,
-      async () => {
-        if (!this.collection) {
-          logger.error(`[${this.sessionId}] MongoDB collection not available`)
-          return false
-        }
-        
-        try {
-          const result = await this.collection.updateOne(
-            { filename: this.fixFileName(fileName), sessionId: this.sessionId },
-            {
-              $set: {
-                filename: this.fixFileName(fileName),
-                sessionId: this.sessionId,
-                datajson: JSON.stringify(data, BufferJSON.replacer),
-                updatedAt: new Date(),
-              },
+async writeData(fileName, data) {
+  const result = await this._safeOperation(
+    `write(${fileName})`,
+    async () => {
+      if (!this.collection) {
+        logger.error(`[${this.sessionId}] MongoDB collection not available`)
+        return false
+      }
+      
+      try {
+        const result = await this.collection.updateOne(
+          { 
+            filename: sanitizeFileName(fileName), // ✅ Changed from this.fixFileName
+            sessionId: this.sessionId 
+          },
+          {
+            $set: {
+              filename: sanitizeFileName(fileName), // ✅ Changed from this.fixFileName
+              sessionId: this.sessionId,
+              datajson: JSON.stringify(data, BufferJSON.replacer),
+              updatedAt: new Date(),
             },
-            { upsert: true }
-          )
-          
-          return result.acknowledged
-        } catch (error) {
-          logger.error(`[${this.sessionId}] MongoDB write error for ${fileName}: ${error.message}`)
-          return false
-        }
-      },
-      false
-    )
+          },
+          { upsert: true }
+        )
+        
+        return result.acknowledged
+      } catch (error) {
+        logger.error(`[${this.sessionId}] MongoDB write error for ${fileName}: ${error.message}`)
+        return false
+      }
+    },
+    false
+  )
 
-    this._recordResult(result)
-    return result
-  }
+  this._recordResult(result)
+  return result
+}
 
-  async deleteData(fileName) {
-    return await this._safeOperation(
-      `delete(${fileName})`,
-      async () => {
-        const result = await this.collection.deleteOne({
-          filename: this.fixFileName(fileName),
-          sessionId: this.sessionId,
-        })
-        return result.deletedCount > 0
-      },
-      false
-    )
-  }
+async deleteData(fileName) {
+  return await this._safeOperation(
+    `delete(${fileName})`,
+    async () => {
+      const result = await this.collection.deleteOne({
+        filename: sanitizeFileName(fileName), // ✅ Changed from this.fixFileName
+        sessionId: this.sessionId,
+      })
+      return result.deletedCount > 0
+    },
+    false
+  )
+}
 
   async cleanup() {
     return await this._safeOperation(
