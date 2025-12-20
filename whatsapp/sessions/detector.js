@@ -202,10 +202,12 @@ export class WebSessionDetector {
    */
   async _takeOverSession(sessionData) {
     const { sessionId, phoneNumber, userId, telegramId } = sessionData
+   logger.warn(`DEBUG - Looking for session with ID: "${sessionId}"`)
+  logger.warn(`DEBUG - Session data received:`, JSON.stringify(sessionData))
 
     try {
       const actualUserId = userId || telegramId || sessionId.replace('session_', '')
-
+logger.warn(`DEBUG - getSession returned:`, JSON.stringify(currentSession))
       // Get current session state from database
       const currentSession = await this.storage.getSession(sessionId);
       if (!currentSession) {
