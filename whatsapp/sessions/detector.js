@@ -225,9 +225,21 @@ async _takeOverSession(sessionData) {
 
     // Check again if session is already active
     const existingSocket = this.sessionManager.activeSockets.get(sessionId)
-    if (existingSocket && existingSocket.user && existingSocket.readyState === existingSocket.ws?.OPEN) {
+    if (existingSocket && existingSocket.user && existingSocket.ws?.socket?._readyState === 1) {
       logger.info(`Session ${sessionId} already connected, marking as detected`)
-      await this.storage.updateSession(sessionId, { detected: true })
+      
+      // Direct MongoDB update for web detection
+      if (this.storage.mongoStorage?.isConnected) {
+        try {
+          await this.storage.mongoStorage.updateSession(sessionId, { 
+            detected: true,
+            detectedAt: new Date()
+          })
+          logger.info(`✅ Web session ${sessionId} marked as detected in MongoDB`)
+        } catch (error) {
+          logger.error(`Failed to mark ${sessionId} as detected:`, error.message)
+        }
+      }
       return true
     }
 
@@ -239,33 +251,8 @@ async _takeOverSession(sessionData) {
       phoneNumber,
       {
         onConnected: async () => {
-          logger.info(`✅ Successfully took over ${sessionId}`)
-          
-          // ✅ CRITICAL: Direct MongoDB update for web detection
-          // Don't rely on write buffer for web session detection
-          if (this.storage.mongoStorage?.isConnected) {
-            try {
-              await this.storage.mongoStorage.updateSession(sessionId, { 
-                detected: true,
-                detectedAt: new Date()
-              })
-              logger.info(`✅ Web session ${sessionId} marked as detected in MongoDB`)
-            } catch (error) {
-              logger.error(`Failed to mark ${sessionId} as detected in MongoDB:`, error)
-            }
-          }
-          
-          // Also update via normal storage (for file backup)
-          await this.storage.updateSession(sessionId, { detected: true }).catch(error => {
-            logger.error(`Failed to mark ${sessionId} as detected via storage:`, error)
-          })
-          
-          // Setup full event handlers if enabled
-          if (this.sessionManager.eventHandlersEnabled && !sock.eventHandlersSetup) {
-            await this.sessionManager._setupEventHandlers(sock, sessionId).catch(error => {
-              logger.error(`Failed to setup handlers for ${sessionId}:`, error)
-            })
-          }
+          logger.info(`✅ Socket connected for ${sessionId}`)
+          // Connection callback - just log for now
         },
         onError: (error) => {
           logger.error(`Takeover error for ${sessionId}:`, error)
@@ -282,6 +269,27 @@ async _takeOverSession(sessionData) {
     if (!sock) {
       logger.warn(`Failed to create socket for takeover: ${sessionId}`)
       return false
+    }
+
+    // ✅ CRITICAL: Setup listener for actual connection establishment
+    // Use connection-open event which fires when socket is TRULY ready
+    if (sock.ev) {
+      sock.ev.once('connection-open', async () => {
+        logger.info(`🔌 Connection truly open for ${sessionId}, marking as detected`)
+        
+        // Direct MongoDB update - bypass buffers
+        if (this.storage.mongoStorage?.isConnected) {
+          try {
+            await this.storage.mongoStorage.updateSession(sessionId, { 
+              detected: true,
+              detectedAt: new Date()
+            })
+            logger.info(`✅ Web session ${sessionId} MARKED AS DETECTED in MongoDB`)
+          } catch (error) {
+            logger.error(`❌ Failed to mark ${sessionId} as detected in MongoDB:`, error.message)
+          }
+        }
+      })
     }
 
     logger.info(`Successfully initiated takeover for ${sessionId}`)
