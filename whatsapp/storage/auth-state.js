@@ -48,6 +48,23 @@ const isFileMode = () => {
   return getStorageMode() === 'file'
 }
 
+// ==================== FILENAME SANITIZATION ====================
+
+/**
+ * Sanitize filename to prevent filesystem errors
+ * Replaces problematic characters: :: → __ and : → -
+ */
+const sanitizeFileName = (fileName) => {
+  if (!fileName) return fileName
+  
+  // Replace :: first (group IDs), then single colons
+  return fileName
+    .replace(/::/g, '__')  // Group separator
+    .replace(/:/g, '-')    // Phone number separator
+    .replace(/\//g, '_')   // Slash (shouldn't exist but just in case)
+    .replace(/\\/g, '_')   // Backslash
+}
+
 // ==================== FILE STORAGE MANAGER ====================
 class FileStorageManager {
   constructor(sessionId, sessionDir = "./sessions") {
@@ -66,63 +83,71 @@ class FileStorageManager {
       throw error
     }
   }
+  
 
-  async readFile(fileName) {
-    if (!this.initialized) throw new Error('File storage not initialized')
+ async readFile(fileName) {
+  if (!this.initialized) throw new Error('File storage not initialized')
 
+  try {
+    const sanitizedName = sanitizeFileName(fileName)
+    const filePath = path.join(this.sessionDir, sanitizedName)
+    
     try {
-      const filePath = path.join(this.sessionDir, fileName)
-      
-      try {
-        await fs.access(filePath)
-      } catch (error) {
-        return null
-      }
-      
-      const content = await fs.readFile(filePath, "utf8")
-      
-      if (!content || content.trim() === '') {
-        return null
-      }
-      
-      return JSON.parse(content, BufferJSON.reviver)
+      await fs.access(filePath)
     } catch (error) {
-      if (error.code !== 'ENOENT') {
-        logger.debug(`[${this.sessionId}] Read ${fileName} error:`, error.message)
-      }
       return null
     }
-  }
-
-  async writeFile(fileName, data) {
-    if (!this.initialized) throw new Error('File storage not initialized')
-
-    try {
-      await fs.mkdir(this.sessionDir, { recursive: true })
-      
-      const filePath = path.join(this.sessionDir, fileName)
-      await fs.writeFile(filePath, JSON.stringify(data, BufferJSON.replacer, 2), "utf8")
-      return true
-    } catch (error) {
-      logger.error(`[${this.sessionId}] Write ${fileName} error:`, error.message)
-      return false
+    
+    const content = await fs.readFile(filePath, "utf8")
+    
+    if (!content || content.trim() === '') {
+      return null
     }
-  }
-
-  async deleteFile(fileName) {
-    if (!this.initialized) return false
-
-    try {
-      const filePath = path.join(this.sessionDir, fileName)
-      await fs.unlink(filePath)
-      return true
-    } catch (error) {
-      if (error.code !== 'ENOENT') {
-        logger.debug(`[${this.sessionId}] Delete ${fileName} error:`, error.message)
-      }
-      return false
+    
+    return JSON.parse(content, BufferJSON.reviver)
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      logger.debug(`[${this.sessionId}] Read ${fileName} error:`, error.message)
     }
+    return null
   }
+}
+
+async writeFile(fileName, data) {
+  if (!this.initialized) throw new Error('File storage not initialized')
+
+  try {
+    await fs.mkdir(this.sessionDir, { recursive: true })
+    
+    const sanitizedName = sanitizeFileName(fileName)
+    const filePath = path.join(this.sessionDir, sanitizedName)
+    const fileDir = path.dirname(filePath)
+    
+    await fs.mkdir(fileDir, { recursive: true })
+    
+    await fs.writeFile(filePath, JSON.stringify(data, BufferJSON.replacer, 2), "utf8")
+    return true
+  } catch (error) {
+    logger.error(`[${this.sessionId}] Write ${fileName} error:`, error.message)
+    return false
+  }
+}
+
+async deleteFile(fileName) {
+  if (!this.initialized) return false
+
+  try {
+    const sanitizedName = sanitizeFileName(fileName)
+    const filePath = path.join(this.sessionDir, sanitizedName)
+    await fs.unlink(filePath)
+    return true
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      logger.debug(`[${this.sessionId}] Delete ${fileName} error:`, error.message)
+    }
+    return false
+  }
+}
 
   async cleanup() {
     try {
@@ -138,22 +163,27 @@ class FileStorageManager {
   }
 
   async getAllFiles() {
-    if (!this.initialized) return []
+  if (!this.initialized) return []
 
-    try {
-      const files = await fs.readdir(this.sessionDir)
-      const authFiles = files.filter(f => f.endsWith('.json'))
-      
-      if (authFiles.length > 0) {
-        logger.debug(`[${this.sessionId}] Found ${authFiles.length} auth files`)
-      }
-      
-      return authFiles
-    } catch (error) {
-      logger.error(`[${this.sessionId}] Failed to list files:`, error.message)
-      return []
+  try {
+    const files = await fs.readdir(this.sessionDir)
+    
+    // ✅ Return files as-is (sanitized)
+    // Migration loop will use the sanitized names directly
+    const authFiles = files.filter(f => f.endsWith('.json'))
+    
+    if (authFiles.length > 0) {
+      logger.debug(`[${this.sessionId}] Found ${authFiles.length} auth files`)
     }
+    
+    return authFiles
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      logger.error(`[${this.sessionId}] Failed to list files:`, error.message)
+    }
+    return []
   }
+}
 }
 
 // ==================== MONGODB STORAGE MANAGER ====================
@@ -375,19 +405,29 @@ export const useMongoDBAuthState = async (collection, sessionId, isPairing = fal
     return await fileStorage.readFile(fileName)
   }
 
-  const writeData = async (data, fileName) => {
-    let success = false
+const writeData = async (data, fileName) => {
+  let success = false
 
-    if (primaryStorage === 'mongodb' && mongoStorage) {
-      success = await mongoStorage.writeData(fileName, data)
-      fileStorage.writeFile(fileName, data).catch(() => {})
-      
-    } else {
-      success = await fileStorage.writeFile(fileName, data)
-    }
-
-    return success
+  // ✅ CRITICAL: Ensure directory exists before ANY write attempt
+  try {
+    await fs.mkdir(fileStorage.sessionDir, { recursive: true })
+  } catch (error) {
+    logger.error(`[${sessionId}] Failed to ensure directory exists:`, error.message)
   }
+
+  if (primaryStorage === 'mongodb' && mongoStorage) {
+    success = await mongoStorage.writeData(fileName, data)
+    // Always backup to file (don't wait)
+    fileStorage.writeFile(fileName, data).catch((err) => {
+      logger.debug(`[${sessionId}] Background file write failed for ${fileName}: ${err.message}`)
+    })
+    
+  } else {
+    success = await fileStorage.writeFile(fileName, data)
+  }
+
+  return success
+}
 
   const removeData = async (fileName) => {
     const promises = []

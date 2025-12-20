@@ -7,7 +7,7 @@ const logger = createComponentLogger("TO-IMAGE")
 
 export default {
   name: "toimage",
-  aliases: ["toimg"],
+  aliases: ["toimg", "photo"],
   category: "convertmenu",
   description: "Convert sticker to image",
   usage: "Reply to sticker with .toimage",

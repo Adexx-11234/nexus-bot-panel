@@ -7,7 +7,7 @@ const logger = createComponentLogger("TO-VIDEO")
 
 export default {
   name: "tovideo",
-  aliases: ["tomp4"],
+  aliases: ["tomp4", "video", "mp4"],
   category: "convertmenu",
   description: "Convert sticker to video",
   usage: "Reply to animated sticker with .tovideo",

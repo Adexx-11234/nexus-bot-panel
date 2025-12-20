@@ -1,6 +1,7 @@
 // plugins/ai/nsfwcheck.js
 
 import aiService from '../../lib/ai/index.js';
+import { uploadDeline } from '../../lib/tools/index.js';
 
 export default {
   name: "nsfwcheck",
@@ -11,20 +12,39 @@ export default {
   
   async execute(sock, sessionId, args, m) {
     try {
-      // Get image URL from quoted message or current message
       let imageUrl = null;
 
-      // Check if replying to an image
-      if (m.quoted && m.quoted.imageMessage) {
-        if (m.quoted.imageMessage.url) {
-          imageUrl = m.quoted.imageMessage.url;
+      // Check if current message has image (sent with caption)
+      if (m.message?.imageMessage) {
+        await sock.sendMessage(m.chat, {
+          text: "⏳ Processing image...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
+        }, { quoted: m });
+        
+        try {
+          const buffer = await sock.downloadMedia(m);
+          imageUrl = await uploadDeline(buffer, 'image.jpg');
+        } catch (downloadError) {
+          console.error('[NSFW Check] Download error:', downloadError);
+          return await sock.sendMessage(m.chat, {
+            text: "❌ Failed to download image!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
+          }, { quoted: m });
         }
       }
 
-      // Check if current message has image
-      if (!imageUrl && m.imageMessage) {
-        if (m.imageMessage.url) {
-          imageUrl = m.imageMessage.url;
+      // Check if replying to an image
+      if (!imageUrl && m.quoted?.message?.imageMessage) {
+        await sock.sendMessage(m.chat, {
+          text: "⏳ Processing quoted image...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
+        }, { quoted: m });
+        
+        try {
+          const buffer = await sock.downloadMedia(m);
+          imageUrl = await uploadDeline(buffer, 'image.jpg');
+        } catch (downloadError) {
+          console.error('[NSFW Check] Download quoted error:', downloadError);
+          return await sock.sendMessage(m.chat, {
+            text: "❌ Failed to download quoted image!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
+          }, { quoted: m });
         }
       }
 
@@ -48,49 +68,54 @@ export default {
       const result = await aiService.checkNsfw(imageUrl);
 
       // Handle error
-      if (!result.success) {
+      if (!result.success || !result.status) {
         return await sock.sendMessage(m.chat, {
-          text: `❌ NSFW Check Failed!\n\n*Error:* ${result.error.message}\n\n*Tip:* Make sure the image URL is valid and accessible\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
+          text: `❌ NSFW Check Failed!\n\n*Error:* ${result.error?.message || 'Unknown error'}\n\n*Tip:* Make sure the image URL is valid and accessible\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
         }, { quoted: m });
       }
 
-      // Parse result
+      // Parse result correctly based on API response
       const nsfwResult = result.result;
-      const isNsfw = nsfwResult.isNsfw || false;
+      const labelName = nsfwResult.labelName || '';
       const confidence = nsfwResult.confidence || 0;
+      
+      // Check if label contains "Porn" (case-insensitive)
+      const isNsfw = labelName.toLowerCase().includes('porn');
 
       // Format response with emoji indicators
       let response = `🔍 *NSFW Check Result*\n\n`;
       
       if (isNsfw) {
-        response += `⚠️ *Status:* NSFW Content Detected\n`;
-        response += `🔴 *Safety:* Not Safe\n`;
+        response += `⚠️ *Status:* ${labelName}\n`;
+        response += `🔴 *Safety:* NSFW Content Detected!\n`;
+        response += `⛔ *Warning:* This image contains inappropriate content\n`;
       } else {
-        response += `✅ *Status:* Safe Content\n`;
-        response += `🟢 *Safety:* Safe\n`;
+        response += `✅ *Status:* ${labelName}\n`;
+        response += `🟢 *Safety:* Safe Content\n`;
+        response += `✔️ *Result:* This image is safe to view\n`;
       }
       
-      response += `📊 *Confidence:* ${(confidence * 100).toFixed(2)}%\n\n`;
+      response += `\n📊 *Confidence:* ${(confidence * 100).toFixed(2)}%\n`;
 
-      // Add category breakdown if available
-      if (nsfwResult.categories) {
-        response += `📋 *Categories:*\n`;
-        Object.entries(nsfwResult.categories).forEach(([category, score]) => {
-          const percentage = (score * 100).toFixed(2);
-          const emoji = score > 0.5 ? '🔴' : score > 0.3 ? '🟡' : '🟢';
-          response += `${emoji} ${category}: ${percentage}%\n`;
-        });
-        response += `\n`;
-      }
+      // Add confidence indicator
+      const confidenceEmoji = confidence > 0.9 ? '🟢 Very High' : 
+                             confidence > 0.7 ? '🟡 High' : 
+                             confidence > 0.5 ? '🟠 Medium' : '🔴 Low';
+      response += `📈 *Accuracy:* ${confidenceEmoji}\n\n`;
 
-      response += `🤖 *Model:* ${result.model}\n`;
-      response += `⏰ ${result.timestamp}\n\n`;
+      // Add label details
+      response += `🏷️ *Label ID:* \`${nsfwResult.labelId}\`\n`;
+      response += `👤 *Creator:* ${result.creator}\n`;
+      response += `⏰ *Checked:* ${new Date().toLocaleString()}\n\n`;
+      
       response += `> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`;
 
       // Send response
       await sock.sendMessage(m.chat, {
         text: response
       }, { quoted: m });
+
+      console.log("[NSFW Check] Image checked successfully!");
 
       return { success: true };
 

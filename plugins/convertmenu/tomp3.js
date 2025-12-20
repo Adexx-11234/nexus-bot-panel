@@ -6,7 +6,7 @@ const logger = createComponentLogger("TO-MP3")
 
 export default {
   name: "tomp3",
-  aliases: [],
+  aliases: ["audio", "mp3"],
   category: "convertmenu",
   description: "Convert video/audio to MP3 document",
   usage: "Reply to video/audio with .tomp3",

@@ -1,8 +1,5 @@
-// plugins/ai/describe.js
-
 import aiService from '../../lib/ai/index.js';
 import { uploadDeline } from '../../lib/tools/index.js';
-import { downloadMediaMessage } from '@whiskeysockets/baileys';
 
 export default {
   name: "describe",
@@ -16,60 +13,36 @@ export default {
       let imageUrl = null;
 
       // Check if current message has image (sent with caption)
-      if (m.message && (m.message.imageMessage || m.message.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage)) {
-        const imageMsg = m.message.imageMessage;
-        if (imageMsg) {
-          await sock.sendMessage(m.chat, {
-            text: "⏳ Processing image...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
+      if (m.message?.imageMessage) {
+        await sock.sendMessage(m.chat, {
+          text: "⏳ Processing image...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
+        }, { quoted: m });
+        
+        try {
+          const buffer = await sock.downloadMedia(m);
+          imageUrl = await uploadDeline(buffer, 'image.jpg');
+        } catch (downloadError) {
+          console.error('[Describe] Download error:', downloadError);
+          return await sock.sendMessage(m.chat, {
+            text: "❌ Failed to download image!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
           }, { quoted: m });
-          
-          try {
-            const buffer = await downloadMediaMessage(
-              m,
-              'buffer',
-              {},
-              { 
-                logger: console,
-                reuploadRequest: sock.updateMediaMessage
-              }
-            );
-            
-            imageUrl = await uploadDeline(buffer, 'jpg', 'image/jpeg');
-          } catch (downloadError) {
-            console.error('[Describe] Download error:', downloadError);
-            return await sock.sendMessage(m.chat, {
-              text: "❌ Failed to download image!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
-            }, { quoted: m });
-          }
         }
       }
 
       // Check if replying to an image
-      if (!imageUrl && m.quoted && m.quoted.message) {
-        const quotedMsg = m.quoted.message;
-        if (quotedMsg.imageMessage) {
-          await sock.sendMessage(m.chat, {
-            text: "⏳ Processing quoted image...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
+      if (!imageUrl && m.quoted?.message?.imageMessage) {
+        await sock.sendMessage(m.chat, {
+          text: "⏳ Processing quoted image...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
+        }, { quoted: m });
+        
+        try {
+          const buffer = await sock.downloadMedia(m);
+          imageUrl = await uploadDeline(buffer, 'image.jpg');
+        } catch (downloadError) {
+          console.error('[Describe] Download quoted error:', downloadError);
+          return await sock.sendMessage(m.chat, {
+            text: "❌ Failed to download quoted image!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
           }, { quoted: m });
-          
-          try {
-            const buffer = await downloadMediaMessage(
-              m.quoted,
-              'buffer',
-              {},
-              { 
-                logger: console,
-                reuploadRequest: sock.updateMediaMessage
-              }
-            );
-            
-            imageUrl = await uploadDeline(buffer, 'jpg', 'image/jpeg');
-          } catch (downloadError) {
-            console.error('[Describe] Download error:', downloadError);
-            return await sock.sendMessage(m.chat, {
-              text: "❌ Failed to download image!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
-            }, { quoted: m });
-          }
         }
       }
 

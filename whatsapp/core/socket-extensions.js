@@ -40,7 +40,7 @@ async function loadBotLogoThumbnail() {
             kernel: sharp.kernel.lanczos3 // Better quality scaling
           })
           .jpeg({ 
-            quality: 95, // Higher quality
+            quality: 99, // Higher quality
             chromaSubsampling: '4:4:4' // Better color quality
           })
           .toBuffer()
