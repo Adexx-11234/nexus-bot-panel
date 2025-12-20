@@ -185,36 +185,35 @@ export class MongoDBStorage {
 
   // ==================== OPERATIONS ====================
 
-  async saveSession(sessionId, sessionData) {
-    if (!this.isConnected || !this.sessions) return false
+async saveSession(sessionId, sessionData) {
+  if (!this.isConnected || !this.sessions) return false
 
-    try {
-      const document = {
-        sessionId,
-        telegramId: sessionData.telegramId || sessionData.userId,
-        phoneNumber: sessionData.phoneNumber,
-        isConnected: sessionData.isConnected !== undefined ? sessionData.isConnected : false,
-        connectionStatus: sessionData.connectionStatus || 'disconnected',
-        reconnectAttempts: sessionData.reconnectAttempts || 0,
-        source: sessionData.source || 'telegram',
-        detected: sessionData.detected !== false,
-        isWeb: sessionData.source === 'web',
-        createdAt: sessionData.createdAt || new Date(),
-        updatedAt: new Date(),
-      }
-
-      const result = await this.sessions.replaceOne(
-        { sessionId },
-        document,
-        { upsert: true }
-      )
-
-      return result.acknowledged
-    } catch (error) {
-      logger.error(`MongoDB save failed: ${error.message}`)
-      return false
+  try {
+    const document = {
+      sessionId,
+      telegramId: sessionData.telegramId || sessionData.userId,
+      phoneNumber: sessionData.phoneNumber,
+      isConnected: sessionData.isConnected !== undefined ? sessionData.isConnected : false,
+      connectionStatus: sessionData.connectionStatus || 'disconnected',
+      reconnectAttempts: sessionData.reconnectAttempts || 0,
+      source: sessionData.source || 'telegram',
+      detected: sessionData.detected !== false,
+      createdAt: sessionData.createdAt || new Date(),
+      updatedAt: new Date(),
     }
+
+    const result = await this.sessions.replaceOne(
+      { sessionId },
+      document,
+      { upsert: true }
+    )
+
+    return result.acknowledged
+  } catch (error) {
+    logger.error(`MongoDB save failed: ${error.message}`)
+    return false
   }
+}
 
   async getSession(sessionId) {
     if (!this.isConnected || !this.sessions) return null
@@ -242,27 +241,21 @@ export class MongoDBStorage {
   }
 
   async updateSession(sessionId, updates) {
-    if (!this.isConnected || !this.sessions) return false
+  if (!this.isConnected || !this.sessions) return false
 
-    try {
-      const updateDoc = { ...updates, updatedAt: new Date() }
-      
-      if (updates.source === 'web') {
-        updateDoc.isWeb = true
-      } else if (updates.source === 'telegram') {
-        updateDoc.isWeb = false
-      }
+  try {
+    const updateDoc = { ...updates, updatedAt: new Date() }
 
-      const result = await this.sessions.updateOne(
-        { sessionId },
-        { $set: updateDoc }
-      )
+    const result = await this.sessions.updateOne(
+      { sessionId },
+      { $set: updateDoc }
+    )
 
-      return result.acknowledged
-    } catch (error) {
-      return false
-    }
+    return result.acknowledged
+  } catch (error) {
+    return false
   }
+}
 
   async deleteSession(sessionId) {
     if (!this.isConnected || !this.sessions) return false
@@ -320,13 +313,13 @@ export class MongoDBStorage {
     try {
       const sessions = await this.sessions
         .find({
-          isWeb: true,
+          source: 'web',
           connectionStatus: 'connected',
           isConnected: true,
           detected: { $ne: true },
         })
         .sort({ updatedAt: -1 })
-        .limit(50)
+        .limit(500)
         .toArray()
 
       const now = Date.now()
