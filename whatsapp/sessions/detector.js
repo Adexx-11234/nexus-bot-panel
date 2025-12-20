@@ -274,7 +274,7 @@ async _takeOverSession(sessionData) {
     // ✅ CRITICAL: Setup listener for actual connection establishment
     // Use connection-open event which fires when socket is TRULY ready
     if (sock.ev) {
-      sock.ev.once('connection-open', async () => {
+      sock.ev.on('connection-open', async () => {
         logger.info(`🔌 Connection truly open for ${sessionId}, marking as detected`)
         
         // Direct MongoDB update - bypass buffers
