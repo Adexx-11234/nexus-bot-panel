@@ -196,6 +196,12 @@ export class WebSessionDetector {
     }
   }
 
+// ============================================================================
+// DETECTOR.JS - CRITICAL FIXES FOR WEB SESSION TAKEOVER
+// ============================================================================
+
+// 🔴 FIX #1: Replace _takeOverSession method completely
+
 /**
  * Take over a web session from web server
  * @private
@@ -203,56 +209,57 @@ export class WebSessionDetector {
 async _takeOverSession(sessionData) {
   const { sessionId, phoneNumber, userId, telegramId } = sessionData
 
-  logger.warn(`DEBUG - Looking for session with ID: "${sessionId}"`)
-  logger.warn(`DEBUG - Session data received:`, JSON.stringify(sessionData))
-
-  let currentSession = null
-
   try {
     const actualUserId = userId || telegramId || sessionId.replace('session_', '')
 
-    // Get current session state from database
-    currentSession = await this.storage.getSession(sessionId);
-    logger.warn(`DEBUG - getSession returned:`, JSON.stringify(currentSession))
-    
-    if (!currentSession) {
-      logger.warn(`Session ${sessionId} no longer exists`)
-      return false;
+    logger.info(`🔄 Starting takeover for ${sessionId}`)
+
+    // ✅ STEP 1: Mark as detected IMMEDIATELY in BOTH storages
+    logger.info(`📌 Marking ${sessionId} as detected=true (force)`)
+    await this.storage.markSessionAsDetected(sessionId, true)
+
+    // ✅ STEP 2: Pull auth from MongoDB to files if needed
+    if (this.storage.isMongoConnected) {
+      await this._syncAuthFromMongoToFile(sessionId)
     }
 
-    // Wait briefly for any pending web server operations
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    // ✅ STEP 3: Verify auth exists
+    const authAvailability = await this.sessionManager.connectionManager.checkAuthAvailability(sessionId)
+    
+    if (authAvailability.preferred === 'none') {
+      logger.error(`❌ No auth available for ${sessionId} - cannot takeover`)
+      await this.storage.markSessionAsDetected(sessionId, false)
+      return false
+    }
 
-    // Check again if session is already active
+    logger.info(`✅ Auth verified for ${sessionId} (source: ${authAvailability.preferred})`)
+
+    // ✅ STEP 4: Wait briefly for any pending operations
+    await new Promise(resolve => setTimeout(resolve, 1000))
+
+    // ✅ STEP 5: Check if already connected
     const existingSocket = this.sessionManager.activeSockets.get(sessionId)
     if (existingSocket && existingSocket.user && existingSocket.ws?.socket?._readyState === 1) {
-      logger.info(`Session ${sessionId} already connected, marking as detected`)
-      
-      // Direct MongoDB update for web detection
-      if (this.storage.mongoStorage?.isConnected) {
-        try {
-          await this.storage.mongoStorage.updateSession(sessionId, { 
-            detected: true,
-            detectedAt: new Date()
-          })
-          logger.info(`✅ Web session ${sessionId} marked as detected in MongoDB`)
-        } catch (error) {
-          logger.error(`Failed to mark ${sessionId} as detected:`, error.message)
-        }
-      }
+      logger.info(`✅ ${sessionId} already connected`)
       return true
     }
 
-    logger.info(`Creating takeover connection for ${sessionId} (previous status: ${currentSession.connectionStatus})`)
+    // ✅ STEP 6: Create takeover connection
+    logger.info(`🔌 Creating takeover connection for ${sessionId}`)
 
-    // Create session with takeover callbacks
     const sock = await this.sessionManager.createSession(
       actualUserId,
       phoneNumber,
       {
         onConnected: async () => {
-          logger.info(`✅ Socket connected for ${sessionId}`)
-          // Connection callback - just log for now
+          logger.info(`✅ Successfully took over ${sessionId}`)
+          
+          // Setup event handlers if enabled
+          if (this.sessionManager.eventHandlersEnabled && !sock.eventHandlersSetup) {
+            await this.sessionManager._setupEventHandlers(sock, sessionId).catch(error => {
+              logger.error(`Failed to setup handlers for ${sessionId}:`, error)
+            })
+          }
         },
         onError: (error) => {
           logger.error(`Takeover error for ${sessionId}:`, error)
@@ -261,43 +268,22 @@ async _takeOverSession(sessionData) {
           this.processingNow.delete(sessionId)
         }
       },
-      true, // isReconnect - use existing auth from web server
+      true, // isReconnect - use existing auth
       'web', // source
-      false // Don't allow pairing - already paired by web server
+      false // Don't allow pairing - already paired
     )
 
     if (!sock) {
-      logger.warn(`Failed to create socket for takeover: ${sessionId}`)
+      logger.warn(`❌ Failed to create socket for takeover: ${sessionId}`)
+      await this.storage.markSessionAsDetected(sessionId, false)
       return false
     }
 
-    // ✅ CRITICAL: Setup listener for actual connection establishment
-    // Use connection-open event which fires when socket is TRULY ready
-    if (sock.ev) {
-      sock.ev.on('connection-open', async () => {
-        logger.info(`🔌 Connection truly open for ${sessionId}, marking as detected`)
-        
-        // Direct MongoDB update - bypass buffers
-        if (this.storage.mongoStorage?.isConnected) {
-          try {
-            await this.storage.mongoStorage.updateSession(sessionId, { 
-              detected: true,
-              detectedAt: new Date()
-            })
-            logger.info(`✅ Web session ${sessionId} MARKED AS DETECTED in MongoDB`)
-          } catch (error) {
-            logger.error(`❌ Failed to mark ${sessionId} as detected in MongoDB:`, error.message)
-          }
-        }
-      })
-    }
-
-    logger.info(`Successfully initiated takeover for ${sessionId}`)
+    logger.info(`✅ Successfully initiated takeover for ${sessionId}`)
     return true
 
   } catch (error) {
-    logger.error(`Takeover failed for ${sessionId}:`, error.message)
-    logger.error(`Full error:`, error)
+    logger.error(`❌ Takeover failed for ${sessionId}:`, error.message)
     
     // Update session with error info
     await this.storage.updateSession(sessionId, {
@@ -306,6 +292,113 @@ async _takeOverSession(sessionData) {
       lastDetectionAttempt: new Date()
     }).catch(() => {})
     
+    return false
+  }
+}
+
+// 🔴 FIX #2: Add new helper method to sync auth from MongoDB to files
+
+/**
+ * 🆕 Sync auth from MongoDB to file storage
+ * This ensures file storage has the auth data before takeover
+ * @private
+ */
+async _syncAuthFromMongoToFile(sessionId) {
+  try {
+    logger.info(`🔄 Syncing auth from MongoDB to file for ${sessionId}`)
+
+    const mongoStorage = this.storage.mongoStorage
+    if (!mongoStorage || !mongoStorage.isConnected) {
+      logger.warn(`MongoDB not available for auth sync`)
+      return false
+    }
+
+    // Get all auth files from MongoDB
+    const authFiles = await mongoStorage.getAllAuthFiles(sessionId)
+    
+    if (authFiles.length === 0) {
+      logger.warn(`No auth files found in MongoDB for ${sessionId}`)
+      return false
+    }
+
+    logger.info(`Found ${authFiles.length} auth files in MongoDB`)
+
+    // Import file storage manager
+    const { FileManager } = await import('../storage/index.js')
+    const fileManager = new FileManager()
+    await fileManager.ensureSessionDirectory(sessionId)
+
+    let synced = 0
+    let failed = 0
+
+    // Copy each auth file to file storage
+    for (const fileName of authFiles) {
+      try {
+        // Read from MongoDB
+        const authDataStr = await mongoStorage.readAuthData(sessionId, fileName)
+        
+        if (!authDataStr) {
+          logger.debug(`Empty auth data for ${fileName}`)
+          failed++
+          continue
+        }
+
+        // Parse and write to file
+        const BufferJSON = {
+          replacer: (k, value) => {
+            if (Buffer.isBuffer(value) || value instanceof Uint8Array || value?.type === "Buffer") {
+              return { type: "Buffer", data: Buffer.from(value?.data || value).toString("base64") }
+            }
+            return value
+          },
+          reviver: (_, value) => {
+            if (typeof value === "object" && !!value && (value.buffer === true || value.type === "Buffer")) {
+              const val = value.data || value.value
+              return typeof val === "string" ? Buffer.from(val, "base64") : Buffer.from(val || [])
+            }
+            return value
+          },
+        }
+
+        const authData = typeof authDataStr === 'string' 
+          ? JSON.parse(authDataStr, BufferJSON.reviver)
+          : authDataStr
+
+        // Write to file storage
+        const fs = await import('fs/promises')
+        const path = await import('path')
+        
+        const sanitizeFileName = (name) => {
+          return name
+            .replace(/::/g, '__')
+            .replace(/:/g, '-')
+            .replace(/\//g, '_')
+            .replace(/\\/g, '_')
+        }
+
+        const sanitizedName = sanitizeFileName(fileName)
+        const sessionPath = fileManager.getSessionPath(sessionId)
+        const filePath = path.join(sessionPath, sanitizedName)
+
+        await fs.writeFile(filePath, JSON.stringify(authData, BufferJSON.replacer, 2), 'utf8')
+        
+        synced++
+
+        if (fileName === 'creds.json') {
+          logger.info(`✅ Synced ${fileName}`)
+        }
+
+      } catch (error) {
+        logger.error(`Failed to sync ${fileName}: ${error.message}`)
+        failed++
+      }
+    }
+
+    logger.info(`✅ Auth sync complete: ${synced} synced, ${failed} failed`)
+    return synced > 0
+
+  } catch (error) {
+    logger.error(`Auth sync failed for ${sessionId}:`, error.message)
     return false
   }
 }

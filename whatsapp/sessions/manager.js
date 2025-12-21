@@ -50,6 +50,7 @@ export class SessionManager {
 
     this._startTrackingCleanup()
     this._startFailedSessionRetry()
+    this._startDeletedSessionSync()
     logger.info("Session manager created (maxSessions: 200)")
     logger.info(`515 Flow: ${ENABLE_515_FLOW ? "ENABLED" : "DISABLED"}`)
   }
@@ -800,98 +801,105 @@ async _cleanupSocketInMemoryOnly(sessionId) {
   }
 }
 
-  /**
-   * Create a web session
-   */
-  async createWebSession(webSessionData) {
-    const { sessionId, userId, phoneNumber } = webSessionData
+/**
+ * Create a web session
+ */
+async createWebSession(webSessionData) {
+  const { sessionId, userId, phoneNumber } = webSessionData
 
-    try {
-      await this.storage.markSessionAsDetected(sessionId)
-      this.detectedWebSessions.add(sessionId)
+  try {
+    // ✅ Mark as detected IMMEDIATELY
+    logger.info(`📌 Marking web session ${sessionId} as detected=true`)
+    await this.storage.markSessionAsDetected(sessionId, true)
+    this.detectedWebSessions.add(sessionId)
 
-      logger.info(`Creating web session: ${sessionId}`)
+    logger.info(`Creating web session: ${sessionId}`)
 
-      const sock = await this.createSession(
-        userId,
-        phoneNumber,
-        {
-          onConnected: () => {
-            logger.info(`Web session ${sessionId} connected`)
-          },
-          onError: () => {
-            this.detectedWebSessions.delete(sessionId)
-            this.storage.markSessionAsDetected(sessionId, false).catch(() => {})
-          },
+    const sock = await this.createSession(
+      userId,
+      phoneNumber,
+      {
+        onConnected: () => {
+          logger.info(`✅ Web session ${sessionId} connected`)
         },
-        false,
-        "web",
-        true,
-      )
+        onError: () => {
+          logger.error(`❌ Web session ${sessionId} error`)
+          this.detectedWebSessions.delete(sessionId)
+          this.storage.markSessionAsDetected(sessionId, false).catch(() => {})
+        },
+      },
+      false, // Not a reconnect
+      "web", // Source
+      true, // Allow pairing
+    )
 
-      return !!sock
-    } catch (error) {
-      logger.error(`Failed to create web session ${sessionId}:`, error)
-      this.detectedWebSessions.delete(sessionId)
-      await this.storage.markSessionAsDetected(sessionId, false)
-      return false
-    }
+    return !!sock
+  } catch (error) {
+    logger.error(`Failed to create web session ${sessionId}:`, error)
+    this.detectedWebSessions.delete(sessionId)
+    await this.storage.markSessionAsDetected(sessionId, false)
+    return false
   }
+}
 
-  /**
-   * Disconnect a session
-   */
-  async disconnectSession(sessionId, forceCleanup = false) {
-    try {
-      logger.info(`Disconnecting session ${sessionId} (force: ${forceCleanup})`)
+/**
+ * Disconnect a session
+ */
+async disconnectSession(sessionId, forceCleanup = false) {
+  try {
+    logger.info(`Disconnecting session ${sessionId} (force: ${forceCleanup})`)
 
-      // ✅ CRITICAL: Cancel any active reconnection attempts
+    // ✅ CRITICAL: Cancel any active reconnection attempts
     const eventDispatcher = this.getEventDispatcher()
     const connectionHandler = eventDispatcher?.connectionEventHandler
     if (connectionHandler) {
       connectionHandler.cancelReconnection(sessionId)
     }
 
-      const sessionData = await this.storage.getSession(sessionId)
-      const isWebUser = sessionData?.source === "web"
+    const sessionData = await this.storage.getSession(sessionId)
+    const isWebUser = sessionData?.source === 'web'
 
-      // Full cleanup if forced
-      if (forceCleanup) {
-        return await this.performCompleteUserCleanup(sessionId)
-      }
-
-      // Mark as voluntary disconnect
-      this.initializingSessions.delete(sessionId)
-      this.voluntarilyDisconnected.add(sessionId)
-      this.detectedWebSessions.delete(sessionId)
-
-      // Get and cleanup socket
-      const sock = this.activeSockets.get(sessionId)
-      if (sock) {
-        await this._cleanupSocket(sessionId, sock)
-      }
-
-      // Remove from tracking
-      this.activeSockets.delete(sessionId)
-      this.sessionState.delete(sessionId)
-
-      // Update database
-      if (isWebUser) {
-        await this.storage.updateSession(sessionId, {
-          isConnected: false,
-          connectionStatus: "disconnected",
-        })
-      } else {
-        await this.storage.deleteSession(sessionId)
-      }
-
-      logger.info(`Session ${sessionId} disconnected`)
-      return true
-    } catch (error) {
-      logger.error(`Failed to disconnect session ${sessionId}:`, error)
-      return false
+    // Full cleanup if forced (logout)
+    if (forceCleanup) {
+      return await this.performCompleteUserCleanup(sessionId)
     }
+
+    // ✅ Normal disconnect (not logout)
+    // Mark as voluntary disconnect
+    this.initializingSessions.delete(sessionId)
+    this.voluntarilyDisconnected.add(sessionId)
+    this.detectedWebSessions.delete(sessionId)
+
+    // Get and cleanup socket
+    const sock = this.activeSockets.get(sessionId)
+    if (sock) {
+      await this._cleanupSocket(sessionId, sock)
+    }
+
+    // Remove from tracking
+    this.activeSockets.delete(sessionId)
+    this.sessionState.delete(sessionId)
+
+    // Update database (keep metadata, just mark as disconnected)
+    if (isWebUser) {
+      await this.storage.updateSession(sessionId, {
+        isConnected: false,
+        connectionStatus: "disconnected",
+      })
+      logger.info(`Web user ${sessionId} disconnected (metadata preserved)`)
+    } else {
+      // For telegram users, remove metadata but keep auth for reconnect
+      await this.storage.deleteSession(sessionId)
+      logger.info(`Telegram user ${sessionId} disconnected (can reconnect)`)
+    }
+
+    logger.info(`Session ${sessionId} disconnected`)
+    return true
+  } catch (error) {
+    logger.error(`Failed to disconnect session ${sessionId}:`, error)
+    return false
   }
+}
 
   /**
    * Cleanup socket
@@ -943,6 +951,35 @@ async _cleanupSocketInMemoryOnly(sessionId) {
 }
 
 /**
+ * 🆕 Start checking for sessions deleted from MongoDB
+ * If a session is deleted externally, cleanup files too
+ */
+_startDeletedSessionSync() {
+  setInterval(async () => {
+    if (!this.isInitialized) return
+
+    try {
+      // Get all active sockets
+      const activeSessions = Array.from(this.activeSockets.keys())
+      
+      for (const sessionId of activeSessions) {
+        // Check if session still exists in database
+        const sessionData = await this.storage.getSession(sessionId)
+        
+        if (!sessionData) {
+          logger.warn(`🔄 Session ${sessionId} deleted externally - performing cleanup`)
+          
+          // Perform complete cleanup
+          await this.performCompleteUserCleanup(sessionId)
+        }
+      }
+    } catch (error) {
+      logger.error("Deleted session sync error:", error)
+    }
+  }, 7000) // Every 7 seconds
+}
+
+/**
  * Perform complete user cleanup (logout)
  * ⚠️ This is the ONLY method that should delete auth files
  */
@@ -953,22 +990,29 @@ async performCompleteUserCleanup(sessionId) {
     logger.info(`🗑️ Performing COMPLETE cleanup for ${sessionId} (logout)`)
 
     const sessionData = await this.storage.getSession(sessionId)
-    const isWebUser = sessionData?.source === "web"
+    const isWebUser = sessionData?.source === 'web'
 
-    // Cleanup socket
+    // ✅ STEP 1: Cancel any active reconnection attempts
+    const eventDispatcher = this.getEventDispatcher()
+    const connectionHandler = eventDispatcher?.connectionEventHandler
+    if (connectionHandler) {
+      connectionHandler.cancelReconnection(sessionId)
+    }
+
+    // ✅ STEP 2: Cleanup socket
     const sock = this.activeSockets.get(sessionId)
     if (sock) {
       results.socket = await this._cleanupSocket(sessionId, sock)
     }
 
-    // Clear in-memory structures
+    // ✅ STEP 3: Clear in-memory structures
     this.activeSockets.delete(sessionId)
     this.sessionState.delete(sessionId)
     this.initializingSessions.delete(sessionId)
     this.voluntarilyDisconnected.add(sessionId)
     this.detectedWebSessions.delete(sessionId)
 
-    // ✅ Delete message store (./makeinstore)
+    // ✅ STEP 4: Delete message store (./makeinstore)
     try {
       const { deleteSessionStore } = await import("../core/index.js")
       await deleteSessionStore(sessionId)
@@ -978,21 +1022,49 @@ async performCompleteUserCleanup(sessionId) {
       logger.error(`Failed to delete message store: ${error.message}`)
     }
 
-    // Delete from databases based on source
-    if (isWebUser) {
-      // For web users: Keep PostgreSQL record, only delete auth
-      results.database = await this.storage.deleteSessionKeepUser(sessionId)
-      logger.info(`Web user ${sessionId} account preserved in PostgreSQL`)
-    } else {
-      // For Telegram users: Complete deletion including auth
-      results.database = await this.storage.completelyDeleteSession(sessionId)
-      logger.info(`Telegram user ${sessionId} completely deleted from database`)
+    // ✅ STEP 5: Delete from MongoDB (metadata + auth) and Files (metadata + auth)
+    try {
+      // Delete files (includes auth)
+      await this.storage.fileManager.cleanupSessionFiles(sessionId)
+      
+      // Delete from MongoDB (metadata + auth)
+      if (this.storage.isMongoConnected) {
+        await this.storage.mongoStorage.completeCleanup(sessionId)
+      }
+      
+      results.database = true
+      results.authState = true
+      logger.info(`✅ MongoDB + Files cleanup complete for ${sessionId}`)
+    } catch (error) {
+      logger.error(`Database cleanup failed: ${error.message}`)
     }
 
-    // ✅ Cleanup auth state files (./sessions/{sessionId})
-    const authCleanupResults = await this.connectionManager.cleanupAuthState(sessionId)
-    results.authState = authCleanupResults.mongodb || authCleanupResults.file
+    // ✅ STEP 6: Handle PostgreSQL based on user type
+    if (this.storage.isPostgresConnected) {
+      if (isWebUser) {
+        // 🔴 WEB USERS: NEVER DELETE - only update to disconnected
+        try {
+          await this.storage.postgresStorage.updateSession(sessionId, {
+            isConnected: false,
+            connectionStatus: 'disconnected',
+            updatedAt: new Date()
+          })
+          logger.info(`✅ Web user ${sessionId} PostgreSQL record preserved (updated to disconnected)`)
+        } catch (error) {
+          logger.error(`PostgreSQL update failed: ${error.message}`)
+        }
+      } else {
+        // Telegram users: Complete deletion
+        try {
+          await this.storage.postgresStorage.completelyDeleteSession(sessionId)
+          logger.info(`✅ Telegram user ${sessionId} deleted from PostgreSQL`)
+        } catch (error) {
+          logger.error(`PostgreSQL deletion failed: ${error.message}`)
+        }
+      }
+    }
 
+    // ✅ STEP 7: Verify cleanup
     logger.info(`✅ Complete cleanup for ${sessionId}:`, results)
     return results
   } catch (error) {
