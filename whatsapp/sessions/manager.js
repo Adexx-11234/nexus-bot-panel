@@ -963,45 +963,54 @@ _startDeletedSessionSync() {
       const activeSessions = Array.from(this.activeSockets.keys())
       
       for (const sessionId of activeSessions) {
-        // Get session data
+        // Check if session exists in storage
         const sessionData = await this.storage.getSession(sessionId)
         
-        // 🔴 CRITICAL: Only process if it WAS a web session
-        if (sessionData?.source === 'web') {
-          // Still exists, skip
-          continue
-        }
-        
-        // Session data missing - check if it was a web session
-        if (!sessionData && this.storage.isPostgresConnected) {
+        // Check PostgreSQL to verify if web session
+        if (this.storage.isPostgresConnected) {
           const pgSession = await this.storage.postgresStorage.getSession(sessionId)
           
           if (pgSession?.source === 'web') {
-            logger.warn(`🔄 Web session ${sessionId} deleted from MongoDB - cleaning up files`)
+            // Check if MongoDB auth still exists
+            const hasMongoAuth = this.storage.isMongoConnected 
+              ? await this.storage.mongoStorage.hasValidAuthData(sessionId)
+              : false
             
-            // Cleanup files and socket only
-            const sock = this.activeSockets.get(sessionId)
-            if (sock) {
-              await this._cleanupSocket(sessionId, sock)
+            // If no session data AND no MongoDB auth, it was deleted
+            if (!sessionData && !hasMongoAuth) {
+              logger.warn(`🔄 Web session ${sessionId} deleted from MongoDB - cleaning up`)
+              
+              // Cleanup socket
+              const sock = this.activeSockets.get(sessionId)
+              if (sock) {
+                await this._cleanupSocket(sessionId, sock)
+              }
+              
+              // Clear in-memory structures
+              this.activeSockets.delete(sessionId)
+              this.sessionState.delete(sessionId)
+              this.detectedWebSessions.delete(sessionId)
+              
+              // Delete files
+              await this.storage.fileManager.cleanupSessionFiles(sessionId)
+              
+              // Delete message store
+              try {
+                const { deleteSessionStore } = await import("../core/index.js")
+                await deleteSessionStore(sessionId)
+              } catch (error) {
+                logger.debug(`Failed to delete message store: ${error.message}`)
+              }
+              
+              // Update PostgreSQL to disconnected
+              await this.storage.postgresStorage.updateSession(sessionId, {
+                isConnected: false,
+                connectionStatus: 'disconnected',
+                updatedAt: new Date()
+              })
+              
+              logger.info(`✅ Web session ${sessionId} cleaned - PostgreSQL preserved`)
             }
-            
-            // Clear in-memory structures
-            this.activeSockets.delete(sessionId)
-            this.sessionState.delete(sessionId)
-            this.detectedWebSessions.delete(sessionId)
-            
-            // Delete files only
-            await this.storage.fileManager.cleanupSessionFiles(sessionId)
-            
-            // Delete message store
-            try {
-              const { deleteSessionStore } = await import("../core/index.js")
-              await deleteSessionStore(sessionId)
-            } catch (error) {
-              logger.debug(`Failed to delete message store: ${error.message}`)
-            }
-            
-            logger.info(`✅ Web session ${sessionId} files cleaned up`)
           }
         }
       }

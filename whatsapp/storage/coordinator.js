@@ -267,33 +267,127 @@ export class SessionStorage {
     return true
   }
 
-  async deleteSessionKeepUser(sessionId) {
-    logger.info(`🗑️ Deleting session (keeping user record): ${sessionId}`)
-    
-    this.sessionCache.delete(sessionId)
-    this._clearWriteBuffer(sessionId)
+ async deleteSessionKeepUser(sessionId) {
+  logger.info(`🗑️ Deleting session (keeping user record): ${sessionId}`)
+  
+  this.sessionCache.delete(sessionId)
+  this._clearWriteBuffer(sessionId)
 
-    const results = {
-      fileDeleted: false,
-      mongoDeleted: false,
-      postgresUpdated: false,
-    }
+  // Get session to check if it's a web user
+  const session = await this.getSession(sessionId)
+  const isWebUser = session?.source === 'web'
 
-    // Delete from file and MongoDB
-    results.fileDeleted = await this.fileManager.cleanupSessionFiles(sessionId)
-    
-    if (this.mongoStorage.isConnected) {
-      results.mongoDeleted = await this.mongoStorage.deleteSession(sessionId)
-    }
-
-    // Keep PostgreSQL record for web users
-    if (this.postgresStorage.isConnected) {
-      const pgResult = await this.postgresStorage.deleteSessionKeepUser(sessionId)
-      results.postgresUpdated = pgResult.updated
-    }
-
-    return results.fileDeleted || results.mongoDeleted || results.postgresUpdated
+  const results = {
+    fileDeleted: false,
+    mongoMetadataDeleted: false,
+    mongoAuthDeleted: false,
+    postgresHandled: false,
   }
+
+  // ✅ STEP 1: Delete files (metadata + auth)
+  results.fileDeleted = await this.fileManager.cleanupSessionFiles(sessionId)
+  
+  // ✅ STEP 2: Delete from MongoDB (metadata + auth_baileys)
+  if (this.mongoStorage.isConnected) {
+    const cleanup = await this.mongoStorage.completeCleanup(sessionId)
+    results.mongoMetadataDeleted = cleanup.metadata
+    results.mongoAuthDeleted = cleanup.auth
+    
+    if (isWebUser) {
+      logger.info(`✅ MongoDB cleanup for web user: metadata=${cleanup.metadata}, auth=${cleanup.auth}`)
+    } else {
+      logger.info(`✅ MongoDB cleanup for telegram user: metadata=${cleanup.metadata}, auth=${cleanup.auth}`)
+    }
+  }
+
+  // ✅ STEP 3: Let PostgreSQL handle its own logic
+  // - Web users with auth: Keep record (disconnect + keep phone)
+  // - Web users without auth: Delete completely
+  // - Telegram users: Keep record (disconnect + clear phone)
+  if (this.postgresStorage.isConnected) {
+    const pgResult = await this.postgresStorage.deleteSessionKeepUser(sessionId)
+    results.postgresHandled = pgResult.updated || pgResult.deleted
+    
+    if (isWebUser) {
+      if (pgResult.hadWebAuth) {
+        logger.info(`✅ PostgreSQL: Web user ${sessionId} kept (has auth)`)
+      } else {
+        logger.info(`✅ PostgreSQL: Web user ${sessionId} deleted (no auth)`)
+      }
+    } else {
+      logger.info(`✅ PostgreSQL: Telegram user ${sessionId} disconnected (phone cleared)`)
+    }
+  }
+
+  logger.info(`✅ Delete session keep user complete:`, results)
+  return results.fileDeleted || results.mongoMetadataDeleted || results.postgresHandled
+}
+
+  /**
+ * 🆕 Check for web sessions that lost their MongoDB auth
+ * If a web session has files but no MongoDB auth + no session metadata,
+ * it was deleted externally - clean up files
+ */
+async checkWebSessionsWithoutMongoAuth() {
+  if (!this.mongoStorage.isConnected) return { cleaned: 0 }
+
+  try {
+    let cleaned = 0
+
+    // Get all session folders
+    const fs = await import('fs/promises')
+    const entries = await fs.readdir(this.fileManager.sessionDir, { withFileTypes: true })
+    const sessionFolders = entries.filter(entry => 
+      entry.isDirectory() && entry.name.startsWith('session_')
+    )
+
+    for (const folder of sessionFolders) {
+      const sessionId = folder.name
+      
+      // Check PostgreSQL to see if it's a web session
+      if (!this.postgresStorage.isConnected) continue
+      
+      const pgSession = await this.postgresStorage.getSession(sessionId)
+      
+      // Only process web sessions
+      if (pgSession?.source !== 'web') continue
+      
+      // Check if session exists in MongoDB
+      const mongoSession = await this.mongoStorage.getSession(sessionId)
+      
+      // Check if auth exists in MongoDB
+      const hasAuth = await this.mongoStorage.hasValidAuthData(sessionId)
+      
+      // If web session has NO MongoDB session AND NO MongoDB auth, it was deleted
+      if (!mongoSession && !hasAuth) {
+        logger.warn(`🧹 Web session ${sessionId} deleted from MongoDB (no session + no auth) - cleaning files`)
+        
+        // Delete files
+        await this.fileManager.cleanupSessionFiles(sessionId)
+        this.sessionCache.delete(sessionId)
+        
+        // Update PostgreSQL to disconnected
+        await this.postgresStorage.updateSession(sessionId, {
+          isConnected: false,
+          connectionStatus: 'disconnected',
+          updatedAt: new Date()
+        })
+        
+        cleaned++
+        logger.info(`✅ Cleaned up web session ${sessionId} - PostgreSQL preserved`)
+      }
+    }
+
+    if (cleaned > 0) {
+      logger.info(`✅ Web auth check: ${cleaned} sessions cleaned`)
+    }
+
+    return { cleaned }
+  } catch (error) {
+    logger.error(`Web auth check failed: ${error.message}`)
+    return { cleaned: 0 }
+  }
+}
 
   async completelyDeleteSession(sessionId) {
     logger.info(`🗑️ COMPLETE deletion: ${sessionId} (MongoDB + Files, PostgreSQL preserved for web users)`)
@@ -603,12 +697,14 @@ async checkAndSyncDeletedSessions() {
     this.orphanCleanupInterval = setInterval(async () => {
       await this.cleanupOrphanedSessions().catch(() => {})
       await this.checkAndSyncDeletedSessions().catch(() => {})
+      await this.checkWebSessionsWithoutMongoAuth().catch(() => {})
     }, 1800000) // Every 30 minutes
 
     // Initial cleanup after 2 minutes
     setTimeout(async () => {
       await this.cleanupOrphanedSessions().catch(() => {})
       await this.checkAndSyncDeletedSessions().catch(() => {})
+      await this.checkWebSessionsWithoutMongoAuth().catch(() => {})
     }, 120000)
   }
 
