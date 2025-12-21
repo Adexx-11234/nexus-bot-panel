@@ -62,15 +62,59 @@ export class MessageFormatter {
     }
   }
 
-  async formatParticipants(sock, groupJid, participants, action) {
+    /**
+   * Get background image from defaults, or fallback to user avatar
+   */
+  async getBackgroundImage() {
+    try {
+      // Try to find default image from possible paths
+      const possiblePaths = [
+        path.resolve(process.cwd(), "Defaults", "images", "menu.png"),
+        path.resolve(process.cwd(), "defaults", "images", "menu.png"),
+        path.resolve(process.cwd(), "assets", "images", "menu.png"),
+        path.resolve(process.cwd(), "Defaults", "images", "logo.png"),
+        path.resolve(process.cwd(), "assets", "logo.png")
+      ]
+
+      // Find first existing file
+      for (const filePath of possiblePaths) {
+        if (fs.existsSync(filePath)) {
+          try {
+            const backgroundBuffer = fs.readFileSync(filePath)
+            const backgroundUrl = await uploadDeline(backgroundBuffer, 'png', 'image/png')
+            logger.debug(`Background image uploaded: ${backgroundUrl}`)
+            return backgroundUrl
+          } catch (uploadError) {
+            logger.error(`Failed to upload background from ${filePath}:`, uploadError)
+          }
+        }
+      }
+
+      logger.warn('No local background image found, will use avatar as fallback')
+      return null // Return null to signal fallback to avatar
+    } catch (error) {
+      logger.error('Error getting background image:', error)
+      return null
+    }
+  }
+
+async formatParticipants(sock, groupJid, participants, action) {
     try {
       const formattedMessages = []
-      const groupName = await this.metadataManager.getGroupName(sock, groupJid)
+      let groupName = await this.metadataManager.getGroupName(sock, groupJid)
       const timestamp = Math.floor(Date.now() / 1000) + 3600
       
       // Get group member count
       const groupMetadata = await sock.groupMetadata(groupJid)
       const memberCount = groupMetadata.participants.length
+
+      // ✅ FIX: Truncate groupName to 30 characters (API requirement)
+      if (groupName.length > 30) {
+        groupName = groupName.substring(0, 27) + '...'
+      }
+
+      // ✅ NEW: Get background image (default or fallback to avatar)
+      const background = await this.getBackgroundImage()
 
       for (const participantData of participants) {
         try {
@@ -79,21 +123,23 @@ export class MessageFormatter {
           // Generate canvas image ONLY for welcome (add action)
           let canvasBuffer = null
           if (action === 'add') {
-            // Get user avatar URL (uploaded to deline)
-            const avatar = await this.getUserAvatar(sock, jid)
-            
-            // Use user's profile picture as background too
-            const background = avatar
+            try {
+              // Get user avatar URL (uploaded to deline)
+              const avatar = await this.getUserAvatar(sock, jid)
 
-            const canvasResult = await tools.welcomeCanvas(
-              displayName,
-              groupName,
-              memberCount,
-              avatar,
-              background
-            )
-            if (canvasResult.success) {
-              canvasBuffer = canvasResult.data.buffer
+              const canvasResult = await tools.welcomeCanvas(
+                displayName,
+                groupName,  // Already truncated to 30 chars
+                memberCount,
+                avatar,
+                background  // Use default background or avatar fallback
+              )
+              if (canvasResult.success) {
+                canvasBuffer = canvasResult.data.buffer
+              }
+            } catch (canvasError) {
+              logger.error(`Failed to generate welcome canvas:`, canvasError.message)
+              // Continue without canvas, don't fail the whole operation
             }
           }
           
@@ -118,6 +164,8 @@ export class MessageFormatter {
       return []
     }
   }
+
+
 
   createActionMessage(action, displayName, groupName, timestamp) {
     const messageDate = new Date(timestamp * 1000)
