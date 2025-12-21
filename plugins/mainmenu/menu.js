@@ -11,7 +11,7 @@ export default {
   description: "Show main bot menu with all available categories",
   commands: ["menu", "start", "bot", "help"],
   adminOnly: false,
-  category: "both",
+  category: "mainmenu",
   usage: "• .menu - Show complete menu with all categories",
   async execute(sock, sessionId, args, m) {
     try {

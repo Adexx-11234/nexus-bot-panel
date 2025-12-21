@@ -10,7 +10,7 @@ export default {
   commands: ["status", "ping", "alive"],
   description: "Display basic bot status",
   adminOnly: false,
-  category: "both",
+  category: "mainmenu",
   
   async execute(sock, sessionId, args, m) {
     try {

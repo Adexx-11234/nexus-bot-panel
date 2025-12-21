@@ -480,105 +480,105 @@ class PluginLoader {
   }
 
   async executeCommand(sock, sessionId, commandName, args, m) {
-    try {
-      const plugin = this.findCommand(commandName)
-      if (!plugin) return { success: false, silent: true }
+  try {
+    const plugin = this.findCommand(commandName)
+    if (!plugin) return { success: false, silent: true }
 
-      if (!m.pushName) {
-        this.extractPushName(sock, m)
-          .then((name) => {
-            m.pushName = name
-          })
-          .catch(() => {})
-      }
+    if (!m.pushName) {
+      this.extractPushName(sock, m)
+        .then((name) => {
+          m.pushName = name
+        })
+        .catch(() => {})
+    }
 
-      const isCreator = this.checkIsBotOwner(sock, m.sender, m.key?.fromMe)
+    const isCreator = this.checkIsBotOwner(sock, m.sender, m.key?.fromMe)
 
-      const enhancedM = {
-        ...m,
-        chat: m.chat || m.key?.remoteJid || m.from,
-        sender: m.sender || m.key?.participant || m.from,
-        isCreator,
-        isOwner: isCreator,
-        isGroup: m.isGroup || (m.chat && m.chat.endsWith("@g.us")),
-        sessionContext: m.sessionContext || { telegram_id: "Unknown", session_id: sessionId },
-        sessionId,
-        reply: m.reply,
-        prefix: m.prefix || ".",
-        pluginCategory: plugin.category, // ← ADD THIS LINE
-        commandName: commandName.toLowerCase() // ← OPTIONAL: Also add this
-      }
+    const enhancedM = {
+      ...m,
+      chat: m.chat || m.key?.remoteJid || m.from,
+      sender: m.sender || m.key?.participant || m.from,
+      isCreator,
+      isOwner: isCreator,
+      isGroup: m.isGroup || (m.chat && m.chat.endsWith("@g.us")),
+      sessionContext: m.sessionContext || { telegram_id: "Unknown", session_id: sessionId },
+      sessionId,
+      reply: m.reply,
+      prefix: m.prefix || ".",
+      pluginCategory: plugin.category,
+      commandName: commandName.toLowerCase()
+    }
 
-      const [modeAllowed, permissionCheck] = await Promise.all([
-        this._checkBotMode(enhancedM),
-        this._checkPermissionsCached(sock, plugin, enhancedM),
-      ])
+    const [modeAllowed, permissionCheck] = await Promise.all([
+      this._checkBotMode(enhancedM),
+      this._checkPermissionsCached(sock, plugin, enhancedM),
+    ])
 
-      if (!modeAllowed) {
+    if (!modeAllowed) {
+      this.clearTempData()
+      return { success: false, silent: true }
+    }
+
+    if (enhancedM.isGroup) {
+      const groupOnlyAllowed = await this._checkGroupOnly(sock, enhancedM, commandName)
+      if (!groupOnlyAllowed) {
         this.clearTempData()
         return { success: false, silent: true }
       }
+    }
 
-      if (enhancedM.isGroup) {
-        const groupOnlyAllowed = await this._checkGroupOnly(sock, enhancedM, commandName)
-        if (!groupOnlyAllowed) {
-          this.clearTempData()
-          return { success: false, silent: true }
+    if (!permissionCheck.allowed) {
+      this.clearTempData()
+
+      if (permissionCheck.silent) {
+        return { success: false, silent: true }
+      }
+
+      // For groupmenu/gamemenu: Only first bot sends error, then mark as processed
+      const needsDeduplication = plugin.category === 'groupmenu' || plugin.category === 'gamemenu'
+      
+      if (needsDeduplication) {
+        const messageKey = this.deduplicator.generateKey(enhancedM.chat, m.key?.id)
+        if (messageKey) {
+          const actionKey = `permission-error-${commandName}`
+          
+          // Try to lock for sending error
+          if (!this.deduplicator.tryLockForProcessing(messageKey, sessionId, actionKey)) {
+            // Another bot already sent the error
+            return { success: false, silent: true }
+          }
+          
+          // Send error and mark as processed
+          try {
+            await sock.sendMessage(enhancedM.chat, { text: permissionCheck.message }, { quoted: m })
+            this.deduplicator.markAsProcessed(messageKey, sessionId, actionKey)
+          } catch (sendError) {
+            log.error("Failed to send permission error:", sendError)
+          }
+        }
+      } else {
+        // Non-deduplicated commands: each bot sends its own error
+        try {
+          await sock.sendMessage(enhancedM.chat, { text: permissionCheck.message }, { quoted: m })
+        } catch (sendError) {
+          log.error("Failed to send permission error:", sendError)
         }
       }
 
-      if (!permissionCheck.allowed) {
-  this.clearTempData()
-
-  if (permissionCheck.silent) {
-    return { success: false, silent: true }
-  }
-
-  // For groupmenu/gamemenu: Only first bot sends error, then mark as processed
-  const needsDeduplication = plugin.category === 'groupmenu' || plugin.category === 'gamemenu'
-  
-  if (needsDeduplication) {
-    const messageKey = this.deduplicator.generateKey(enhancedM.chat, m.key?.id)
-    if (messageKey) {
-      const actionKey = `permission-error-${commandName}`
-      
-      // Try to lock for sending error
-      if (!this.deduplicator.tryLockForProcessing(messageKey, sessionId, actionKey)) {
-        // Another bot already sent the error
-        return { success: false, silent: true }
-      }
-      
-      // Send error and mark as processed
-      try {
-        await sock.sendMessage(enhancedM.chat, { text: permissionCheck.message }, { quoted: m })
-        this.deduplicator.markAsProcessed(messageKey, sessionId, actionKey)
-      } catch (sendError) {
-        log.error("Failed to send permission error:", sendError)
-      }
+      return { success: false, error: permissionCheck.message }
     }
-  } else {
-    // Non-deduplicated commands: each bot sends its own error
-    try {
-      await sock.sendMessage(enhancedM.chat, { text: permissionCheck.message }, { quoted: m })
-    } catch (sendError) {
-      log.error("Failed to send permission error:", sendError)
-    }
-  }
 
-  return { success: false, error: permissionCheck.message }
+    // Execute plugin
+    const result = await this.executePluginWithFallback(sock, sessionId, args, enhancedM, plugin)
+
+    this.clearTempData()
+    return { success: true, result }
+  } catch (error) {
+    log.error(`Error executing command ${commandName}:`, error)
+    this.clearTempData()
+    return { success: false, error: error.message }
+  }
 }
-
-      // Execute plugin
-      const result = await this.executePluginWithFallback(sock, sessionId, args, enhancedM, plugin)
-
-      this.clearTempData()
-      return { success: true, result }
-    } catch (error) {
-      log.error(`Error executing command ${commandName}:`, error)
-      this.clearTempData()
-      return { success: false, error: error.message }
-    }
-  }
 
   async _checkBotMode(m) {
     if (m.isCreator) return true
@@ -745,7 +745,6 @@ class PluginLoader {
     }
   }
 async executePluginWithFallback(sock, sessionId, args, m, plugin) {
-  // Retry logic for database conflicts (groupmenu only)
   const maxRetries = plugin.category === 'groupmenu' ? 2 : 0
   let lastError = null
   
@@ -753,7 +752,7 @@ async executePluginWithFallback(sock, sessionId, args, m, plugin) {
     try {
       if (attempt > 0) {
         log.debug(`Retry attempt ${attempt} for ${plugin.name}`)
-        await new Promise(resolve => setTimeout(resolve, 100 * attempt)) // Backoff
+        await new Promise(resolve => setTimeout(resolve, 100 * attempt))
       }
       
       if (m.isGroup && (!m.hasOwnProperty('isAdmin') || !m.hasOwnProperty('isBotAdmin'))) {
@@ -778,22 +777,19 @@ async executePluginWithFallback(sock, sessionId, args, m, plugin) {
       }
 
       return await plugin.execute(sock, sessionId, args, m)
-} catch (error) {
+    } catch (error) {
       lastError = error
       
-      // If it's a database error and we have retries left, continue
       if (attempt < maxRetries && error.message?.includes('database')) {
         log.warn(`Database error on attempt ${attempt + 1}, retrying...`)
         continue
       }
       
-      // No more retries or non-database error
       log.error(`Plugin execution failed for ${plugin.name}:`, error)
       throw error
     }
   }
   
-  // All retries failed
   if (lastError) throw lastError
 }
 
