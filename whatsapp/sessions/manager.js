@@ -963,14 +963,43 @@ _startDeletedSessionSync() {
       const activeSessions = Array.from(this.activeSockets.keys())
       
       for (const sessionId of activeSessions) {
-        // Check if session still exists in database
+        // Get session data to check if it's a web user
         const sessionData = await this.storage.getSession(sessionId)
         
+        // ONLY process web users
         if (!sessionData) {
-          logger.warn(`🔄 Session ${sessionId} deleted externally - performing cleanup`)
-          
-          // Perform complete cleanup
-          await this.performCompleteUserCleanup(sessionId)
+          // Check if this was a web session by checking PostgreSQL
+          if (this.storage.isPostgresConnected) {
+            const pgSession = await this.storage.postgresStorage.getSession(sessionId)
+            
+            if (pgSession?.source === 'web') {
+              logger.warn(`🔄 Web session ${sessionId} deleted from MongoDB - cleaning up files`)
+              
+              // Cleanup files and socket only (PostgreSQL already preserved)
+              const sock = this.activeSockets.get(sessionId)
+              if (sock) {
+                await this._cleanupSocket(sessionId, sock)
+              }
+              
+              // Clear in-memory structures
+              this.activeSockets.delete(sessionId)
+              this.sessionState.delete(sessionId)
+              this.detectedWebSessions.delete(sessionId)
+              
+              // Delete files only
+              await this.storage.fileManager.cleanupSessionFiles(sessionId)
+              
+              // Delete message store
+              try {
+                const { deleteSessionStore } = await import("../core/index.js")
+                await deleteSessionStore(sessionId)
+              } catch (error) {
+                logger.debug(`Failed to delete message store: ${error.message}`)
+              }
+              
+              logger.info(`✅ Web session ${sessionId} files cleaned up`)
+            }
+          }
         }
       }
     } catch (error) {
