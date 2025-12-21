@@ -64,11 +64,11 @@ export default {
         text: `🔍 *Checking image for NSFW content...*\n\nPlease wait...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
       }, { quoted: m });
 
-      // Call AI service
+// Call AI service
       const result = await aiService.checkNsfw(imageUrl);
 
-      // Handle error
-      if (!result.success || !result.status) {
+      // Handle error - FIXED: Only check success, not status
+      if (!result.success) {
         return await sock.sendMessage(m.chat, {
           text: `❌ NSFW Check Failed!\n\n*Error:* ${result.error?.message || 'Unknown error'}\n\n*Tip:* Make sure the image URL is valid and accessible\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
         }, { quoted: m });
@@ -105,7 +105,7 @@ export default {
 
       // Add label details
       response += `🏷️ *Label ID:* \`${nsfwResult.labelId}\`\n`;
-      response += `👤 *Creator:* ${result.creator}\n`;
+      response += `👤 *Creator:* ${result.creator || 'Unknown'}\n`;
       response += `⏰ *Checked:* ${new Date().toLocaleString()}\n\n`;
       
       response += `> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`;
@@ -118,7 +118,7 @@ export default {
       console.log("[NSFW Check] Image checked successfully!");
 
       return { success: true };
-
+      
     } catch (error) {
       console.error("[NSFW Check Plugin] Error:", error);
       await sock.sendMessage(m.chat, {

