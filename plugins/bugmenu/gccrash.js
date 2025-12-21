@@ -205,7 +205,7 @@ export default {
         return
       }
 
-      // Import bug functions only when needed
+      // Import bug functions only when needed 
       const { buggccrash, buggcnewup } = await import("../../lib/buggers/bug.js")
 
       let progress = `👥 *GROUP CRASH ATTACK*\n\n🎯 Group: ${groupName}\n📱 ID: ${groupId}\n\n📊 *Progress:*\n\n`
