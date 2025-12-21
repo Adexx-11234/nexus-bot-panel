@@ -56,14 +56,14 @@ export class MessageFormatter {
         }
       }
       
-      // Final fallback - use API default
-      logger.warn('No local default image found, using API default')
-      return 'https://api.deline.web.id/default-avatar.jpg'
+      // Final fallback - use a placeholder
+      logger.warn('No local default image found, avatar generation may fail')
+      throw error
     }
   }
 
-    /**
-   * Get background image from defaults, or fallback to user avatar
+  /**
+   * Get background image - try local default first, fallback to avatar
    */
   async getBackgroundImage() {
     try {
@@ -80,25 +80,29 @@ export class MessageFormatter {
       for (const filePath of possiblePaths) {
         if (fs.existsSync(filePath)) {
           try {
-            const backgroundBuffer = fs.readFileSync(filePath)
-            const backgroundUrl = await uploadDeline(backgroundBuffer, 'png', 'image/png')
+            logger.debug(`Loading background image from: ${filePath}`)
+            const imageBuffer = fs.readFileSync(filePath)
+            
+            // Upload to deline and get URL
+            const backgroundUrl = await uploadDeline(imageBuffer, 'png', 'image/png')
             logger.debug(`Background image uploaded: ${backgroundUrl}`)
             return backgroundUrl
           } catch (uploadError) {
-            logger.error(`Failed to upload background from ${filePath}:`, uploadError)
+            logger.error(`Failed to upload background image from ${filePath}:`, uploadError)
+            // Continue to next path
           }
         }
       }
-
+      
       logger.warn('No local background image found, will use avatar as fallback')
-      return null // Return null to signal fallback to avatar
+      return null
     } catch (error) {
       logger.error('Error getting background image:', error)
       return null
     }
   }
 
-async formatParticipants(sock, groupJid, participants, action) {
+  async formatParticipants(sock, groupJid, participants, action) {
     try {
       const formattedMessages = []
       let groupName = await this.metadataManager.getGroupName(sock, groupJid)
@@ -113,8 +117,11 @@ async formatParticipants(sock, groupJid, participants, action) {
         groupName = groupName.substring(0, 27) + '...'
       }
 
-      // ✅ NEW: Get background image (default or fallback to avatar)
-      const background = await this.getBackgroundImage()
+      // ✅ Get background image once (try local default first)
+      let backgroundUrl = null
+      if (action === 'add') {
+        backgroundUrl = await this.getBackgroundImage()
+      }
 
       for (const participantData of participants) {
         try {
@@ -126,19 +133,27 @@ async formatParticipants(sock, groupJid, participants, action) {
             try {
               // Get user avatar URL (uploaded to deline)
               const avatar = await this.getUserAvatar(sock, jid)
+              
+              // ✅ Use background from default image, fallback to avatar
+              const background = backgroundUrl || avatar
+
+              logger.debug(`Generating welcome canvas with background: ${background}`)
 
               const canvasResult = await tools.welcomeCanvas(
                 displayName,
                 groupName,  // Already truncated to 30 chars
                 memberCount,
                 avatar,
-                background  // Use default background or avatar fallback
+                background
               )
               if (canvasResult.success) {
                 canvasBuffer = canvasResult.data.buffer
+                logger.info(`Welcome canvas generated successfully for ${displayName}`)
+              } else {
+                logger.warn(`Canvas generation returned false for ${displayName}`)
               }
             } catch (canvasError) {
-              logger.error(`Failed to generate welcome canvas:`, canvasError.message)
+              logger.error(`Failed to generate welcome canvas for ${displayName}:`, canvasError.message)
               // Continue without canvas, don't fail the whole operation
             }
           }
@@ -154,7 +169,7 @@ async formatParticipants(sock, groupJid, participants, action) {
             canvasImage: canvasBuffer // Only for welcome
           })
         } catch (error) {
-          logger.error(`Failed to format participant:`, error)
+          logger.error(`Failed to format participant ${participantData.displayName}:`, error)
         }
       }
 
@@ -164,8 +179,6 @@ async formatParticipants(sock, groupJid, participants, action) {
       return []
     }
   }
-
-
 
   createActionMessage(action, displayName, groupName, timestamp) {
     const messageDate = new Date(timestamp * 1000)
