@@ -508,43 +508,49 @@ export class SessionStorage {
 
   // ==================== SYNC DELETED SESSIONS ====================
   
-  /**
-   * 🆕 Check if session was deleted from MongoDB while server running
-   * If yes, cleanup from files too
-   */
-  async checkAndSyncDeletedSessions() {
-    if (!this.mongoStorage.isConnected) return { synced: 0 }
+/**
+ * 🆕 Check if session was deleted from MongoDB while server running
+ * If yes, cleanup from files too
+ * ⚠️ ONLY FOR WEB SESSIONS
+ */
+async checkAndSyncDeletedSessions() {
+  if (!this.mongoStorage.isConnected) return { synced: 0 }
 
-    try {
-      const fileSessions = await this.fileManager.getAllSessions()
-      let synced = 0
+  try {
+    const fileSessions = await this.fileManager.getAllSessions()
+    let synced = 0
 
-      for (const fileSession of fileSessions) {
-        const sessionId = fileSession.sessionId
-        
-        // Check if exists in MongoDB
-        const mongoSession = await this.mongoStorage.getSession(sessionId)
-        
-        // If not in MongoDB, it was deleted - cleanup files too
-        if (!mongoSession) {
-          logger.warn(`🔄 Syncing deletion: ${sessionId} (deleted from MongoDB)`)
-          
-          await this.fileManager.cleanupSessionFiles(sessionId)
-          this.sessionCache.delete(sessionId)
-          synced++
-        }
+    for (const fileSession of fileSessions) {
+      const sessionId = fileSession.sessionId
+      
+      // 🔴 CRITICAL: Only sync if it's a web session
+      if (fileSession.source !== 'web') {
+        continue // Skip Telegram sessions
       }
-
-      if (synced > 0) {
-        logger.info(`✅ Synced ${synced} deleted sessions`)
+      
+      // Check if exists in MongoDB
+      const mongoSession = await this.mongoStorage.getSession(sessionId)
+      
+      // If not in MongoDB, it was deleted - cleanup files too
+      if (!mongoSession) {
+        logger.warn(`🔄 Syncing deletion: ${sessionId} (web session deleted from MongoDB)`)
+        
+        await this.fileManager.cleanupSessionFiles(sessionId)
+        this.sessionCache.delete(sessionId)
+        synced++
       }
-
-      return { synced }
-    } catch (error) {
-      logger.error(`Sync deleted sessions failed: ${error.message}`)
-      return { synced: 0 }
     }
+
+    if (synced > 0) {
+      logger.info(`✅ Synced ${synced} deleted web sessions`)
+    }
+
+    return { synced }
+  } catch (error) {
+    logger.error(`Sync deleted sessions failed: ${error.message}`)
+    return { synced: 0 }
   }
+}
 
   // ==================== HELPERS ====================
   

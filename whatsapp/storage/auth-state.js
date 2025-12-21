@@ -357,30 +357,42 @@ export const useMongoDBAuthState = async (mongoStorage, sessionId, isPairing = f
     return await fileStorage.readFile(fileName)
   }
 
-  const writeData = async (data, fileName) => {
-    let success = false
+const writeData = async (data, fileName) => {
+  let success = false
 
-    // Ensure directory exists
+  // ✅ CRITICAL: ALWAYS ensure directory exists before ANY write attempt
+  try {
+    const fs = await import('fs/promises')
+    await fs.mkdir(fileStorage.sessionDir, { recursive: true })
+  } catch (error) {
+    logger.error(`[${sessionId}] Failed to ensure directory exists:`, error.message)
+  }
+
+  // Write based on primary storage
+  if (primaryStorage === 'mongodb' && mongoStore) {
+    success = await mongoStore.writeData(fileName, data)
+    // Always backup to file (background) - ensure directory first
+    (async () => {
+      try {
+        await fs.mkdir(fileStorage.sessionDir, { recursive: true })
+        await fileStorage.writeFile(fileName, data)
+      } catch (err) {
+        logger.debug(`[${sessionId}] Background file write failed: ${err.message}`)
+      }
+    })()
+    
+  } else {
+    // Ensure directory exists again right before file write
     try {
       await fs.mkdir(fileStorage.sessionDir, { recursive: true })
     } catch (error) {
-      logger.error(`[${sessionId}] Failed to ensure directory:`, error.message)
+      logger.debug(`[${sessionId}] Directory ensure retry: ${error.message}`)
     }
-
-    // Write based on primary storage
-    if (primaryStorage === 'mongodb' && mongoStore) {
-      success = await mongoStore.writeData(fileName, data)
-      // Always backup to file (background)
-      fileStorage.writeFile(fileName, data).catch((err) => {
-        logger.debug(`[${sessionId}] Background file write failed: ${err.message}`)
-      })
-      
-    } else {
-      success = await fileStorage.writeFile(fileName, data)
-    }
-
-    return success
+    success = await fileStorage.writeFile(fileName, data)
   }
+
+  return success
+}
 
   const removeData = async (fileName) => {
     const promises = []
