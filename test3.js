@@ -1,104 +1,301 @@
-import fs from 'fs/promises';
-import FormData from 'form-data';
-import fetch from 'node-fetch';
-import { JSDOM } from 'jsdom';
+/**
+ * DELETE FAILED WEB SESSIONS SCRIPT
+ * 
+ * This script:
+ * 1. Takes a list of failed session IDs
+ * 2. Deletes them from MongoDB (sessions collection)
+ * 3. Updates PostgreSQL to mark them as disconnected (is_connected=false)
+ * 4. Shows before/after comparison
+ * 
+ * Usage: node delete-failed-sessions.js
+ */
 
-// Convert WebP to MP4 using ezgif.com
-async function webpToMp4(buffer, filename = 'sticker.webp') {
+import { MongoClient } from 'mongodb'
+import { pool } from './config/database.js'
+import dotenv from 'dotenv'
+
+dotenv.config()
+
+const logger = {
+  info: (...args) => console.log('[INFO]', ...args),
+  warn: (...args) => console.warn('[WARN]', ...args),
+  error: (...args) => console.error('[ERROR]', ...args),
+  success: (...args) => console.log('[SUCCESS]', ...args)
+}
+
+/**
+ * List of failed session IDs that have no auth
+ * Add/Remove session IDs here
+ */
+const FAILED_SESSIONS = [
+  'session_1000000019',
+  'session_1000000001',
+  'session_1000000029',
+  'session_1000000026'
+  // Add more if needed
+]
+
+async function deleteFailedSessions() {
+  let mongoClient
+
   try {
-    console.log('Uploading WebP to ezgif.com...');
-    
-    const form = new FormData();
-    form.append('new-image-url', '');
-    form.append('new-image', buffer, filename);
+    logger.info('='.repeat(70))
+    logger.info('DELETE FAILED WEB SESSIONS')
+    logger.info('='.repeat(70))
+    logger.info('')
 
-    // Step 1: Upload the webp file
-    const uploadRes = await fetch('https://ezgif.com/webp-to-mp4', {
-      method: 'POST',
-      body: form,
-    });
-    
-    const uploadHtml = await uploadRes.text();
-    const { document: uploadDoc } = new JSDOM(uploadHtml).window;
+    logger.info(`📋 Sessions to delete: ${FAILED_SESSIONS.length}`)
+    FAILED_SESSIONS.forEach((sid, i) => {
+      logger.info(`  ${i + 1}. ${sid}`)
+    })
+    logger.info('')
 
-    // Step 2: Extract form data for conversion
-    const form2 = new FormData();
-    const formInputs = uploadDoc.querySelectorAll('form input[name]');
-    
-    if (formInputs.length === 0) {
-      await fs.writeFile('./debug-upload.html', uploadHtml);
-      throw new Error('Failed to upload file to ezgif - no form found');
+    // ==========================================
+    // CONNECT TO DATABASES
+    // ==========================================
+
+    logger.info('🔗 Connecting to MongoDB...')
+    mongoClient = new MongoClient(process.env.MONGODB_URI, {
+      maxPoolSize: 80,
+      minPoolSize: 2
+    })
+    await mongoClient.connect()
+    const db = mongoClient.db()
+    const sessionsCollection = db.collection('sessions')
+    logger.success('✅ MongoDB connected')
+
+    logger.info('🔗 Connecting to PostgreSQL...')
+    const client = await pool.connect()
+    await client.query('SELECT 1')
+    client.release()
+    logger.success('✅ PostgreSQL connected')
+    logger.info('')
+
+    // ==========================================
+    // COLLECT BEFORE STATISTICS
+    // ==========================================
+
+    logger.info('📊 Collecting before statistics...')
+    logger.info('─'.repeat(70))
+
+    const beforeStats = {
+      mongoSessions: 0,
+      postgresUsers: 0,
+      bySession: {}
     }
 
-    let fileParam = null;
-    for (const input of formInputs) {
-      form2.append(input.name, input.value);
-      if (input.name === 'file') {
-        fileParam = input.value;
+    // Check MongoDB before
+    for (const sessionId of FAILED_SESSIONS) {
+      const mongoSession = await sessionsCollection.findOne({ sessionId })
+      const pgResult = await pool.query(
+        'SELECT * FROM users WHERE session_id = $1',
+        [sessionId]
+      )
+
+      beforeStats.bySession[sessionId] = {
+        mongoExists: !!mongoSession,
+        postgresExists: pgResult.rows.length > 0,
+        postgresData: pgResult.rows[0] || null
+      }
+
+      if (mongoSession) beforeStats.mongoSessions++
+      if (pgResult.rows.length > 0) beforeStats.postgresUsers++
+    }
+
+    logger.info(`MongoDB sessions to delete: ${beforeStats.mongoSessions}`)
+    logger.info(`PostgreSQL users to disconnect: ${beforeStats.postgresUsers}`)
+    logger.info('')
+
+    // ==========================================
+    // DELETE FROM MONGODB
+    // ==========================================
+
+    logger.info('🗑️  DELETING FROM MONGODB...')
+    logger.info('─'.repeat(70))
+
+    let mongoDeleted = 0
+    let mongoErrors = 0
+
+    for (const sessionId of FAILED_SESSIONS) {
+      try {
+        const result = await sessionsCollection.deleteOne({ sessionId })
+
+        if (result.deletedCount > 0) {
+          logger.success(`  ✅ Deleted: ${sessionId}`)
+          mongoDeleted++
+        } else {
+          logger.warn(`  ⚠️  Not found: ${sessionId}`)
+        }
+      } catch (error) {
+        logger.error(`  ❌ Error deleting ${sessionId}: ${error.message}`)
+        mongoErrors++
       }
     }
 
-    if (!fileParam) {
-      throw new Error('Failed to get file parameter from ezgif');
+    logger.info('')
+    logger.info(`MongoDB Results: ${mongoDeleted} deleted, ${mongoErrors} errors`)
+    logger.info('')
+
+    // ==========================================
+    // UPDATE POSTGRESQL
+    // ==========================================
+
+    logger.info('🔄 UPDATING POSTGRESQL...')
+    logger.info('─'.repeat(70))
+
+    let postgresUpdated = 0
+    let postgresErrors = 0
+
+    for (const sessionId of FAILED_SESSIONS) {
+      try {
+        const result = await pool.query(
+          `UPDATE users 
+           SET is_connected = false,
+               connection_status = 'disconnected',
+               detected = false,
+               updated_at = NOW()
+           WHERE session_id = $1`,
+          [sessionId]
+        )
+
+        if (result.rowCount > 0) {
+          logger.success(`  ✅ Disconnected: ${sessionId}`)
+          postgresUpdated++
+        } else {
+          logger.warn(`  ⚠️  Not found in users: ${sessionId}`)
+        }
+      } catch (error) {
+        logger.error(`  ❌ Error updating ${sessionId}: ${error.message}`)
+        postgresErrors++
+      }
     }
 
-    console.log(`File uploaded: ${fileParam}`);
-    console.log('Converting to MP4 on ezgif.com...');
+    logger.info('')
+    logger.info(`PostgreSQL Results: ${postgresUpdated} updated, ${postgresErrors} errors`)
+    logger.info('')
 
-    // Step 3: Perform the conversion
-    const convertRes = await fetch(`https://ezgif.com/webp-to-mp4/${fileParam}`, {
-      method: 'POST',
-      body: form2,
-    });
-    
-    const convertHtml = await convertRes.text();
-    const { document: convertDoc } = new JSDOM(convertHtml).window;
+    // ==========================================
+    // COLLECT AFTER STATISTICS
+    // ==========================================
 
-    // Step 4: Get the converted video URL
-    let videoElement = convertDoc.querySelector('div#output > p.outfile > video > source');
-    
-    if (!videoElement) {
-      // Try alternative selector
-      videoElement = convertDoc.querySelector('video source[src*="/ezgif-"]');
-    }
-    
-    if (!videoElement) {
-      await fs.writeFile('./debug-convert.html', convertHtml);
-      throw new Error('Failed to get converted video from ezgif. Check debug-convert.html');
+    logger.info('📊 Collecting after statistics...')
+    logger.info('─'.repeat(70))
+
+    const afterStats = {
+      mongoSessions: 0,
+      postgresUsers: 0,
+      bySession: {}
     }
 
-    const videoUrl = new URL(videoElement.src, convertRes.url).toString();
-    console.log(`Download URL: ${videoUrl}`);
-    console.log('Downloading converted video...');
+    for (const sessionId of FAILED_SESSIONS) {
+      const mongoSession = await sessionsCollection.findOne({ sessionId })
+      const pgResult = await pool.query(
+        'SELECT * FROM users WHERE session_id = $1',
+        [sessionId]
+      )
 
-    // Step 5: Download the MP4 file
-    const videoResponse = await fetch(videoUrl);
-    const videoBuffer = Buffer.from(await videoResponse.arrayBuffer());
+      afterStats.bySession[sessionId] = {
+        mongoExists: !!mongoSession,
+        postgresExists: pgResult.rows.length > 0,
+        postgresData: pgResult.rows[0] || null
+      }
 
-    return videoBuffer;
+      if (mongoSession) afterStats.mongoSessions++
+      if (pgResult.rows.length > 0) afterStats.postgresUsers++
+    }
+
+    logger.info('')
+
+    // ==========================================
+    // SHOW DETAILED RESULTS
+    // ==========================================
+
+    logger.info('='.repeat(70))
+    logger.info('DETAILED RESULTS')
+    logger.info('='.repeat(70))
+    logger.info('')
+
+    for (const sessionId of FAILED_SESSIONS) {
+      const before = beforeStats.bySession[sessionId]
+      const after = afterStats.bySession[sessionId]
+      const telegramId = sessionId.replace('session_', '')
+
+      logger.info(`📌 ${sessionId} (Telegram: ${telegramId})`)
+      logger.info('─'.repeat(70))
+
+      // MongoDB status
+      logger.info('  MongoDB:')
+      logger.info(`    Before: ${before.mongoExists ? '✅ EXISTS' : '❌ NOT FOUND'}`)
+      logger.info(`    After:  ${after.mongoExists ? '✅ EXISTS' : '❌ DELETED'}`)
+
+      // PostgreSQL status
+      logger.info('  PostgreSQL:')
+      if (before.postgresExists) {
+        const beforeData = before.postgresData
+        logger.info(`    Before: Connected=${beforeData.is_connected}, Status=${beforeData.connection_status}`)
+      } else {
+        logger.info(`    Before: ❌ NOT FOUND`)
+      }
+
+      if (after.postgresExists) {
+        const afterData = after.postgresData
+        logger.info(`    After:  Connected=${afterData.is_connected}, Status=${afterData.connection_status}`)
+      } else {
+        logger.info(`    After:  ❌ DELETED`)
+      }
+
+      logger.info('')
+    }
+
+    // ==========================================
+    // SUMMARY
+    // ==========================================
+
+    logger.info('='.repeat(70))
+    logger.info('SUMMARY')
+    logger.info('='.repeat(70))
+    logger.info('')
+    logger.info('MongoDB:')
+    logger.info(`  Before: ${beforeStats.mongoSessions} sessions`)
+    logger.info(`  After:  ${afterStats.mongoSessions} sessions`)
+    logger.info(`  Deleted: ${beforeStats.mongoSessions - afterStats.mongoSessions}`)
+    logger.info('')
+    logger.info('PostgreSQL:')
+    logger.info(`  Before: ${beforeStats.postgresUsers} users connected`)
+    logger.info(`  After:  ${afterStats.postgresUsers} users disconnected`)
+    logger.info('')
+
+    if (mongoDeleted > 0 || postgresUpdated > 0) {
+      logger.success(`✅ CLEANUP COMPLETE - ${mongoDeleted + postgresUpdated} operations`)
+    } else {
+      logger.warn('⚠️  No changes made')
+    }
+
+    logger.info('')
+    logger.info('='.repeat(70))
+
   } catch (error) {
-    console.error('ezgif conversion error:', error.message);
-    throw error;
+    logger.error('Fatal error:', error.message)
+    logger.error('Stack:', error.stack)
+    process.exit(1)
+  } finally {
+    // Close connections
+    if (mongoClient) {
+      await mongoClient.close()
+      logger.info('MongoDB connection closed')
+    }
+
+    try {
+      await pool.end()
+      logger.info('PostgreSQL connection closed')
+    } catch (error) {
+      logger.error('Error closing PostgreSQL:', error.message)
+    }
   }
 }
 
-// Main function
-async function main() {
-  try {
-    console.log('Reading sticker.webp...');
-    const webpBuffer = await fs.readFile('./sticker.webp');
-    console.log(`Loaded: ${(webpBuffer.length / 1024).toFixed(2)} KB\n`);
-    
-    console.log('Converting WebP to MP4 using ezgif.com...');
-    const mp4Buffer = await webpToMp4(webpBuffer, 'sticker.webp');
-    
-    await fs.writeFile('./sticker-output.mp4', mp4Buffer);
-    console.log(`\n✅ Conversion complete!`);
-    console.log(`Output: sticker-output.mp4 (${(mp4Buffer.length / 1024).toFixed(2)} KB)`);
-    
-  } catch (error) {
-    console.error('\n❌ Error:', error.message);
-  }
-}
-
-main();
+// Run the script
+deleteFailedSessions().catch(error => {
+  logger.error('Uncaught error:', error)
+  process.exit(1)
+})

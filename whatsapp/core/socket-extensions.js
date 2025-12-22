@@ -900,23 +900,47 @@ export function extendSocket(sock) {
     })
   }
 
-  sock.downloadMedia = async (m) => {
-    try {
-      const buffer = await downloadMediaMessage(
-        m.quoted || m,
-        "buffer",
-        {},
-        {
-          logger: console,
-          reuploadRequest: sock.updateMediaMessage
-        }
-      )
-      return buffer
-    } catch (error) {
-      logger.error("downloadMedia error:", error.message)
-      throw error
+  sock.downloadMedia = async (msg) => {
+  try {
+    // Auto-detect: if msg has quoted and no direct media, use quoted
+    let messageToDownload = msg;
+    
+    // Check if current message has media
+    const hasDirectMedia = msg.message?.imageMessage || 
+                          msg.message?.videoMessage || 
+                          msg.message?.audioMessage ||
+                          msg.message?.documentMessage ||
+                          msg.message?.stickerMessage;
+    
+    // If no direct media but has quoted with media, use quoted
+    if (!hasDirectMedia && msg.quoted?.message) {
+      const hasQuotedMedia = msg.quoted.message?.imageMessage || 
+                            msg.quoted.message?.videoMessage || 
+                            msg.quoted.message?.audioMessage ||
+                            msg.quoted.message?.documentMessage ||
+                            msg.quoted.message?.stickerMessage;
+      
+      if (hasQuotedMedia) {
+        messageToDownload = msg.quoted;
+      }
     }
+    
+    const buffer = await downloadMediaMessage(
+      messageToDownload,
+      "buffer",
+      {},
+      {
+        logger: console,
+        reuploadRequest: sock.updateMediaMessage
+      }
+    );
+    
+    return buffer;
+  } catch (error) {
+    logger.error("downloadMedia error:", error.message);
+    throw error;
   }
+};
 
   // Mark socket as extended
   sock._extended = true
