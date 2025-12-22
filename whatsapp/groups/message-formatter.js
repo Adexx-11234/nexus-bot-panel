@@ -113,6 +113,78 @@ export class MessageFormatter {
   }
 
   /**
+   * Get user's display name (pushName) with fallbacks
+   */
+  async getUserDisplayName(sock, jid) {
+    try {
+      // Try to get pushName (preferred display name)
+      // Method 1: Try to get from contact information
+      const contact = await sock.onWhatsApp(jid)
+      if (contact?.[0]?.exists) {
+        // Method 2: Try to fetch the contact directly (some WhatsApp Web APIs)
+        try {
+          const contactInfo = await sock.fetchStatus(jid)
+          if (contactInfo?.status) {
+            // Some APIs return name with status
+            return contactInfo.name || contactInfo.pushname || contact[0].name || jid.split('@')[0]
+          }
+        } catch (e) {
+          // Fall through
+        }
+        
+        // Return the name from the contact check
+        return contact[0].name || contact[0].pushname || jid.split('@')[0]
+      }
+      
+      // Method 3: Try to get from group metadata if this is a group participant
+      try {
+        const [groupJid, participantId] = jid.includes('@g.us') 
+          ? [jid, undefined] 
+          : await this.getGroupAndParticipantFromJid(sock, jid)
+        
+        if (groupJid && participantId) {
+          const metadata = await sock.groupMetadata(groupJid)
+          const participant = metadata.participants.find(p => p.id === participantId || p.id === jid)
+          if (participant?.notify || participant?.name) {
+            return participant.notify || participant.name || jid.split('@')[0]
+          }
+        }
+      } catch (e) {
+        logger.debug(`Could not get name from group metadata: ${e.message}`)
+      }
+      
+      // Method 4: Check if sock has a contacts store
+      if (sock.contacts && sock.contacts[jid]) {
+        return sock.contacts[jid].name || sock.contacts[jid].notify || jid.split('@')[0]
+      }
+      
+      // Final fallback - use the phone number
+      return jid.split('@')[0]
+      
+    } catch (error) {
+      logger.debug(`Error getting display name for ${jid}:`, error)
+      // Fallback to phone number
+      return jid.split('@')[0]
+    }
+  }
+
+  /**
+   * Helper to extract group and participant from JID if needed
+   */
+  async getGroupAndParticipantFromJid(sock, jid) {
+    // This is a simplified version - you may need to adjust based on your sock implementation
+    // If jid is already a group JID, return it
+    if (jid.includes('@g.us')) {
+      return [jid, undefined]
+    }
+    
+    // For regular user JIDs, you might need to check which groups they're in
+    // This would require iterating through all groups - might be heavy
+    // For now, return null
+    return [null, null]
+  }
+
+  /**
    * Truncate group name to meet API requirements (max 30 chars)
    * Removes emojis and special characters if needed
    */
@@ -159,7 +231,11 @@ export class MessageFormatter {
 
       for (const participantData of participants) {
         try {
-          const { jid, displayName } = participantData
+          const { jid } = participantData
+          
+          // Get the user's display name (pushName)
+          const displayName = await this.getUserDisplayName(sock, jid)
+          logger.debug(`Using display name for ${jid}: ${displayName}`)
           
           // Generate canvas image ONLY for welcome (add action)
           let canvasBuffer = null
