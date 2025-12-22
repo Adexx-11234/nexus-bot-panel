@@ -90,6 +90,29 @@ export class MessageFormatter {
   }
 
   /**
+   * Get group profile picture URL
+   */
+  async getGroupAvatar(sock, groupJid) {
+    try {
+      // Try to get group profile picture buffer
+      const ppUrl = await sock.profilePictureUrl(groupJid, 'image')
+      
+      // Download the image buffer
+      const response = await fetch(ppUrl)
+      const ppBuffer = Buffer.from(await response.arrayBuffer())
+      
+      // Upload to deline and get URL
+      const avatarUrl = await uploadDeline(ppBuffer, 'jpg', 'image/jpeg')
+      logger.debug(`Group profile picture uploaded for ${groupJid}: ${avatarUrl}`)
+      return avatarUrl
+      
+    } catch (error) {
+      logger.debug(`No group profile picture for ${groupJid}`)
+      return null
+    }
+  }
+
+  /**
    * Truncate group name to meet API requirements (max 30 chars)
    * Removes emojis and special characters if needed
    */
@@ -131,6 +154,9 @@ export class MessageFormatter {
       const groupMetadata = await sock.groupMetadata(groupJid)
       const memberCount = groupMetadata.participants.length
 
+      // Get group profile picture (will be null if not available)
+      const groupAvatar = await this.getGroupAvatar(sock, groupJid)
+
       for (const participantData of participants) {
         try {
           const { jid, displayName } = participantData
@@ -139,10 +165,23 @@ export class MessageFormatter {
           let canvasBuffer = null
           if (action === 'add') {
             // Get user avatar URL (uploaded to deline)
-            const avatar = await this.getUserAvatar(sock, jid)
+            const userAvatar = await this.getUserAvatar(sock, jid)
             
-            // Use bot logo as background if available, otherwise use user avatar
-            const background = this.botLogoUrl || avatar
+            // Priority for background: 1. Group Avatar, 2. User Avatar, 3. Bot Logo
+            let background = null
+            if (groupAvatar) {
+              background = groupAvatar
+              logger.debug(`Using group profile picture as background for ${groupJid}`)
+            } else if (userAvatar) {
+              background = userAvatar
+              logger.debug(`Using user profile picture as background for ${jid}`)
+            } else if (this.botLogoUrl) {
+              background = this.botLogoUrl
+              logger.debug(`Using bot logo as fallback background`)
+            } else {
+              logger.warn('No background image available, canvas may fail')
+              background = 'https://api.deline.web.id/default-avatar.jpg'
+            }
 
             // Truncate group name to meet API requirements
             const truncatedGroupName = this.truncateGroupName(groupName)
@@ -151,7 +190,7 @@ export class MessageFormatter {
               displayName,
               truncatedGroupName,
               memberCount,
-              avatar,
+              userAvatar,
               background
             )
             if (canvasResult.success) {
@@ -189,10 +228,10 @@ export class MessageFormatter {
     const currentDate = messageDate.toLocaleDateString("en-US", { day: "2-digit", month: "2-digit", year: "numeric" })
 
     const messages = {
-      add: `╚»˙·٠${this.themeEmoji}●♥ WELCOME ♥●${this.themeEmoji}٠·˙«╝\n\n✨ Welcome to ${groupName}! ✨\n\n👤 ${displayName}\n\n🕐 Joined at: ${currentTime}, ${currentDate}\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
-      remove: `╚»˙·٠${this.themeEmoji}●♥ GOODBYE ♥●${this.themeEmoji}٠·˙«╝\n\n✨ Goodbye ${displayName}! ✨\n\nYou'll be missed from ⚡${groupName}⚡! 🥲\n\n🕐 Left at: ${currentTime}, ${currentDate}\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
-      promote: `╚»˙·٠${this.themeEmoji}●♥ PROMOTION ♥●${this.themeEmoji}٠·˙«╝\n\n👑 Congratulations ${displayName}!\n\nYou have been promoted to admin in ⚡${groupName}⚡! 🎉\n\nPlease use your powers responsibly.\n\n🕐 Promoted at: ${currentTime}, ${currentDate}\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
-      demote: `╚»˙·٠${this.themeEmoji}●♥ DEMOTION ♥●${this.themeEmoji}٠·˙«╝\n\n📉 ${displayName} have been demoted from admin in ⚡${groupName}⚡.\n\nYou can still participate normally.\n\n🕐 Demoted at: ${currentTime}, ${currentDate}\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
+      add: `╚»˙·٠${this.themeEmoji}●♥ WELCOME ♥●${this.themeEmoji}٠·˙«╝\n\n✨ Welcome to ${groupName}! ✨\n\n👤 ${displayName}\n\n🕐 Joined at: ${currentTime}, ${currentDate}\n\n> © 𝕹𝖊𝖑𝖚𝖘 𝕭𝖔𝖙`,
+      remove: `╚»˙·٠${this.themeEmoji}●♥ GOODBYE ♥●${this.themeEmoji}٠·˙«╝\n\n✨ Goodbye ${displayName}! ✨\n\nYou'll be missed from ⚡${groupName}⚡! 🥲\n\n🕐 Left at: ${currentTime}, ${currentDate}\n\n> © 𝕹𝖊𝖑𝖚𝖘 𝕭𝖔𝖙`,
+      promote: `╚»˙·٠${this.themeEmoji}●♥ PROMOTION ♥●${this.themeEmoji}٠·˙«╝\n\n👑 Congratulations ${displayName}!\n\nYou have been promoted to admin in ⚡${groupName}⚡! 🎉\n\nPlease use your powers responsibly.\n\n🕐 Promoted at: ${currentTime}, ${currentDate}\n\n> © 𝕹𝖊𝖑𝖚𝖘 𝕭𝖔𝖙`,
+      demote: `╚»˙·٠${this.themeEmoji}●♥ DEMOTION ♥●${this.themeEmoji}٠·˙«╝\n\n📉 ${displayName} have been demoted from admin in ⚡${groupName}⚡.\n\nYou can still participate normally.\n\n🕐 Demoted at: ${currentTime}, ${currentDate}\n\n> © 𝕹𝖊𝖑𝖚𝖘 𝕭𝖔𝖙`
     }
 
     return messages[action] || `Group ${action} notification for ${displayName} in ⚡${groupName}⚡`
