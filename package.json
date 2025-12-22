@@ -1,0 +1,61 @@
+{
+  "name": "whatsapp-telegram-bot-platform",
+  "version": "1.0.0",
+  "description": "Multi-user WhatsApp-Telegram Bot Platform with plugin system",
+  "main": "index.js",
+  "type": "module",
+  "author": "WhatsApp-Telegram Bot Platform",
+  "license": "MIT",
+  "keywords": [
+    "whatsapp",
+    "telegram",
+    "bot",
+    "baileys",
+    "multi-user"
+  ],
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "migrate": "node database/migrations/run-migrations.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "npm:baileys-york",
+    "axios": "latest",
+    "bcryptjs": "latest",
+    "canvas": "^3.2.0",
+    "chalk": "^4.1.2",
+    "cheerio": "latest",
+    "colors": "^1.4.0",
+    "cookie-parser": "latest",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "file-type": "latest",
+    "form-data": "^4.0.0",
+    "guaranteed_security": "^1.0.0",
+    "jimp": "^0.16.1",
+    "jsdom": "latest",
+    "jsonwebtoken": "latest",
+    "libphonenumber-js": "^1.10.51",
+    "link-preview-js": "latest",
+    "lru-cache": "latest",
+    "moment": "^2.29.4",
+    "moment-timezone": "^0.5.43",
+    "mongodb": "latest",
+    "node-cache": "^5.1.2",
+    "node-cron": "^3.0.3",
+    "node-fetch": "^3.3.2",
+    "node-telegram-bot-api": "^0.66.0",
+    "nodemailer": "latest",
+    "os": "latest",
+    "pg": "^8.11.3",
+    "pino": "^8.16.2",
+    "qrcode-terminal": "^0.12.0",
+    "sharp": "^0.34.5",
+    "undici": "latest"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}

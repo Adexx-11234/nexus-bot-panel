@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Register - WhatsApp Web Manager</title>
+   <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="auth-container">
+    <div class="auth-card">
+      <div class="auth-header">
+        <div class="logo" style="justify-content: center; margin-bottom: 20px;">
+          <div class="logo-icon">
+            <img src="../images/bot-logo.png" alt="Nexus Bot" style="width: 32px; height: 32px; border-radius: 8px; object-fit: cover;">
+          </div>
+          <span>𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙</span>
+        </div>
+        <h1 class="auth-title">Create Account</h1>
+        <p class="auth-subtitle">Register to start managing WhatsApp</p>
+      </div>
+
+      <div id="alert-container"></div>
+
+      <form id="register-form">
+        <div class="form-group">
+          <label for="first-name" class="form-label">First Name (Optional)</label>
+          <input 
+            type="text" 
+            id="first-name" 
+            class="form-input" 
+            placeholder="John"
+            autocomplete="given-name"
+          >
+        </div>
+
+        <div class="form-group">
+          <label for="phone-number" class="form-label">Phone Number</label>
+          <input 
+            type="tel" 
+            id="phone-number" 
+            class="form-input" 
+            placeholder="+1234567890"
+            required
+            autocomplete="tel"
+          >
+          <small style="color: var(--text-secondary); font-size: 0.875rem; margin-top: 4px; display: block;">
+            Include country code (e.g., +1 for US)
+          </small>
+        </div>
+
+        <div class="form-group">
+          <label for="password" class="form-label">Password</label>
+          <input 
+            type="password" 
+            id="password" 
+            class="form-input" 
+            placeholder="Minimum 8 characters"
+            required
+            autocomplete="new-password"
+          >
+        </div>
+
+        <div class="form-group">
+          <label for="confirm-password" class="form-label">Confirm Password</label>
+          <input 
+            type="password" 
+            id="confirm-password" 
+            class="form-input" 
+            placeholder="Re-enter your password"
+            required
+            autocomplete="new-password"
+          >
+        </div>
+
+        <button type="submit" id="register-btn" class="btn btn-primary btn-block btn-lg">
+          Create Account
+        </button>
+      </form>
+
+      <div class="auth-footer">
+        <p>Already have an account? <a href="/login" class="auth-link">Login here</a></p>
+      </div>
+    </div>
+  </div>
+
+  <script src="../js/theme.js"></script>
+  <script src="../js/auth.js"></script>
+</body>
+</html>
