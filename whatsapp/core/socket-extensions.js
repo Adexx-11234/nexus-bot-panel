@@ -39,9 +39,11 @@ async function loadBotLogoThumbnail() {
             position: 'center',
             kernel: sharp.kernel.lanczos3 // Better quality scaling
           })
-          .jpeg({ 
-            quality: 99, // Higher quality
-            chromaSubsampling: '4:4:4' // Better color quality
+          .png({
+            quality: 100, // Max quality
+            compressionLevel: 0, // No compression
+            adaptiveFiltering: false, // Disable adaptive filtering for clarity
+            palette: false
           })
           .toBuffer()
         

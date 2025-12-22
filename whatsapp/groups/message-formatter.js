@@ -4,6 +4,7 @@ import tools from '../../lib/tools/index.js'
 import { uploadDeline } from '../../lib/tools/index.js'
 import path from 'path'
 import fs from 'fs'
+import sharp from 'sharp'
 
 const logger = createComponentLogger('MESSAGE_FORMATTER')
 
@@ -11,6 +12,56 @@ export class MessageFormatter {
   constructor() {
     this.metadataManager = getGroupMetadataManager()
     this.themeEmoji = "🌟"
+    this.botLogoUrl = null
+    this.initializeBotLogo()
+  }
+
+  /**
+   * Initialize bot logo by uploading to deline
+   */
+  async initializeBotLogo() {
+    try {
+      const possiblePaths = [
+        path.resolve(process.cwd(), "Defaults", "images", "menu.png"),
+        path.resolve(process.cwd(), "defaults", "images", "menu.png"),
+        path.resolve(process.cwd(), "assets", "images", "menu.png"),
+        path.resolve(process.cwd(), "Defaults", "images", "logo.png"),
+        path.resolve(process.cwd(), "assets", "logo.png")
+      ]
+
+      for (const filePath of possiblePaths) {
+        if (fs.existsSync(filePath)) {
+          try {
+            logger.debug(`Loading bot logo from: ${filePath}`)
+            
+            // Read the image and enhance to maximum quality with sharp
+            let logoBuffer = fs.readFileSync(filePath)
+            
+            // Use sharp to convert to highest quality PNG (lossless)
+            // PNG is better than JPEG for preserving quality
+            logoBuffer = await sharp(logoBuffer)
+              .png({ 
+                quality: 100,
+                compressionLevel: 0, // No compression for maximum quality
+                adaptiveFiltering: false,
+                palette: false
+              })
+              .toBuffer()
+            
+            // Upload to deline
+            this.botLogoUrl = await uploadDeline(logoBuffer, 'png', 'image/png')
+            logger.info(`✅ Bot logo uploaded successfully: ${this.botLogoUrl}`)
+            return
+          } catch (uploadError) {
+            logger.error(`Failed to upload bot logo from ${filePath}:`, uploadError)
+          }
+        }
+      }
+      
+      logger.warn('No local bot logo found, will use user avatars as fallback')
+    } catch (error) {
+      logger.error('Error initializing bot logo:', error)
+    }
   }
 
   /**
@@ -31,35 +82,50 @@ export class MessageFormatter {
       return avatarUrl
       
     } catch (error) {
-      logger.debug(`No profile picture for ${jid}, using default`)
+      logger.debug(`No profile picture for ${jid}, using fallback`)
       
-      // Try to find default image from possible paths
-      const possiblePaths = [
-        path.resolve(process.cwd(), "Defaults", "images", "menu.png"),
-        path.resolve(process.cwd(), "defaults", "images", "menu.png"),
-        path.resolve(process.cwd(), "assets", "images", "menu.png"),
-        path.resolve(process.cwd(), "Defaults", "images", "logo.png"),
-        path.resolve(process.cwd(), "assets", "logo.png")
-      ]
-      
-      // Find first existing file
-      for (const filePath of possiblePaths) {
-        if (fs.existsSync(filePath)) {
-          try {
-            const defaultBuffer = fs.readFileSync(filePath)
-            const defaultUrl = await uploadDeline(defaultBuffer, 'png', 'image/png')
-            logger.debug(`Default avatar uploaded: ${defaultUrl}`)
-            return defaultUrl
-          } catch (uploadError) {
-            logger.error(`Failed to upload default avatar from ${filePath}:`, uploadError)
-          }
-        }
+      // Use bot logo as fallback if available
+      if (this.botLogoUrl) {
+        logger.debug(`Using bot logo as fallback avatar`)
+        return this.botLogoUrl
       }
       
       // Final fallback - use API default
       logger.warn('No local default image found, using API default')
       return 'https://api.deline.web.id/default-avatar.jpg'
     }
+  }
+
+  /**
+   * Truncate group name to meet API requirements (max 30 chars)
+   * Removes emojis and special characters if needed
+   */
+  truncateGroupName(groupName) {
+    if (!groupName) return 'Group'
+    
+    // First, try to keep the name as is if it's under 30 chars
+    if (groupName.length <= 30) {
+      return groupName
+    }
+    
+    // Remove emojis and special unicode characters
+    let cleanName = groupName.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '')
+    
+    // Remove extra spaces
+    cleanName = cleanName.replace(/\s+/g, ' ').trim()
+    
+    // If still too long, truncate and add ellipsis
+    if (cleanName.length > 30) {
+      cleanName = cleanName.substring(0, 27) + '...'
+    }
+    
+    // If empty after cleaning, use generic name
+    if (!cleanName || cleanName.length === 0) {
+      cleanName = 'Group Chat'
+    }
+    
+    logger.debug(`Group name truncated: "${groupName}" -> "${cleanName}"`)
+    return cleanName
   }
 
   async formatParticipants(sock, groupJid, participants, action) {
@@ -82,18 +148,23 @@ export class MessageFormatter {
             // Get user avatar URL (uploaded to deline)
             const avatar = await this.getUserAvatar(sock, jid)
             
-            // Use user's profile picture as background too
-            const background = avatar
+            // Use bot logo as background if available, otherwise use user avatar
+            const background = this.botLogoUrl || avatar
+
+            // Truncate group name to meet API requirements
+            const truncatedGroupName = this.truncateGroupName(groupName)
 
             const canvasResult = await tools.welcomeCanvas(
               displayName,
-              groupName,
+              truncatedGroupName,
               memberCount,
               avatar,
               background
             )
             if (canvasResult.success) {
               canvasBuffer = canvasResult.data.buffer
+            } else {
+              logger.error(`Canvas generation failed: ${canvasResult.error}`)
             }
           }
           
