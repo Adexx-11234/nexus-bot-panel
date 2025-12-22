@@ -34,18 +34,11 @@ export class MessageFormatter {
           try {
             logger.debug(`Loading bot logo from: ${filePath}`)
             
-            // Read the image and enhance to maximum quality with sharp
+            // Read the image and convert to buffer with sharp
             let logoBuffer = fs.readFileSync(filePath)
-            
-            // Use sharp to convert to highest quality PNG (lossless)
-            // PNG is better than JPEG for preserving quality
+
+            // Convert to buffer format (no quality enhancement)
             logoBuffer = await sharp(logoBuffer)
-              .png({ 
-                quality: 100,
-                compressionLevel: 0, // No compression for maximum quality
-                adaptiveFiltering: false,
-                palette: false
-              })
               .toBuffer()
             
             // Upload to deline
