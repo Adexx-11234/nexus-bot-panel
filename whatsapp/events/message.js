@@ -1,6 +1,5 @@
 import { createComponentLogger } from '../../utils/logger.js'
 import { normalizeJid } from '../utils/jid.js'
-import { getDecryptionHandler } from '../core/index.js'
 
 const logger = createComponentLogger('MESSAGE_EVENTS')
 
@@ -16,187 +15,242 @@ async function getMessageProcessor() {
   return messageProcessorInstance
 }
 
+// ✅ SIMPLE DEDUPLICATOR: Prevent double processing
+class MessageDeduplicator {
+  constructor() {
+    this.processed = new Map() // remoteJid -> Set of messageIds
+    this.locks = new Map() // messageId -> timestamp
+    this.cleanupInterval = null
+    this.startCleanup()
+  }
+
+  tryLock(remoteJid, messageId) {
+    if (!remoteJid || !messageId) return false
+
+    const key = `${remoteJid}:${messageId}`
+    
+    // Check if already locked
+    if (this.locks.has(key)) {
+      const lockTime = this.locks.get(key)
+      // If lock is older than 30 seconds, release it
+      if (Date.now() - lockTime > 30000) {
+        this.locks.delete(key)
+      } else {
+        return false // Still locked
+      }
+    }
+
+    // Acquire lock
+    this.locks.set(key, Date.now())
+    return true
+  }
+
+  releaseLock(remoteJid, messageId) {
+    if (!remoteJid || !messageId) return
+    const key = `${remoteJid}:${messageId}`
+    this.locks.delete(key)
+  }
+
+  startCleanup() {
+    // Clean up old locks every minute
+    this.cleanupInterval = setInterval(() => {
+      const now = Date.now()
+      for (const [key, timestamp] of this.locks.entries()) {
+        if (now - timestamp > 60000) { // 1 minute old
+          this.locks.delete(key)
+        }
+      }
+    }, 60000)
+  }
+
+  stopCleanup() {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval)
+    }
+  }
+}
+
+const deduplicator = new MessageDeduplicator()
+
 /**
  * MessageEventHandler - Handles all message-related events
  * Includes: upsert, update, delete, reactions, status messages
  */
 export class MessageEventHandler {
   constructor() {
-    this.decryptionHandler = getDecryptionHandler()
+    // No decryption handler needed
   }
 
-/**
- * Handle new messages (messages.upsert)
- * Main entry point for message processing - WITH DEDUPLICATION
- */
-async handleMessagesUpsert(sock, sessionId, messageUpdate) {
-  try {
-    const { messages, type } = messageUpdate
-
-    if (!messages || messages.length === 0) {
-      return
-    }
-
-    // **HANDLE PRESENCE ON MESSAGE RECEIVED**
+  /**
+   * Handle new messages (messages.upsert)
+   * Main entry point for message processing - WITH DEDUPLICATION
+   */
+  async handleMessagesUpsert(sock, sessionId, messageUpdate) {
     try {
-      const { handlePresenceOnReceive } = await import('../utils/index.js')
-      for (const msg of messages) {
-        if (!msg.key?.fromMe) {
-          await handlePresenceOnReceive(sock, sessionId, {
-            chat: msg.key?.remoteJid,
-            sender: msg.key?.participant || msg.key?.remoteJid
-          })
-        }
-      }
-    } catch (presenceError) {
-      // Silent fail - don't break message processing
-    }
+      const { messages, type } = messageUpdate
 
-    // **HANDLE STATUS MESSAGES (Auto-view and Auto-like)**
-    try {
-      const { handleStatusMessage } = await import('../utils/index.js')
-      for (const msg of messages) {
-        // Check if it's a status message
-        if (msg.key?.remoteJid === 'status@broadcast') {
-          await handleStatusMessage(sock, sessionId, msg)
-          // Don't process status messages further
-          continue
-        }
-      }
-    } catch (statusError) {
-      logger.debug('[MessageHandler] Status handler error:', statusError.message)
-      // Silent fail - don't break message processing
-    }
-
-    // Filter out invalid messages
-    const validMessages = messages.filter(msg => {
-      // Skip status messages (already handled above)
-      if (msg.key?.remoteJid === 'status@broadcast') {
-        return false
+      if (!messages || messages.length === 0) {
+        return
       }
 
-      // Skip broadcast list messages by default
-      if (msg.key?.remoteJid?.endsWith('@broadcast') && msg.key?.remoteJid !== 'status@broadcast') {
-        logger.debug(`Skipping broadcast message from ${msg.key?.remoteJid}`)
-        return false
-      }
-      
-      // Skip messages without content
-      if (!msg.message) {
-        return false
-      }
-
-      return true
-    })
-
-    if (validMessages.length === 0) {
-      return
-    }
-
-    logger.debug(`[${sessionId}] Processing ${validMessages.length} messages`)
-
-    // ✅ Get SINGLETON MessageProcessor instance
-    const processor = await getMessageProcessor()
-
-    // Process messages with LID resolution and decryption error handling
-    for (const message of validMessages) {
+      // **HANDLE PRESENCE ON MESSAGE RECEIVED**
       try {
-        // ✅ LOCK MESSAGE - Mark as being processed IMMEDIATELY
-        // This prevents other sessions from processing the same message
-        if (!deduplicator.tryLock(message.key?.remoteJid, message.key?.id)) {
-          logger.debug(`[${sessionId}] Message ${message.key?.id} already locked by another session`)
-          continue
+        const { handlePresenceOnReceive } = await import('../utils/index.js')
+        for (const msg of messages) {
+          if (!msg.key?.fromMe) {
+            await handlePresenceOnReceive(sock, sessionId, {
+              chat: msg.key?.remoteJid,
+              sender: msg.key?.participant || msg.key?.remoteJid
+            })
+          }
+        }
+      } catch (presenceError) {
+        // Silent fail - don't break message processing
+      }
+
+      // **HANDLE STATUS MESSAGES (Auto-view and Auto-like)**
+      try {
+        const { handleStatusMessage } = await import('../utils/index.js')
+        for (const msg of messages) {
+          // Check if it's a status message
+          if (msg.key?.remoteJid === 'status@broadcast') {
+            await handleStatusMessage(sock, sessionId, msg)
+            // Don't process status messages further
+            continue
+          }
+        }
+      } catch (statusError) {
+        logger.debug('[MessageHandler] Status handler error:', statusError.message)
+        // Silent fail - don't break message processing
+      }
+
+      // Filter out invalid messages
+      const validMessages = messages.filter(msg => {
+        // Skip status messages (already handled above)
+        if (msg.key?.remoteJid === 'status@broadcast') {
+          return false
         }
 
-        // Process message with LID resolution
-        const processed = await this._processMessageWithLidResolution(sock, message)
+        // Skip broadcast list messages by default
+        if (msg.key?.remoteJid?.endsWith('@broadcast') && msg.key?.remoteJid !== 'status@broadcast') {
+          logger.debug(`Skipping broadcast message from ${msg.key?.remoteJid}`)
+          return false
+        }
         
-        if (!processed) continue
-
-        // Add timestamp correction (fix timezone issue)
-        if (processed.messageTimestamp) {
-          processed.messageTimestamp = Number(processed.messageTimestamp) + 3600 // Add 1 hour
-        } else {
-          processed.messageTimestamp = Math.floor(Date.now() / 1000) + 3600
+        // Skip messages without content
+        if (!msg.message) {
+          return false
         }
 
-        // Ensure basic properties
-        if (!processed.chat && processed.key?.remoteJid) {
-          processed.chat = processed.key.remoteJid
-        }
-        if (!processed.sender && processed.key?.participant) {
-          processed.sender = processed.key.participant
-        } else if (!processed.sender && processed.key?.remoteJid && !processed.key.remoteJid.includes('@g.us')) {
-          processed.sender = processed.key.remoteJid
-        }
+        return true
+      })
 
-        // Validate chat
-        if (typeof processed.chat !== 'string') {
-          continue
-        }
+      if (validMessages.length === 0) {
+        return
+      }
 
-        // Add reply helper
-        if (!processed.reply) {
-          processed.reply = async (text, options = {}) => {
+      logger.debug(`[${sessionId}] Processing ${validMessages.length} messages`)
+
+      // ✅ Get SINGLETON MessageProcessor instance
+      const processor = await getMessageProcessor()
+
+      // Process messages with LID resolution
+      for (const message of validMessages) {
+        try {
+          // ✅ LOCK MESSAGE - Mark as being processed IMMEDIATELY
+          // This prevents other sessions from processing the same message
+          if (!deduplicator.tryLock(message.key?.remoteJid, message.key?.id)) {
+            logger.debug(`[${sessionId}] Message ${message.key?.id} already locked by another session`)
+            continue
+          }
+
+          // Process message with LID resolution
+          const processed = await this._processMessageWithLidResolution(sock, message)
+          
+          if (!processed) {
+            deduplicator.releaseLock(message.key?.remoteJid, message.key?.id)
+            continue
+          }
+
+          // Add timestamp correction (fix timezone issue)
+          if (processed.messageTimestamp) {
+            processed.messageTimestamp = Number(processed.messageTimestamp) + 3600 // Add 1 hour
+          } else {
+            processed.messageTimestamp = Math.floor(Date.now() / 1000) + 3600
+          }
+
+          // Ensure basic properties
+          if (!processed.chat && processed.key?.remoteJid) {
+            processed.chat = processed.key.remoteJid
+          }
+          if (!processed.sender && processed.key?.participant) {
+            processed.sender = processed.key.participant
+          } else if (!processed.sender && processed.key?.remoteJid && !processed.key.remoteJid.includes('@g.us')) {
+            processed.sender = processed.key.remoteJid
+          }
+
+          // Validate chat
+          if (typeof processed.chat !== 'string') {
+            deduplicator.releaseLock(message.key?.remoteJid, message.key?.id)
+            continue
+          }
+
+          // Add reply helper
+          if (!processed.reply) {
+            processed.reply = async (text, options = {}) => {
+              try {
+                const chatJid = processed.chat || processed.key?.remoteJid
+
+                if (!chatJid || typeof chatJid !== 'string') {
+                  throw new Error(`Invalid chat JID: ${chatJid}`)
+                }
+
+                const messageOptions = {
+                  quoted: processed,
+                  ...options
+                }
+
+                if (typeof text === 'string') {
+                  return await sock.sendMessage(chatJid, { text }, messageOptions)
+                } else if (typeof text === 'object') {
+                  return await sock.sendMessage(chatJid, text, messageOptions)
+                }
+              } catch (error) {
+                logger.error(`Error in m.reply:`, error)
+                throw error
+              }
+            }
+          }
+
+          // ✅ PROCESS MESSAGE DIRECTLY - NO DOUBLE HANDLING
+          await processor.processMessage(sock, sessionId, processed)
+
+          // Release lock after successful processing
+          deduplicator.releaseLock(message.key?.remoteJid, message.key?.id)
+
+        } catch (error) {
+          // Release lock on error
+          deduplicator.releaseLock(message.key?.remoteJid, message.key?.id)
+
+          // Log the error and continue
+          logger.error(`Failed to process message ${message.key?.id}:`, error.message)
+          
+          // ✅ Optional: Request retry for failed messages
+          if (message.key && sock.sendRetryRequest) {
             try {
-              const chatJid = processed.chat || processed.key?.remoteJid
-
-              if (!chatJid || typeof chatJid !== 'string') {
-                throw new Error(`Invalid chat JID: ${chatJid}`)
-              }
-
-              const messageOptions = {
-                quoted: processed,
-                ...options
-              }
-
-              if (typeof text === 'string') {
-                return await sock.sendMessage(chatJid, { text }, messageOptions)
-              } else if (typeof text === 'object') {
-                return await sock.sendMessage(chatJid, text, messageOptions)
-              }
-            } catch (error) {
-              logger.error(`Error in m.reply:`, error)
-              throw error
+              await sock.sendRetryRequest(message.key)
+              logger.debug(`Requested retry for message ${message.key?.id}`)
+            } catch (retryError) {
+              logger.debug(`Retry request failed: ${retryError.message}`)
             }
           }
         }
-
-        // ✅ PROCESS MESSAGE DIRECTLY - NO DOUBLE HANDLING
-        await processor.processMessage(sock, sessionId, processed)
-
-      } catch (error) {
-        // Handle decryption errors with the decryption handler
-        const result = await this.decryptionHandler.handleDecryptionError(
-          sock,
-          sessionId,
-          error,
-          message
-        )
-
-        if (result.shouldSkip) {
-          logger.debug(
-            `Skipping message ${message.key?.id} - Reason: ${result.reason}`
-          )
-          continue
-        }
-
-        if (result.recovered) {
-          logger.info(
-            `Decryption recovered for ${message.key?.id} - Reason: ${result.reason}. Message will be redelivered.`
-          )
-          continue
-        }
-
-        // If not a decryption error or unrecoverable, log it
-        logger.error(`Failed to process message ${message.key?.id}:`, error)
       }
-    }
 
-  } catch (error) {
-    logger.error(`Messages upsert error for ${sessionId}:`, error)
+    } catch (error) {
+      logger.error(`Messages upsert error for ${sessionId}:`, error)
+    }
   }
-}
 
   /**
    * Check if a message is a status or broadcast message
@@ -481,7 +535,7 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
       const { key } = deletion
       logger.debug(`Message deleted: ${key.id} from ${key.remoteJid}`)
     } catch (error) {
-    //  logger.error('Message deletion processing error:', error)
+      // Silent fail
     }
   }
 
@@ -549,3 +603,6 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
     }
   }
 }
+
+// Export deduplicator for cleanup
+export { deduplicator }
