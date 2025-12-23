@@ -52,10 +52,12 @@ export default {
       // Rank emojis
       const rankEmojis = ["👑", "🥈", "🥉"]
 
+      // Prepare mentions array
+      const mentions = []
+
       for (let i = 0; i < activeMembers.length; i++) {
         const member = activeMembers[i]
         const userNumber = member.user_jid.split("@")[0]
-        const userName = member.user_name || `User ${userNumber.slice(-4)}`
         
         // Crown for top 3
         const rankEmoji = i < 3 ? rankEmojis[i] : `${i + 1}️⃣`
@@ -63,7 +65,7 @@ export default {
         // Last seen time
         const lastSeen = this.getRelativeTime(member.last_seen)
         
-        message += `${rankEmoji} *${userName}*\n`
+        message += `${rankEmoji} @${userNumber}\n`
         message += `   📨 ${member.messages} messages`
         
         if (member.media > 0) {
@@ -71,6 +73,9 @@ export default {
         }
         
         message += `\n   ⏱️ Last seen: ${lastSeen}\n\n`
+        
+        // Add to mentions
+        mentions.push(member.user_jid)
       }
 
       message += `━━━━━━━━━━━━━━━━━━━━━━\n`
@@ -79,7 +84,8 @@ export default {
       message += `> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
 
       await sock.sendMessage(m.chat, {
-        text: message
+        text: message,
+        mentions: mentions
       }, { quoted: m })
 
     } catch (error) {

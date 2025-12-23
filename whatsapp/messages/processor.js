@@ -315,7 +315,6 @@ export class MessageProcessor {
         ActivityQueries.updateUserActivity(
           m.chat,
           m.sender,
-          m.pushName || null,
           hasMedia
         ).catch((err) => {
           logger.debug(`Activity tracking failed for ${m.sender}:`, err.message)

@@ -2494,11 +2494,11 @@ export const UserQueries = {
 
 export const ActivityQueries = {
   
-  /**
-   * Update user activity when they send a message
-   * This is called from processor.js
-   */
-  async updateUserActivity(groupJid, userJid, userName, hasMedia = false) {
+/**
+ * Update user activity when they send a message
+ * This is called from processor.js
+ */
+async updateUserActivity(groupJid, userJid, hasMedia = false) {
   if (!checkCircuitBreaker()) {
     logger.debug(`Circuit open, skipping activity update`)
     return
@@ -2512,9 +2512,8 @@ export const ActivityQueries = {
          jsonb_build_object(
            $2::text, 
            jsonb_build_object(
-             'name', $3::text,
              'messages', 1,
-             'media', $4::int,
+             'media', $3::int,
              'last_seen', CURRENT_TIMESTAMP
            )
          ),
@@ -2527,31 +2526,26 @@ export const ActivityQueries = {
            WHEN group_activity.activity_data ? $2::text THEN
              jsonb_set(
                jsonb_set(
-                 jsonb_set(
-                   group_activity.activity_data,
-                   ARRAY[$2::text, 'messages'],
-                   to_jsonb((group_activity.activity_data->$2::text->>'messages')::int + 1)
-                 ),
-                 ARRAY[$2::text, 'media'],
-                 to_jsonb((group_activity.activity_data->$2::text->>'media')::int + $4::int)
+                 group_activity.activity_data,
+                 ARRAY[$2::text, 'messages'],
+                 to_jsonb((group_activity.activity_data->$2::text->>'messages')::int + 1)
                ),
-               ARRAY[$2::text, 'last_seen'],
-               to_jsonb(CURRENT_TIMESTAMP)
+               ARRAY[$2::text, 'media'],
+               to_jsonb((group_activity.activity_data->$2::text->>'media')::int + $3::int)
              )
            ELSE
              group_activity.activity_data || jsonb_build_object(
                $2::text,
                jsonb_build_object(
-                 'name', $3::text,
                  'messages', 1,
-                 'media', $4::int,
+                 'media', $3::int,
                  'last_seen', CURRENT_TIMESTAMP
                )
              )
          END,
          last_message_at = CURRENT_TIMESTAMP,
          updated_at = CURRENT_TIMESTAMP`,
-      [groupJid, userJid, userName, hasMedia ? 1 : 0]
+      [groupJid, userJid, hasMedia ? 1 : 0]
     )
   } catch (error) {
     if (!error.message?.includes('timeout')) {
@@ -2624,47 +2618,46 @@ export const ActivityQueries = {
     }
   },
 
-  /**
-   * Get inactive members (in group but never sent message OR sent message but not recently)
-   * This gets current group members and compares with tracked activity
-   */
-  async getInactiveMembers(sock, groupJid) {
-    try {
-      // Get current group members from WhatsApp
-      const metadata = await sock.groupMetadata(groupJid).catch(() => null)
-      
-      if (!metadata || !metadata.participants) {
-        return []
-      }
-
-      // Get tracked activity from database
-      const groupData = await this.getGroupActivity(groupJid)
-      const activityData = groupData?.activity_data || {}
-
-      const inactiveMembers = []
-
-      // Check each group member
-      for (const participant of metadata.participants) {
-        const userJid = participant.id
-        const userData = activityData[userJid]
-
-        // Inactive if: not in database OR in database with 0 recent messages
-        if (!userData || userData.messages === 0) {
-          inactiveMembers.push({
-            user_jid: userJid,
-            user_name: userData?.name || participant.notify || 'Unknown',
-            messages: userData?.messages || 0,
-            last_seen: userData?.last_seen || null
-          })
-        }
-      }
-
-      return inactiveMembers
-    } catch (error) {
-      logger.error(`Error getting inactive members: ${error.message}`)
+/**
+ * Get inactive members (in group but never sent message OR sent message but not recently)
+ * This gets current group members and compares with tracked activity
+ */
+async getInactiveMembers(sock, groupJid) {
+  try {
+    // Get current group members from WhatsApp
+    const metadata = await sock.groupMetadata(groupJid).catch(() => null)
+    
+    if (!metadata || !metadata.participants) {
       return []
     }
-  },
+
+    // Get tracked activity from database
+    const groupData = await this.getGroupActivity(groupJid)
+    const activityData = groupData?.activity_data || {}
+
+    const inactiveMembers = []
+
+    // Check each group member
+    for (const participant of metadata.participants) {
+      const userJid = participant.id
+      const userData = activityData[userJid]
+
+      // Inactive if: not in database OR in database with 0 recent messages
+      if (!userData || userData.messages === 0) {
+        inactiveMembers.push({
+          user_jid: userJid,
+          messages: userData?.messages || 0,
+          last_seen: userData?.last_seen || null
+        })
+      }
+    }
+
+    return inactiveMembers
+  } catch (error) {
+    logger.error(`Error getting inactive members: ${error.message}`)
+    return []
+  }
+},
 
   /**
    * Reset activity counters (called weekly/monthly to "reset" the tracking period)

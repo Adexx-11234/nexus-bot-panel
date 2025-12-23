@@ -53,16 +53,21 @@ export default {
       const displayLimit = 30
       const displayMembers = inactiveMembers.slice(0, displayLimit)
 
+      // Prepare mentions array
+      const mentions = []
+
       for (let i = 0; i < displayMembers.length; i++) {
         const member = displayMembers[i]
         const userNumber = member.user_jid.split("@")[0]
-        const userName = member.user_name || `User ${userNumber.slice(-4)}`
         
         const lastSeen = this.getRelativeTime(member.last_seen)
         
-        message += `${i + 1}️⃣ *${userName}*\n`
+        message += `${i + 1}️⃣ @${userNumber}\n`
         message += `   📨 ${member.messages} messages\n`
         message += `   ⏱️ Last seen: ${lastSeen}\n\n`
+        
+        // Add to mentions
+        mentions.push(member.user_jid)
       }
 
       if (inactiveMembers.length > displayLimit) {
@@ -75,7 +80,8 @@ export default {
       message += `> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
 
       await sock.sendMessage(m.chat, {
-        text: message
+        text: message,
+        mentions: mentions
       }, { quoted: m })
 
     } catch (error) {

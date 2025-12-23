@@ -538,8 +538,10 @@ COMMENT ON TABLE messages IS 'Messages table with auto-cleanup - keeps newest 50
 COMMENT ON TABLE spam_tracking IS 'Real-time link spam message tracking - only tracks messages with links - auto-cleanup after 2 hours';
 COMMENT ON COLUMN spam_tracking.links IS 'Extracted links from the spam message (JSONB array)';
 
-COMMENT ON TABLE group_activity IS 'Stores ALL user activity per group in single JSON field';
-COMMENT ON COLUMN group_activity.activity_data IS 'JSON object: { "userJid": { "name": "...", "messages": 45, "media": 8, "last_seen": "..." } }';
+COMMENT ON TABLE group_activity IS 'Stores ALL user activity per group in single JSON field (v2 - without names)';
+COMMENT ON COLUMN group_activity.activity_data IS 'JSON object: { "userJid": { "messages": 45, "media": 8, "last_seen": "2024-12-23T10:30:00Z" } }';
+COMMENT ON COLUMN group_activity.group_jid IS 'WhatsApp group JID (unique identifier)';
+COMMENT ON COLUMN group_activity.last_message_at IS 'Timestamp of last message in this group';
 -- ============================================
 -- VERIFICATION
 -- ============================================

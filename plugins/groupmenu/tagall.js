@@ -54,12 +54,13 @@ export default {
       tagMessage += `😶 Tagger: @${senderNumber}\n`
       tagMessage += `🌿 Message: ${customMessage}\n\n`
       
-      // Add all participants
-      participants.forEach((participant) => {
+      // Add all participants in a list format
+      participants.forEach((participant, index) => {
         const phoneNumber = participant.id.split('@')[0]
-        tagMessage += `🎯 @${phoneNumber}`
+        tagMessage += `${index + 1}. @${phoneNumber}\n`
       })
 
+      tagMessage += `\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
       
       // Prepare mentions array
       const mentions = participants.map(participant => participant.id)
