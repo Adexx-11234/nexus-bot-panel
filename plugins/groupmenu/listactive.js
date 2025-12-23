@@ -6,7 +6,7 @@ const logger = createComponentLogger("LISTACTIVE")
 
 export default {
   name: "listactive",
-  aliases: ["activeusers", "activemembers", "la"],
+  aliases: ["activeusers", "activemembers", "la", "listactive", "active"],
   category: "groupmenu",
   description: "Show active group members",
   usage: "listactive",

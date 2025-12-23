@@ -6,7 +6,7 @@ const logger = createComponentLogger("LISTINACTIVE")
 
 export default {
   name: "listinactive",
-  aliases: ["inactiveusers", "inactivemembers", "li"],
+  aliases: ["inactiveusers", "inactivemembers", "li", "inactive"],
   category: "groupmenu",
   description: "Show inactive group members",
   usage: "listinactive",
