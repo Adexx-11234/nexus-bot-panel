@@ -1,4 +1,4 @@
-import { pool } from '../../database/connection.js'
+import { pool } from '../../config/database.js'
 import { createComponentLogger } from '../../utils/logger.js'
 
 const logger = createComponentLogger('AUTH_MIDDLEWARE')

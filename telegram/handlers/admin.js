@@ -5,7 +5,7 @@
 
 import { createComponentLogger } from '../../utils/logger.js'
 import { TelegramKeyboards, TelegramMessages } from '../ui/index.js'
-import { pool } from '../../database/connection.js'
+import { pool } from '../../config/database.js'
 
 const logger = createComponentLogger('ADMIN_HANDLER')
 
