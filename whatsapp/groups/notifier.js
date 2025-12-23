@@ -140,58 +140,69 @@ export class GroupNotifier {
   }
 
   /**
-   * Send enhanced message with fake quoted context and mentions
-   * ✅ FIXED: Only send canvas for large groups (900+ members)
+   * Send enhanced message with mentions
+   * ✅ FIXED: Removed contextInfo to avoid triggering groupMetadata calls
    * @private
    */
   async _sendEnhancedMessage(sock, groupJid, messageData) {
     try {
-      const { message, fakeQuotedMessage, participant, canvasImage, shouldUseCanvas } = messageData
+      const { message, participant, canvasImage, shouldUseCanvas } = messageData
 
       if (!message || !participant) {
         logger.error('Missing required fields:', { hasMessage: !!message, hasParticipant: !!participant })
         throw new Error('Invalid message data')
       }
 
-      if (!fakeQuotedMessage || !fakeQuotedMessage.message || !fakeQuotedMessage.key) {
-        logger.error('Invalid fakeQuotedMessage structure')
-        throw new Error('Invalid fakeQuotedMessage structure')
-      }
-
-      const contextInfo = {
-        mentionedJid: [participant],
-        quotedMessage: fakeQuotedMessage.message,
-        participant: fakeQuotedMessage.participant || participant,
-        remoteJid: groupJid,
-        stanzaId: fakeQuotedMessage.key.id,
-        quotedMessageId: fakeQuotedMessage.key.id,
-        quotedParticipant: fakeQuotedMessage.key.participant || participant
-      }
-
-      // ✅ FIXED: Check shouldUseCanvas flag instead of just canvasImage existence
+      // ✅ FIXED: Send simple message with mentions only (no contextInfo)
+      // This prevents Baileys from calling groupMetadata internally
+      
       if (shouldUseCanvas && canvasImage) {
         logger.info(`Sending canvas image for large group (900+ members)`)
-        const messageOptions = {
+        
+        // Send image with caption and mention
+        await sock.sendMessage(groupJid, {
           image: canvasImage,
           caption: message,
-          contextInfo: contextInfo
-        }
-        await sock.sendMessage(groupJid, messageOptions)
+          mentions: [participant] // ✅ Simple mentions array - no contextInfo
+        })
       } else {
         // For small groups or other actions (goodbye, promote, demote) - send text only
         logger.debug(`Sending text-only message (small group or non-welcome action)`)
-        const messageOptions = {
+        
+        await sock.sendMessage(groupJid, {
           text: message,
-          contextInfo: contextInfo
-        }
-        await sock.sendMessage(groupJid, messageOptions)
+          mentions: [participant] // ✅ Simple mentions array - no contextInfo
+        })
       }
 
       logger.info(`Enhanced message sent for ${participant}`)
 
     } catch (error) {
       logger.error('Error sending enhanced message:', error)
-      throw error
+      
+      // ✅ Fallback: Try sending without mentions if rate-limited
+      if (error.message?.includes('rate-overlimit')) {
+        logger.warn('Rate limited, retrying without mentions...')
+        
+        try {
+          if (messageData.shouldUseCanvas && messageData.canvasImage) {
+            await sock.sendMessage(groupJid, {
+              image: messageData.canvasImage,
+              caption: messageData.message
+            })
+          } else {
+            await sock.sendMessage(groupJid, {
+              text: messageData.message
+            })
+          }
+          logger.info('Fallback message sent successfully')
+        } catch (fallbackError) {
+          logger.error('Fallback message also failed:', fallbackError)
+          throw fallbackError
+        }
+      } else {
+        throw error
+      }
     }
   }
 

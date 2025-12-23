@@ -451,14 +451,9 @@ sock.sendMessage = async (jid, content, options = {}) => {
         fakeQuoted.message.conversation += `\n\n*Replied to ${pushName}*`
       }
       
-      // Add mention of the user being replied to
-      // ✅ FIXED: Only add mention if not already present
-      const existingMentions = options.mentions || []
-      if (!existingMentions.includes(senderJid)) {
-        options.mentions = [...existingMentions, senderJid]
-      }
-      
-      logger.debug(`[SendMessage] Enhanced group reply with mention for ${pushName}`)
+      // ✅ IMPORTANT: Don't add mentions here - let caller handle it
+      // This prevents double mentions and metadata calls
+      logger.debug(`[SendMessage] Enhanced group reply for ${pushName}`)
     }
     
     // Replace original quoted with our fake quoted
@@ -469,7 +464,18 @@ sock.sendMessage = async (jid, content, options = {}) => {
     options.quoted = PRESETS.default
   }
   
-  // ✅ REMOVED: No metadata fetching or caching operations here
+  // ✅ CRITICAL FIX: Convert mentions array to proper format if exists
+  // This prevents Baileys from calling groupMetadata internally
+  if (options.mentions && Array.isArray(options.mentions) && options.mentions.length > 0) {
+    // Keep mentions but ensure they're in the right format
+    options.mentions = options.mentions.map(m => {
+      if (typeof m === 'string') {
+        return m.includes('@') ? m : `${m}@s.whatsapp.net`
+      }
+      return m
+    })
+    logger.debug(`[SendMessage] Added ${options.mentions.length} mentions`)
+  }
   
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -501,13 +507,37 @@ sock.sendMessage = async (jid, content, options = {}) => {
     } catch (error) {
       lastError = error
       
+      // ✅ SPECIAL HANDLING: If rate-limited and has mentions, retry without mentions
+      if (error.message?.includes('rate-overlimit') && options.mentions) {
+        logger.warn(`[SendMessage] Rate limited with mentions, retrying without mentions for ${jid}`)
+        
+        // Remove mentions and retry immediately
+        delete options.mentions
+        
+        try {
+          const result = await originalSendMessage(jid, content, options)
+          
+          if (sock.sessionId) {
+            const { updateSessionLastMessage } = await import('../core/config.js')
+            updateSessionLastMessage(sock.sessionId)
+          }
+          
+          logger.info(`[SendMessage] Successfully sent without mentions after rate limit`)
+          return result
+        } catch (fallbackError) {
+          logger.error(`[SendMessage] Fallback without mentions also failed: ${fallbackError.message}`)
+          lastError = fallbackError
+          // Continue to normal error handling below
+        }
+      }
+      
       // Don't retry on specific errors
       const noRetryErrors = [
         'forbidden',
         'not-authorized',
         'invalid-jid',
         'recipient-not-found',
-        'rate-overlimit' // ✅ ADDED: Don't retry on rate limit
+        'rate-overlimit' // ✅ Don't retry rate limits (already tried fallback above)
       ]
       
       const shouldNotRetry = noRetryErrors.some(err => 
