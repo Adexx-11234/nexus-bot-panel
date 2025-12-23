@@ -18,6 +18,7 @@ export class MessageFormatter {
 
   /**
    * Initialize bot logo by uploading to deline
+   * Only called once during initialization
    */
   async initializeBotLogo() {
     try {
@@ -38,8 +39,7 @@ export class MessageFormatter {
             let logoBuffer = fs.readFileSync(filePath)
 
             // Convert to buffer format (no quality enhancement)
-            logoBuffer = await sharp(logoBuffer)
-              .toBuffer()
+            logoBuffer = await sharp(logoBuffer).toBuffer()
             
             // Upload to deline
             this.botLogoUrl = await uploadDeline(logoBuffer, 'png', 'image/png')
@@ -51,7 +51,7 @@ export class MessageFormatter {
         }
       }
       
-      logger.warn('No local bot logo found, will use user avatars as fallback')
+      logger.warn('No local bot logo found, will use simple text fallback')
     } catch (error) {
       logger.error('Error initializing bot logo:', error)
     }
@@ -59,6 +59,7 @@ export class MessageFormatter {
 
   /**
    * Get user profile picture URL
+   * ONLY called for groups with 900+ members
    */
   async getUserAvatar(sock, jid) {
     try {
@@ -91,6 +92,7 @@ export class MessageFormatter {
 
   /**
    * Get group profile picture URL
+   * ONLY called for groups with 900+ members
    */
   async getGroupAvatar(sock, groupJid) {
     try {
@@ -136,24 +138,7 @@ export class MessageFormatter {
         return contact[0].name || contact[0].pushname || jid.split('@')[0]
       }
       
-      // Method 3: Try to get from group metadata if this is a group participant
-      try {
-        const [groupJid, participantId] = jid.includes('@g.us') 
-          ? [jid, undefined] 
-          : await this.getGroupAndParticipantFromJid(sock, jid)
-        
-        if (groupJid && participantId) {
-          const metadata = await sock.groupMetadata(groupJid)
-          const participant = metadata.participants.find(p => p.id === participantId || p.id === jid)
-          if (participant?.notify || participant?.name) {
-            return participant.notify || participant.name || jid.split('@')[0]
-          }
-        }
-      } catch (e) {
-        logger.debug(`Could not get name from group metadata: ${e.message}`)
-      }
-      
-      // Method 4: Check if sock has a contacts store
+      // Method 3: Check if sock has a contacts store
       if (sock.contacts && sock.contacts[jid]) {
         return sock.contacts[jid].name || sock.contacts[jid].notify || jid.split('@')[0]
       }
@@ -166,22 +151,6 @@ export class MessageFormatter {
       // Fallback to phone number
       return jid.split('@')[0]
     }
-  }
-
-  /**
-   * Helper to extract group and participant from JID if needed
-   */
-  async getGroupAndParticipantFromJid(sock, jid) {
-    // This is a simplified version - you may need to adjust based on your sock implementation
-    // If jid is already a group JID, return it
-    if (jid.includes('@g.us')) {
-      return [jid, undefined]
-    }
-    
-    // For regular user JIDs, you might need to check which groups they're in
-    // This would require iterating through all groups - might be heavy
-    // For now, return null
-    return [null, null]
   }
 
   /**
@@ -216,18 +185,49 @@ export class MessageFormatter {
     return cleanName
   }
 
+  /**
+   * Format participants with canvas only for large groups (900+ members)
+   */
   async formatParticipants(sock, groupJid, participants, action) {
     try {
       const formattedMessages = []
       const groupName = await this.metadataManager.getGroupName(sock, groupJid)
       const timestamp = Math.floor(Date.now() / 1000) + 3600
       
-      // Get group member count
-      const groupMetadata = await sock.groupMetadata(groupJid)
-      const memberCount = groupMetadata.participants.length
+      // ✅ Get group member count WITHOUT calling groupMetadata (use cached data)
+      let memberCount = 0
+      let shouldUseCanvas = false
+      
+      try {
+        // Try to get from cache first
+        const { getGroupCache } = await import('../core/config.js')
+        const cachedMetadata = getGroupCache(groupJid)
+        
+        if (cachedMetadata && cachedMetadata.participants) {
+          memberCount = cachedMetadata.participants.length
+          logger.debug(`Got member count from cache: ${memberCount}`)
+        } else {
+          // Only fetch if not in cache
+          const groupMetadata = await sock.groupMetadata(groupJid)
+          memberCount = groupMetadata.participants.length
+          logger.debug(`Got member count from fetch: ${memberCount}`)
+        }
+        
+        // Only use canvas for groups with 900+ members AND action is 'add'
+        shouldUseCanvas = action === 'add' && memberCount >= 900
+        
+      } catch (error) {
+        logger.warn(`Could not get member count: ${error.message}, using simple messages`)
+        shouldUseCanvas = false
+      }
 
-      // Get group profile picture (will be null if not available)
-      const groupAvatar = await this.getGroupAvatar(sock, groupJid)
+      logger.info(`Group ${groupJid} has ${memberCount} members. Canvas mode: ${shouldUseCanvas}`)
+
+      // ✅ Only get group avatar if canvas is needed
+      let groupAvatar = null
+      if (shouldUseCanvas) {
+        groupAvatar = await this.getGroupAvatar(sock, groupJid)
+      }
 
       for (const participantData of participants) {
         try {
@@ -237,9 +237,9 @@ export class MessageFormatter {
           const displayName = await this.getUserDisplayName(sock, jid)
           logger.debug(`Using display name for ${jid}: ${displayName}`)
           
-          // Generate canvas image ONLY for welcome (add action)
+          // ✅ Generate canvas image ONLY for welcome (add action) in large groups (900+)
           let canvasBuffer = null
-          if (action === 'add') {
+          if (shouldUseCanvas) {
             // Get user avatar URL (uploaded to deline)
             const userAvatar = await this.getUserAvatar(sock, jid)
             
@@ -271,6 +271,7 @@ export class MessageFormatter {
             )
             if (canvasResult.success) {
               canvasBuffer = canvasResult.data.buffer
+              logger.info(`✅ Canvas generated for ${displayName} in large group`)
             } else {
               logger.error(`Canvas generation failed: ${canvasResult.error}`)
             }
@@ -284,7 +285,8 @@ export class MessageFormatter {
             message: message,
             fakeQuotedMessage: fakeQuotedMessage,
             displayName: displayName,
-            canvasImage: canvasBuffer // Only for welcome
+            canvasImage: canvasBuffer, // Only populated for large groups
+            shouldUseCanvas: shouldUseCanvas // Flag to indicate if canvas should be used
           })
         } catch (error) {
           logger.error(`Failed to format participant:`, error)
@@ -304,10 +306,10 @@ export class MessageFormatter {
     const currentDate = messageDate.toLocaleDateString("en-US", { day: "2-digit", month: "2-digit", year: "numeric" })
 
     const messages = {
-      add: `╚»˙·٠${this.themeEmoji}●♥ WELCOME ♥●${this.themeEmoji}٠·˙«╝\n\n✨ Welcome to ${groupName}! ✨\n\n👤 ${displayName}\n\n🕐 Joined at: ${currentTime}, ${currentDate}\n\n> © 𝕹𝖊𝖑𝖚𝖘 𝕭𝖔𝖙`,
-      remove: `╚»˙·٠${this.themeEmoji}●♥ GOODBYE ♥●${this.themeEmoji}٠·˙«╝\n\n✨ Goodbye ${displayName}! ✨\n\nYou'll be missed from ⚡${groupName}⚡! 🥲\n\n🕐 Left at: ${currentTime}, ${currentDate}\n\n> © 𝕹𝖊𝖑𝖚𝖘 𝕭𝖔𝖙`,
-      promote: `╚»˙·٠${this.themeEmoji}●♥ PROMOTION ♥●${this.themeEmoji}٠·˙«╝\n\n👑 Congratulations ${displayName}!\n\nYou have been promoted to admin in ⚡${groupName}⚡! 🎉\n\nPlease use your powers responsibly.\n\n🕐 Promoted at: ${currentTime}, ${currentDate}\n\n> © 𝕹𝖊𝖑𝖚𝖘 𝕭𝖔𝖙`,
-      demote: `╚»˙·٠${this.themeEmoji}●♥ DEMOTION ♥●${this.themeEmoji}٠·˙«╝\n\n📉 ${displayName} have been demoted from admin in ⚡${groupName}⚡.\n\nYou can still participate normally.\n\n🕐 Demoted at: ${currentTime}, ${currentDate}\n\n> © 𝕹𝖊𝖑𝖚𝖘 𝕭𝖔𝖙`
+      add: `╚»˙·٠${this.themeEmoji}●♥ WELCOME ♥●${this.themeEmoji}٠·˙«╝\n\n✨ Welcome to ${groupName}! ✨\n\n👤 ${displayName}\n\n🕐 Joined at: ${currentTime}, ${currentDate}\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+      remove: `╚»˙·٠${this.themeEmoji}●♥ GOODBYE ♥●${this.themeEmoji}٠·˙«╝\n\n✨ Goodbye ${displayName}! ✨\n\nYou'll be missed from ⚡${groupName}⚡! 🥲\n\n🕐 Left at: ${currentTime}, ${currentDate}\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+      promote: `╚»˙·٠${this.themeEmoji}●♥ PROMOTION ♥●${this.themeEmoji}٠·˙«╝\n\n👑 Congratulations ${displayName}!\n\nYou have been promoted to admin in ⚡${groupName}⚡! 🎉\n\nPlease use your powers responsibly.\n\n🕐 Promoted at: ${currentTime}, ${currentDate}\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+      demote: `╚»˙·٠${this.themeEmoji}●♥ DEMOTION ♥●${this.themeEmoji}٠·˙«╝\n\n📉 ${displayName} have been demoted from admin in ⚡${groupName}⚡.\n\nYou can still participate normally.\n\n🕐 Demoted at: ${currentTime}, ${currentDate}\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
     }
 
     return messages[action] || `Group ${action} notification for ${displayName} in ⚡${groupName}⚡`

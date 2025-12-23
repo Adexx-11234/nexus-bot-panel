@@ -414,123 +414,128 @@ export function extendSocket(sock) {
 
   logger.debug("Extending socket with dynamic fake quoted system")
 
-  // ==================== SEND MESSAGE OVERRIDE ====================
-  const originalSendMessage = sock.sendMessage.bind(sock)
+// ==================== SEND MESSAGE OVERRIDE ====================
+const originalSendMessage = sock.sendMessage.bind(sock)
+
+sock.sendMessage = async (jid, content, options = {}) => {
+  const maxRetries = 2
+  let lastError = null
   
-  sock.sendMessage = async (jid, content, options = {}) => {
-    const maxRetries = 2
-    let lastError = null
+  // ========== DYNAMIC FAKE QUOTED MANAGEMENT ==========
+  const isGroup = jid.endsWith('@g.us')
+  let originalQuoted = options.quoted
+  
+  // Determine which fake quoted to use
+  const PRESETS = getFakeQuotedPresets()
+  let fakeQuoted = PRESETS.default
+  
+  if (originalQuoted) {
+    // Get context-aware fake quoted
+    fakeQuoted = getFakeQuotedForContext(originalQuoted, options)
     
-    // ========== DYNAMIC FAKE QUOTED MANAGEMENT ==========
-    const isGroup = jid.endsWith('@g.us')
-    let originalQuoted = options.quoted
+    logger.debug(`[SendMessage] Using fake quoted type: ${originalQuoted.pluginCategory || 'default'}`)
     
-    // Determine which fake quoted to use
-    const PRESETS = getFakeQuotedPresets()
-    let fakeQuoted = PRESETS.default
-    
-    if (originalQuoted) {
-      // Get context-aware fake quoted
-      fakeQuoted = getFakeQuotedForContext(originalQuoted, options)
+    // ✅ FIXED: Only add mention if we already have participant info
+    // DO NOT fetch group metadata here to avoid rate limits
+    if (isGroup && originalQuoted.key?.participant) {
+      const senderJid = originalQuoted.key.participant
+      const pushName = originalQuoted.pushName || originalQuoted.verifiedBizName || 'User'
       
-      logger.debug(`[SendMessage] Using fake quoted type: ${originalQuoted.pluginCategory || 'default'}`)
+      // Clone the fake quoted and enhance it for group replies
+      fakeQuoted = JSON.parse(JSON.stringify(fakeQuoted)) // Deep clone
       
-      // If it's a group and we have the original quoted message, enhance with mention
-      if (isGroup && originalQuoted.key?.participant) {
-        const senderJid = originalQuoted.key.participant
-        const pushName = originalQuoted.pushName || originalQuoted.verifiedBizName || 'User'
-        
-        // Clone the fake quoted and enhance it for group replies
-        fakeQuoted = JSON.parse(JSON.stringify(fakeQuoted)) // Deep clone
-        
-        // Update the caption/conversation to show reply info
-        if (fakeQuoted.message.imageMessage) {
-          fakeQuoted.message.imageMessage.caption += `\n\n*Replied to ${pushName}*`
-        } else if (fakeQuoted.message.conversation) {
-          fakeQuoted.message.conversation += `\n\n*Replied to ${pushName}*`
-        }
-        
-        // Add mention of the user being replied to
-        const existingMentions = options.mentions || []
-        if (!existingMentions.includes(senderJid)) {
-          options.mentions = [...existingMentions, senderJid]
-        }
-        
-        logger.debug(`[SendMessage] Enhanced group reply with mention for ${pushName}`)
+      // Update the caption/conversation to show reply info
+      if (fakeQuoted.message.imageMessage) {
+        fakeQuoted.message.imageMessage.caption += `\n\n*Replied to ${pushName}*`
+      } else if (fakeQuoted.message.conversation) {
+        fakeQuoted.message.conversation += `\n\n*Replied to ${pushName}*`
       }
       
-      // Replace original quoted with our fake quoted
-      options.quoted = fakeQuoted
-    } else {
-      // No quoted provided, add default fake quoted
-      logger.debug(`[SendMessage] Adding default fake quoted to message for ${jid}`)
-      options.quoted = PRESETS.default
+      // Add mention of the user being replied to
+      // ✅ FIXED: Only add mention if not already present
+      const existingMentions = options.mentions || []
+      if (!existingMentions.includes(senderJid)) {
+        options.mentions = [...existingMentions, senderJid]
+      }
+      
+      logger.debug(`[SendMessage] Enhanced group reply with mention for ${pushName}`)
     }
     
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      try {
-        // Disable ephemeral messages by default
-        if (!options.ephemeralExpiration) {
-          options.ephemeralExpiration = 0
-        }
-        
-        // Create send promise
-        const sendPromise = originalSendMessage(jid, content, options)
-        
-        // Create timeout promise (40 seconds)
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('sendMessage timeout after 40s')), 40000)
-        )
-        
-        // Race between send and timeout
-        const result = await Promise.race([sendPromise, timeoutPromise])
-        
-        // Update session activity on success
-        if (sock.sessionId) {
-          const { updateSessionLastMessage } = await import('../core/config.js')
-          updateSessionLastMessage(sock.sessionId)
-        }
-        
-        logger.debug(`[SendMessage] Message sent successfully to ${jid}`)
-        return result
-        
-      } catch (error) {
-        lastError = error
-        
-        // Don't retry on specific errors
-        const noRetryErrors = [
-          'forbidden',
-          'not-authorized',
-          'invalid-jid',
-          'recipient-not-found'
-        ]
-        
-        const shouldNotRetry = noRetryErrors.some(err => 
-          error.message?.toLowerCase().includes(err)
-        )
-        
-        if (shouldNotRetry) {
-          logger.error(`[SendMessage] Non-retryable error sending to ${jid}: ${error.message}`)
-          throw error
-        }
-        
-        // Retry on timeout or temporary errors
-        if (attempt < maxRetries) {
-          const delay = (attempt + 1) * 1000 // 1s, 2s
-          logger.warn(`[SendMessage] Send failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms: ${error.message}`)
-          await sleep(delay)
-          continue
-        }
-        
-        // All retries exhausted
-        logger.error(`[SendMessage] Failed to send message to ${jid} after ${maxRetries + 1} attempts: ${error.message}`)
+    // Replace original quoted with our fake quoted
+    options.quoted = fakeQuoted
+  } else {
+    // No quoted provided, add default fake quoted
+    logger.debug(`[SendMessage] Adding default fake quoted to message for ${jid}`)
+    options.quoted = PRESETS.default
+  }
+  
+  // ✅ REMOVED: No metadata fetching or caching operations here
+  
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      // Disable ephemeral messages by default
+      if (!options.ephemeralExpiration) {
+        options.ephemeralExpiration = 0
+      }
+      
+      // Create send promise
+      const sendPromise = originalSendMessage(jid, content, options)
+      
+      // Create timeout promise (40 seconds)
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('sendMessage timeout after 40s')), 40000)
+      )
+      
+      // Race between send and timeout
+      const result = await Promise.race([sendPromise, timeoutPromise])
+      
+      // Update session activity on success
+      if (sock.sessionId) {
+        const { updateSessionLastMessage } = await import('../core/config.js')
+        updateSessionLastMessage(sock.sessionId)
+      }
+      
+      logger.debug(`[SendMessage] Message sent successfully to ${jid}`)
+      return result
+      
+    } catch (error) {
+      lastError = error
+      
+      // Don't retry on specific errors
+      const noRetryErrors = [
+        'forbidden',
+        'not-authorized',
+        'invalid-jid',
+        'recipient-not-found',
+        'rate-overlimit' // ✅ ADDED: Don't retry on rate limit
+      ]
+      
+      const shouldNotRetry = noRetryErrors.some(err => 
+        error.message?.toLowerCase().includes(err)
+      )
+      
+      if (shouldNotRetry) {
+        logger.error(`[SendMessage] Non-retryable error sending to ${jid}: ${error.message}`)
         throw error
       }
+      
+      // Retry on timeout or temporary errors
+      if (attempt < maxRetries) {
+        const delay = (attempt + 1) * 1000 // 1s, 2s
+        logger.warn(`[SendMessage] Send failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms: ${error.message}`)
+        await sleep(delay)
+        continue
+      }
+      
+      // All retries exhausted
+      logger.error(`[SendMessage] Failed to send message to ${jid} after ${maxRetries + 1} attempts: ${error.message}`)
+      throw error
     }
-    
-    // Should never reach here, but just in case
-    throw lastError || new Error('Unknown error in sendMessage')
   }
+  
+  // Should never reach here, but just in case
+  throw lastError || new Error('Unknown error in sendMessage')
+}
 
   // ==================== GROUP METADATA OVERRIDE ====================
   const originalGroupMetadata = sock.groupMetadata?.bind(sock)

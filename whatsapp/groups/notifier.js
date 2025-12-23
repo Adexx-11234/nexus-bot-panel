@@ -141,56 +141,59 @@ export class GroupNotifier {
 
   /**
    * Send enhanced message with fake quoted context and mentions
+   * ✅ FIXED: Only send canvas for large groups (900+ members)
    * @private
    */
-async _sendEnhancedMessage(sock, groupJid, messageData) {
-  try {
-    const { message, fakeQuotedMessage, participant, canvasImage } = messageData
+  async _sendEnhancedMessage(sock, groupJid, messageData) {
+    try {
+      const { message, fakeQuotedMessage, participant, canvasImage, shouldUseCanvas } = messageData
 
-    if (!message || !participant) {
-      logger.error('Missing required fields:', { hasMessage: !!message, hasParticipant: !!participant })
-      throw new Error('Invalid message data')
-    }
-
-    if (!fakeQuotedMessage || !fakeQuotedMessage.message || !fakeQuotedMessage.key) {
-      logger.error('Invalid fakeQuotedMessage structure')
-      throw new Error('Invalid fakeQuotedMessage structure')
-    }
-
-    const contextInfo = {
-      mentionedJid: [participant],
-      quotedMessage: fakeQuotedMessage.message,
-      participant: fakeQuotedMessage.participant || participant,
-      remoteJid: groupJid,
-      stanzaId: fakeQuotedMessage.key.id,
-      quotedMessageId: fakeQuotedMessage.key.id,
-      quotedParticipant: fakeQuotedMessage.key.participant || participant
-    }
-
-    // If canvas image exists (only for welcome), send image with caption
-    if (canvasImage) {
-      const messageOptions = {
-        image: canvasImage,
-        caption: message,
-        contextInfo: contextInfo
+      if (!message || !participant) {
+        logger.error('Missing required fields:', { hasMessage: !!message, hasParticipant: !!participant })
+        throw new Error('Invalid message data')
       }
-      await sock.sendMessage(groupJid, messageOptions)
-    } else {
-      // For other actions (goodbye, promote, demote) - send text only
-      const messageOptions = {
-        text: message,
-        contextInfo: contextInfo
+
+      if (!fakeQuotedMessage || !fakeQuotedMessage.message || !fakeQuotedMessage.key) {
+        logger.error('Invalid fakeQuotedMessage structure')
+        throw new Error('Invalid fakeQuotedMessage structure')
       }
-      await sock.sendMessage(groupJid, messageOptions)
+
+      const contextInfo = {
+        mentionedJid: [participant],
+        quotedMessage: fakeQuotedMessage.message,
+        participant: fakeQuotedMessage.participant || participant,
+        remoteJid: groupJid,
+        stanzaId: fakeQuotedMessage.key.id,
+        quotedMessageId: fakeQuotedMessage.key.id,
+        quotedParticipant: fakeQuotedMessage.key.participant || participant
+      }
+
+      // ✅ FIXED: Check shouldUseCanvas flag instead of just canvasImage existence
+      if (shouldUseCanvas && canvasImage) {
+        logger.info(`Sending canvas image for large group (900+ members)`)
+        const messageOptions = {
+          image: canvasImage,
+          caption: message,
+          contextInfo: contextInfo
+        }
+        await sock.sendMessage(groupJid, messageOptions)
+      } else {
+        // For small groups or other actions (goodbye, promote, demote) - send text only
+        logger.debug(`Sending text-only message (small group or non-welcome action)`)
+        const messageOptions = {
+          text: message,
+          contextInfo: contextInfo
+        }
+        await sock.sendMessage(groupJid, messageOptions)
+      }
+
+      logger.info(`Enhanced message sent for ${participant}`)
+
+    } catch (error) {
+      logger.error('Error sending enhanced message:', error)
+      throw error
     }
-
-    logger.info(`Enhanced message sent for ${participant}`)
-
-  } catch (error) {
-    logger.error('Error sending enhanced message:', error)
-    throw error
   }
-}
 
   /**
    * Send simple text message (fallback)

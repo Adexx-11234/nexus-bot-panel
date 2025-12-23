@@ -37,10 +37,6 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
       return
     }
 
-    // ✅ Import deduplicator
-    const { getMessageDeduplicator } = await import('../utils/index.js')
-    const deduplicator = getMessageDeduplicator()
-
     // **HANDLE PRESENCE ON MESSAGE RECEIVED**
     try {
       const { handlePresenceOnReceive } = await import('../utils/index.js')
@@ -74,12 +70,6 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
 
     // Filter out invalid messages
     const validMessages = messages.filter(msg => {
-      // ✅ DEDUPLICATION CHECK - Skip if already processed by ANY session
-      if (deduplicator.isDuplicate(msg.key?.remoteJid, msg.key?.id)) {
-        logger.debug(`[${sessionId}] Skipping duplicate message ${msg.key?.id}`)
-        return false
-      }
-
       // Skip status messages (already handled above)
       if (msg.key?.remoteJid === 'status@broadcast') {
         return false

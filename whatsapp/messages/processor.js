@@ -697,95 +697,26 @@ let result
    * @private
    */
   async _handleCommand(sock, sessionId, m) {
-  const command = m.command.name
+    const command = m.command.name
 
-  try {
-    if (!this.pluginLoader) {
-      throw new Error("Plugin loader not initialized")
-    }
-
-    const plugin = this.pluginLoader.findCommand(command)
-    
-    // Check if current user's session is in self mode
-    // If so, only allow if they are the bot owner
-    const modeSettings = await this._getUserMode(m.sessionContext.telegram_id)
-    const isSelfMode = modeSettings.mode === 'self'
-    
-    // If this session is in self mode and user is not owner, silently ignore
-    if (isSelfMode && !m.isCreator) {
-      return { processed: true, ignored: true, silent: true }
-    }
-
-    const needsDeduplication = plugin && (plugin.category === 'groupmenu' || plugin.category === 'gamemenu')
-    
-    if (needsDeduplication) {
-      const messageKey = this.pluginLoader.deduplicator.generateKey(m.chat, m.key?.id)
-      if (messageKey) {
-        const primaryCommand = plugin.commands?.[0] || m.command.name
-        const actionKey = `command-${primaryCommand}`
-        
-        if (!this.pluginLoader.deduplicator.tryLockForProcessing(messageKey, sessionId, actionKey)) {
-          logger.debug(`Command ${m.command.name} already being processed by another session`)
-          return { processed: false, silent: true, duplicate: true }
-        }
-      }
-    }
-    
-    let result
     try {
-      result = await this.pluginLoader.executeCommand(sock, sessionId, command, m.command.args, m)
-    } catch (commandError) {
-      logger.error(`Command execution failed: ${m.command.name}`, commandError)
-      
-      if (needsDeduplication) {
-        const messageKey = this.pluginLoader.deduplicator.generateKey(m.chat, m.key?.id)
-        if (messageKey) {
-          const primaryCommand = plugin.commands?.[0] || m.command.name
-          const actionKey = `command-${primaryCommand}`
-          
-          const entry = this.pluginLoader.deduplicator.processedMessages.get(messageKey)
-          if (entry && entry.lockedBy === sessionId) {
-            entry.lockedBy = null
-          }
-        }
+      if (!this.pluginLoader) {
+        throw new Error("Plugin loader not initialized")
       }
-      
-      return { processed: false, error: commandError.message }
-    }
-    
-    // Send the command response
-    if (result?.success) {
-      await this._sendCommandResponse(sock, m, result.result || result)
-    }
-    
-    if (needsDeduplication && result?.commandExecuted && !result?.error) {
-      const messageKey = this.pluginLoader.deduplicator.generateKey(m.chat, m.key?.id)
-      if (messageKey) {
-        const primaryCommand = plugin.commands?.[0] || m.command.name
-        const actionKey = `command-${primaryCommand}`
-        this.pluginLoader.deduplicator.markAsProcessed(messageKey, sessionId, actionKey)
+
+      const exec = await this.pluginLoader.executeCommand(sock, sessionId, command, m.command.args, m)
+
+      if (exec?.ignore) {
+        return { processed: true, ignored: true }
+      } else if (exec?.success) {
+        await this._sendCommandResponse(sock, m, exec.result || exec)
       }
+    } catch (error) {
+      logger.error(`Error executing command ${command}:`, error)
     }
-    
+
     return { processed: true, commandExecuted: true }
-  } catch (error) {
-    logger.error(`Error executing command ${command}:`, error)
   }
-
-  return { processed: true, commandExecuted: true }
-}
-
-// Add helper method to MessageProcessor
-async _getUserMode(telegramId) {
-  try {
-    const { UserQueries } = await import("../../database/query.js")
-    const modeSettings = await UserQueries.getBotMode(telegramId)
-    return modeSettings || { mode: 'public' }
-  } catch (error) {
-    logger.error("Error getting user mode:", error)
-    return { mode: 'public' }
-  }
-}
 
   /**
    * Send command response
