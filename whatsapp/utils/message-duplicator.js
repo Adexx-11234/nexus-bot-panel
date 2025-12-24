@@ -3,12 +3,12 @@ import { createComponentLogger } from '../../utils/logger.js'
 const logger = createComponentLogger('MESSAGE_DEDUP')
 
 /**
- * MessageDeduplicator - Prevents duplicate message processing across ALL sessions
- * Uses a time-based cache to track recently processed messages globally
+ * MessageDeduplicator - Prevents duplicate message processing per session
+ * Tracks which session processed which message
  */
 export class MessageDeduplicator {
   constructor(options = {}) {
-    this.cache = new Map() // messageId -> timestamp
+    this.cache = new Map() // messageId -> Set of sessionIds that processed it
     this.ttl = options.ttl || 60000 // 60 seconds default
     this.maxSize = options.maxSize || 1000
     
@@ -17,67 +17,78 @@ export class MessageDeduplicator {
   }
 
   /**
-   * Generate unique key for message (GLOBAL - no sessionId)
+   * Generate unique key for message (no sessionId)
    */
   generateKey(remoteJid, messageId) {
     if (!remoteJid || !messageId) return null
-    
-    // GLOBAL key - same across all sessions
     return `${remoteJid}:${messageId}`
   }
 
   /**
-   * Check if message was already processed by ANY session
-   * @returns {boolean} true if duplicate, false if new
+   * Check if message was already processed by THIS specific session
+   * @returns {boolean} true if THIS session already processed it
    */
-  isDuplicate(remoteJid, messageId) {
+  isDuplicate(remoteJid, messageId, sessionId) {
     const key = this.generateKey(remoteJid, messageId)
-    if (!key) return false
+    if (!key || !sessionId) return false
 
-    const timestamp = this.cache.get(key)
+    const entry = this.cache.get(key)
     
-    if (!timestamp) {
+    if (!entry) {
       return false // Not seen before
     }
 
     // Check if still within TTL
-    const age = Date.now() - timestamp
+    const age = Date.now() - entry.timestamp
     if (age > this.ttl) {
       this.cache.delete(key)
       return false // Expired, treat as new
     }
 
-    return true // Duplicate within TTL
+    // Check if THIS session already processed it
+    return entry.sessions.has(sessionId)
   }
 
   /**
-   * Mark message as processed GLOBALLY
+   * Mark message as processed by THIS session
    */
-  markAsProcessed(remoteJid, messageId) {
+  markAsProcessed(remoteJid, messageId, sessionId) {
     const key = this.generateKey(remoteJid, messageId)
-    if (!key) return false
+    if (!key || !sessionId) return false
 
     // Prevent cache from growing too large
     if (this.cache.size >= this.maxSize) {
       this.cleanup()
     }
 
-    this.cache.set(key, Date.now())
+    const existing = this.cache.get(key)
+    
+    if (existing) {
+      // Add this session to the set
+      existing.sessions.add(sessionId)
+    } else {
+      // Create new entry
+      this.cache.set(key, {
+        timestamp: Date.now(),
+        sessions: new Set([sessionId])
+      })
+    }
+
     return true
   }
 
   /**
-   * Try to lock message for processing
-   * Returns true if locked successfully, false if already locked
-   * This is ATOMIC - first session to call this wins
+   * Try to lock message for processing by THIS session
+   * Returns true if THIS session hasn't processed it yet
+   * Multiple sessions CAN process the same message
    */
-  tryLock(remoteJid, messageId) {
-    if (this.isDuplicate(remoteJid, messageId)) {
-      return false // Already processing or processed
+  tryLock(remoteJid, messageId, sessionId) {
+    if (this.isDuplicate(remoteJid, messageId, sessionId)) {
+      return false // THIS session already processed it
     }
 
-    this.markAsProcessed(remoteJid, messageId)
-    return true // Locked successfully
+    this.markAsProcessed(remoteJid, messageId, sessionId)
+    return true // Locked for this session
   }
 
   /**
@@ -87,8 +98,8 @@ export class MessageDeduplicator {
     const now = Date.now()
     let cleaned = 0
 
-    for (const [key, timestamp] of this.cache.entries()) {
-      if (now - timestamp > this.ttl) {
+    for (const [key, entry] of this.cache.entries()) {
+      if (now - entry.timestamp > this.ttl) {
         this.cache.delete(key)
         cleaned++
       }
