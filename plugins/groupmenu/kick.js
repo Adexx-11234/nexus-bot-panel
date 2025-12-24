@@ -1,6 +1,6 @@
 export default {
   name: "kick",
-  aliases: ["dor", "remove"],
+  aliases: ["dor"],
   category: "groupmenu",
   description: "Remove a member from the group",
   usage: "kick <number> or reply to user",
