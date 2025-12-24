@@ -70,12 +70,8 @@ export default {
       logger.info(`[Approve-All] Processing ${userJids.length} join requests in ${groupJid}`)
 
       // Send initial processing message
-      const processingMsg = await sock.sendMessage(groupJid, {
-        text: `⏳ Processing ${userJids.length} join request(s)...\nPlease wait...
-
-` + `
-
-> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
+      await sock.sendMessage(groupJid, {
+        text: `⏳ Processing ${userJids.length} join request(s)...\nPlease wait...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
       }, { quoted: m })
 
       // Initialize counters
@@ -99,7 +95,7 @@ export default {
           
           // Add delay to prevent rate limiting
           if (i < userJids.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 1000))
+            await new Promise(resolve => setTimeout(resolve, 600))
           }
           
         } catch (error) {
@@ -145,18 +141,19 @@ export default {
         resultText += `• Expired requests\n`
         resultText += `• User canceled request\n`
         resultText += `• Network/API issues\n\n`
-        resultText += `Try running the command again for remaining requests.`
+        resultText += `Try running the command again for remaining requests.\n\n`
       }
+
+      resultText += `> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
 
       // Extract mentions for tagging users
       const mentions = [...approvedUsers, ...failedUsers].map(user => user.jid)
 
-      // Update the processing message with results
+      // Send results as a new message (not edited)
       await sock.sendMessage(groupJid, {
         text: resultText,
-        edit: processingMsg.key,
         mentions: mentions
-      })
+      }, { quoted: m })
 
       // Return success response
       return {
