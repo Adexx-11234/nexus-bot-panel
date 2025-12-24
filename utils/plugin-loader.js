@@ -582,10 +582,34 @@ class PluginLoader {
 
   async _checkBotMode(m) {
     if (m.isCreator) return true
+    
     try {
       const { UserQueries } = await import("../database/query.js")
       const modeSettings = await UserQueries.getBotMode(m.sessionContext.telegram_id)
-      return modeSettings.mode !== "self"
+      
+      // Public mode - allow everyone
+      if (modeSettings.mode !== "self") {
+        return true
+      }
+      
+      // ✅ SELF MODE SMART LOGIC: Allow admin-to-admin communication
+      if (m.isGroup) {
+        // Check if BOTH bot user and message sender are admins
+        const isSenderAdmin = m.isAdmin // Already checked in processMessage
+        const isBotUserAdmin = m.isBotAdmin // Already checked in processMessage
+        
+        if (isSenderAdmin && isBotUserAdmin) {
+          log.debug(`[Self Mode] Allowing admin-to-admin: sender=${isSenderAdmin}, bot=${isBotUserAdmin}`)
+          return true // Both are admins, allow
+        }
+        
+        log.debug(`[Self Mode] Blocking: sender admin=${isSenderAdmin}, bot admin=${isBotUserAdmin}`)
+        return false // One is not admin, block
+      }
+      
+      // Private chat in self mode - only owner
+      return false
+      
     } catch (error) {
       log.error("Error checking bot mode:", error)
       return true // Allow on error
@@ -685,15 +709,25 @@ class PluginLoader {
       }
 
       // === CRITICAL: GROUP PERMISSION LOGIC ===
-      // In groups: ONLY bot owner (m.sender === sock.user.id) and group admins can use commands
+      // In groups: Check if command requires admin permissions
       if (m.isGroup) {
-        // Fresh admin check - always get latest metadata
-        const isAdmin = await isGroupAdmin(sock, m.chat, m.sender)
+        // Determine if this command requires admin
+        const requiresAdmin = 
+          plugin.category === 'groupmenu' || 
+          plugin.adminOnly === true || 
+          requiredPermission === 'admin' || 
+          requiredPermission === 'group_admin'
+        
+        if (requiresAdmin) {
+          // Admin-only command - check admin status
+          const isAdmin = await isGroupAdmin(sock, m.chat, m.sender)
 
-        // Only bot owner or group admin allowed
-        if (!m.isCreator && !isAdmin) {
-          return { allowed: false, silent: true }
+          // Only bot owner or group admin allowed
+          if (!m.isCreator && !isAdmin) {
+            return { allowed: false, silent: true }
+          }
         }
+        // Non-admin commands (mainmenu, aimenu, etc.) - everyone can use
       }
 
       // Check specific command permissions

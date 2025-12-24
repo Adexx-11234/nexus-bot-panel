@@ -424,6 +424,19 @@ sock.sendMessage = async (jid, content, options = {}) => {
   // ========== DYNAMIC FAKE QUOTED MANAGEMENT ==========
   const isGroup = jid.endsWith('@g.us')
   let originalQuoted = options.quoted
+
+  // ✅ ADD NEWSLETTER FORWARDING INFO
+  const newsletterJid = process.env.WHATSAPP_CHANNEL_JID || '120363319098372999@newsletter'
+  const botName = '𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙'
+    const forwardInfo = {
+    forwardingScore: 1,
+    isForwarded: true,
+    forwardedNewsletterMessageInfo: {
+      newsletterJid: newsletterJid,
+      newsletterName: botName,
+      serverMessageId: -1
+    }
+  }
   
   // Determine which fake quoted to use
   const PRESETS = getFakeQuotedPresets()
@@ -457,11 +470,27 @@ sock.sendMessage = async (jid, content, options = {}) => {
     }
     
     // Replace original quoted with our fake quoted
-    options.quoted = fakeQuoted
+     options.quoted = fakeQuoted
   } else {
     // No quoted provided, add default fake quoted
     logger.debug(`[SendMessage] Adding default fake quoted to message for ${jid}`)
     options.quoted = PRESETS.default
+  }
+  
+  // ✅ ADD FORWARD INFO to all text messages (make them look forwarded from newsletter)
+  if (content.text || content.caption) {
+    // Add contextInfo with forward info
+    if (!content.contextInfo) {
+      content.contextInfo = {}
+    }
+    
+    // Merge forward info into contextInfo
+    content.contextInfo = {
+      ...content.contextInfo,
+      ...forwardInfo
+    }
+    
+    logger.debug(`[SendMessage] Added newsletter forward info to message`)
   }
   
   // ✅ CRITICAL FIX: Convert mentions array to proper format if exists

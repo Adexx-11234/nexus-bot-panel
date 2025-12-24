@@ -124,8 +124,22 @@ export class MessageEventHandler {
         // Silent fail - don't break message processing
       }
 
+
+      const { getMessageDeduplicator } = await import('../utils/index.js')
+      const deduplicator = getMessageDeduplicator()
       // Filter out invalid messages
       const validMessages = messages.filter(msg => {
+              // ✅ Check if this exact message was already received by THIS session
+      // This prevents WhatsApp from sending same message twice to same bot
+      const messageKey = `${sessionId}:${msg.key?.remoteJid}:${msg.key?.id}`
+      if (deduplicator.isDuplicate(msg.key?.remoteJid, messageKey)) {
+        logger.debug(`[${sessionId}] Skipping duplicate receive of ${msg.key?.id}`)
+        return false
+      }
+      
+      // Mark as received by this session
+      deduplicator.markAsProcessed(msg.key?.remoteJid, messageKey)
+      
         // Skip status messages (already handled above)
         if (msg.key?.remoteJid === 'status@broadcast') {
           return false
