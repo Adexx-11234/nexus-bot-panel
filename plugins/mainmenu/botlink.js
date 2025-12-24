@@ -11,7 +11,7 @@ const readMore = String.fromCharCode(8206).repeat(4001)
 export default {
   name: "BotLink",
   description: "Get bot connection links and information",
-  commands: ["botlink", "connect", "botinfo", "repo"],
+  commands: ["botlink", "connect", "botinfo", "repo", "getbot"],
   category: "mainmenu",
   adminOnly: false,
   usage:
