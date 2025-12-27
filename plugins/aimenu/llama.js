@@ -8,7 +8,9 @@ export default {
   description: "Chat with Llama 3.3-70b AI model",
   category: "ai",
   usage: "• .llama <question> - Ask Llama AI anything\n• .llama3 <question> - Alternative command",
-  
+  permissions: {
+    // All false = public command, no restrictions
+  },
   async execute(sock, sessionId, args, m) {
     try {
       // Validate input

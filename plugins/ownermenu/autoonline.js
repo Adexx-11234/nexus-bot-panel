@@ -10,7 +10,13 @@ export default {
   description: "Automatically stay online or appear offline",
   commands: ["autoonline", "ao"],
   category: "ownermenu",
-  ownerOnly: true,
+    permissions: {
+    permissions: {
+  ownerOnly: true,          // Only bot owner can use (overrides everything)
+  privateOnly: true         // Can only be used in private chats
+},          // Only bot owner can use (overrides everything)
+  privateOnly: true         // Can only be used in private chats
+},
   usage: "• .autoonline on/off - Enable/disable\n• .autoonline status - Check status\n• .autoonline - Show interactive menu" + `\n\n© 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
 
   async execute(sock, sessionId, args, m) {

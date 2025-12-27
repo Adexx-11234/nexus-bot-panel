@@ -5,8 +5,11 @@ export default {
   name: "rps",
   commands: ["rps", "rockpaperscissors", "tournament"],
   description: "✂️ Start a Rock Paper Scissors tournament - Battle for supremacy!",
-  adminOnly: false,
-  groupOnly: true,
+  permissions: {
+  // All false = public command, no restrictions
+},
+category: "gamemenu",
+  usage: "• .rps [option] - Start Rock Paper Scissors tournament\n\n*Options:*\n• quick - 3 rounds\n• epic - 10 rounds\n• custom rounds:N - Custom rounds\n\n*Example:*\n.rps quick",
 
   async execute(sock, sessionId, args, m) {
     try {

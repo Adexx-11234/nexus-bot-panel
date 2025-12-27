@@ -5,8 +5,11 @@ export default {
   name: "mathquiz",
   commands: ["mathquiz", "math", "quiz"],
   description: "🧮 Start a math quiz game - Test your calculation skills!",
-  adminOnly: false,
-  groupOnly: true,
+  permissions: {
+  // All false = public command, no restrictions
+},
+category: "gamemenu",
+  usage: "• .mathquiz [difficulty] - Start math quiz game\n\n*Difficulties:*\n• easy - Numbers 1-20\n• medium - Numbers 1-50\n• hard - Numbers 1-100\n\n*Example:*\n.mathquiz medium",
 
   async execute(sock, sessionId, args, m) {
     try {

@@ -6,7 +6,9 @@ export default {
   description: "Reply to a ViewOnce message with .vv to retrieve it",
   commands: ["vv"],
   category: "both",
-  adminOnly: false,
+  permissions: {
+
+},
   usage: `• Reply to a ViewOnce message with \`.vv\` to retrieve it`,
 
   async execute(sock, sessionId, args, m) {

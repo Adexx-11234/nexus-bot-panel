@@ -12,8 +12,9 @@ export default {
   name: "channeljid",
   commands: ["listchannels", "channelfromlink", "joinchannel"],
   description: "Get WhatsApp channel JID for your channels",
-  adminOnly: false,
-  category: "both",
+ permissions: {
+},
+  category: "mainmenu",
 
   async execute(sock, sessionId, args, m) {
     try {

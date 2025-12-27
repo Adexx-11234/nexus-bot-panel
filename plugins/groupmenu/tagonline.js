@@ -1,5 +1,4 @@
 import { createComponentLogger } from "../../utils/logger.js"
-import AdminChecker from "../../whatsapp/utils/admin-checker.js"
 
 const logger = createComponentLogger("TAGONLINE")
 
@@ -8,29 +7,16 @@ export default {
   description: "Tag all online group members",
   commands: ["tagonline", "tagactive", "online"],
   category: "group",
-  adminOnly: true,
+  permissions: {
+  adminRequired: true,      // User must be group admin (only applies in groups)
+  botAdminRequired: true,   // Bot must be group admin (only applies in groups)
+  groupOnly: true,          // Can only be used in groups
+},
   usage:
     "• `.tagonline` - Tag online members\n• `.tagonline [message]` - Tag online members with custom message",
 
   async execute(sock, sessionId, args, m) {
     const groupJid = m.chat
-
-    if (!m.isGroup) {
-      return { 
-        response: "❌ This command can only be used in groups!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" 
-      }
-    }
-
-    // Check if user is admin
-    const adminChecker = new AdminChecker()
-    const isAdmin = await adminChecker.isGroupAdmin(sock, groupJid, m.sender)
-
-    if (!isAdmin) {
-      return { 
-        response: "❌ Only group admins can use this command!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" 
-      }
-    }
-
     try {
       // Get group metadata
       let groupMetadata

@@ -7,24 +7,12 @@ export default {
   commands: ["vipreassign", "viptransfer"],
   category: "vipmenu",
   usage: "• `.vipreassign <user_phone> <new_vip_phone>` - Reassign user ownership",
-
+  permissions: {
+  defaultVipOnly: true,
+  privateOnly: true
+},
   async execute(sock, sessionId, args, m) {
     try {
-      const adminTelegramId = VIPHelper.fromSessionId(sessionId)
-      if (!adminTelegramId) {
-        await sock.sendMessage(m.chat, { text: "❌ Could not identify your session\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
-        return
-      }
-
-      // Check if user is Default VIP
-      const adminStatus = await VIPQueries.isVIP(adminTelegramId)
-      if (!adminStatus.isDefault && adminStatus.level !== 99) {
-        await sock.sendMessage(m.chat, { 
-          text: "❌ This command is only available to Default VIP (bot owner).\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" 
-        }, { quoted: m })
-        return
-      }
-
       if (args.length < 2) {
         await sock.sendMessage(m.chat, { 
           text: "❌ *Invalid Usage*\n\n" +

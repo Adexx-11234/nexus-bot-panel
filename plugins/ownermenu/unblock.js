@@ -3,7 +3,10 @@ export default {
   description: "Unblock a user from contacting the bot",
   commands: ["unblock", "unblokir", "unblockuser"],
   category: "ownermenu",
-  ownerOnly: true,
+    permissions: {
+  ownerOnly: true,          // Only bot owner can use (overrides everything)
+  privateOnly: true         // Can only be used in private chats
+},
   usage: "• `.unblock` - Unblock current chat\n• `.unblock <number>` - Unblock specific number\n• Reply to user and type `.unblock`",
   
   async execute(sock, sessionId, args, m) {

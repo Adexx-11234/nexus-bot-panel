@@ -2,7 +2,11 @@ export default {
   name: "downloadmenu",
   commands: ["downloadmenu"],
   description: "Display download and media commands menu",
-  adminOnly: false,
+  permissions: {
+  // All false = public command, no restrictions
+},
+category: "downloadmenu",
+  usage: "Type .downloadmenu to see the download commands menu",
 
 
   async execute(sock, sessionId, args, m) {

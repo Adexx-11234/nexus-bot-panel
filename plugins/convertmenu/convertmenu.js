@@ -2,7 +2,11 @@ export default {
   name: "convertmenu",
   commands: ["convertmenu", "convert", "conv"],
   description: "Display file conversion and utility commands menu",
-  adminOnly: false,
+  category: "convertmenu",
+  usage: "• .convertmenu - Show convert menu\n• .convert - Alternative command",
+  permissions: {
+    // All false = public command, no restrictions
+  },
 
   async execute(sock, sessionId, args, m) {
     try {

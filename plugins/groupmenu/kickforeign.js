@@ -1,5 +1,4 @@
 import { createComponentLogger } from "../../utils/logger.js"
-import AdminChecker from "../../whatsapp/utils/admin-checker.js"
 
 const logger = createComponentLogger("REMOVE-FOREIGN")
 
@@ -7,8 +6,12 @@ export default {
   name: "Remove Foreign",
   description: "Remove members from specific country codes",
   commands: ["remove", "removeforeign", "kickforeign"],
-  category: "group",
-  adminOnly: true,
+  category: "groupmenu",
+  permissions: {
+    adminRequired: true,      // User must be group admin (only applies in groups)
+    botAdminRequired: true,   // Bot must be group admin (only applies in groups)
+    groupOnly: true,          // Can only be used in groups
+  },
   usage:
     "• `.remove <country_code>` - Remove all members with that country code\n" +
     "• `.remove 91` - Remove all Indian numbers (+91)\n" +
@@ -18,24 +21,6 @@ export default {
 
   async execute(sock, sessionId, args, m) {
     const groupJid = m.chat
-
-    // Check if it's a group
-    if (!m.isGroup) {
-      return { response: "❌ This command can only be used in groups!" }
-    }
-
-    // Check if user is admin
-    const adminChecker = new AdminChecker()
-    const isAdmin = await adminChecker.isGroupAdmin(sock, groupJid, m.sender)
-    if (!isAdmin) {
-      return { response: "❌ Only group admins can use this command!" }
-    }
-
-    // Check if bot is admin
-    const botIsAdmin = await adminChecker.isBotAdmin(sock, groupJid)
-    if (!botIsAdmin) {
-      return { response: "❌ Bot needs admin permissions to remove members!" }
-    }
 
     // Check if country code was provided
     if (!args[0]) {

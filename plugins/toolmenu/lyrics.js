@@ -7,6 +7,9 @@ export default {
   commands: ["lyrics", "lirik", "lyric"],
   description: "Get song lyrics",
   category: "toolmenu",
+  permissions: {
+
+},
   usage: "• .lyrics <song title> - Get song lyrics\n• .lirik <song title> - Get song lyrics",
   
   async execute(sock, sessionId, args, m) {

@@ -10,6 +10,9 @@ export default {
   description: "Download YouTube videos and audio",
   category: "download",
   usage: "• .yt <url> - Download YouTube video\n• .ytdl <url> - Direct download",
+  permissions: {
+  // All false = public command, no restrictions
+},
   
   async execute(sock, sessionId, args, m) {
     try {

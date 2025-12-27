@@ -4,8 +4,9 @@ export default {
   name: "endgame",
   commands: ["endgame", "stopgame", "gamestop"],
   description: "🛑 End active games in this group",
-  adminOnly: false,
-  groupOnly: true,
+  permissions: {
+  // All false = public command, no restrictions
+},
 
   async execute(sock, sessionId, args, m) {
     try {

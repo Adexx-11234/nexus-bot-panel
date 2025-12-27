@@ -11,6 +11,9 @@ export default {
   category: "convertmenu",
   description: "Convert sticker to image",
   usage: "Reply to sticker with .toimage",
+  permissions: {
+  // All false = public command, no restrictions
+},
 
   async execute(sock, sessionId, args, m) {
     if (!m.quoted) {

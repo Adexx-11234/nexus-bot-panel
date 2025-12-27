@@ -2,7 +2,11 @@ export default {
   name: "gamemenu",
   commands: ["gamemenu"],
   description: "Display gaming and entertainment commands menu",
-  adminOnly: false,
+  category: "gamemenu",
+  permissions: {
+    // All false = public command, no restrictions
+  },
+  usage: "• .gamemenu - Show gaming commands menu",
 
   async execute(sock, sessionId, args, m) {
     try {

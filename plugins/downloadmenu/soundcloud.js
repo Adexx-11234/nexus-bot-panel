@@ -9,6 +9,9 @@ export default {
   description: "Download SoundCloud tracks",
   category: "download",
   usage: "• .soundcloud <url> - Download SoundCloud track\n• .sc <url> - Short command",
+  permissions: {
+  // All false = public command, no restrictions
+},
   
   async execute(sock, sessionId, args, m) {
     try {

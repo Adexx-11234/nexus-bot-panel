@@ -7,25 +7,13 @@ export default {
   commands: ["vipadd", "vipclaim"],
   category: "vipmenu",
   usage: "• `.vipadd <phone>` - Claim a connected user\n• `.vipadd @user` - Claim by mention",
+permissions: {
+  ownerAndVip: true,
+  privateOnly: true
+},
 
   async execute(sock, sessionId, args, m) {
     try {
-      // Get VIP's telegram ID
-      const vipTelegramId = VIPHelper.fromSessionId(sessionId)
-      if (!vipTelegramId) {
-        await sock.sendMessage(m.chat, { text: "❌ Could not identify your session\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
-        return
-      }
-
-      // Check if user is VIP
-      const vipStatus = await VIPQueries.isVIP(vipTelegramId)
-      if (!vipStatus.isVIP) {
-        await sock.sendMessage(m.chat, { 
-          text: "❌ You don't have VIP access.\n\nContact the bot owner for VIP privileges.\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" 
-        }, { quoted: m })
-        return
-      }
-
       // Parse target phone
       let targetPhone = null
       

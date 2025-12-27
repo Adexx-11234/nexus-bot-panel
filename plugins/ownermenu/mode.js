@@ -10,7 +10,10 @@ export default {
   description: "Switch between self and public mode",
   usage: "• .mode self - Only owner can use\n• .mode public - Everyone can use\n• .mode status - Check current mode\n• .mode - Show interactive menu",
   category: "ownermenu",
-  ownerOnly: true,
+    permissions: {
+  ownerOnly: true,          // Only bot owner can use (overrides everything)
+  privateOnly: true         // Can only be used in private chats
+},
 
   async execute(sock, sessionId, args, m) {
     try {

@@ -9,6 +9,9 @@ export default {
   description: "Download TikTok videos without watermark",
   category: "download",
   usage: "• .tiktok <url> - Download TikTok video\n• .tt <url> - Short command",
+  permissions: {
+  // All false = public command, no restrictions
+},
   
   async execute(sock, sessionId, args, m) {
     try {

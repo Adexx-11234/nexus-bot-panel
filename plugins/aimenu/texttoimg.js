@@ -8,7 +8,9 @@ export default {
   description: "Generate images from text descriptions",
   category: "ai",
   usage: "• .imagine <description> - Generate image from text\n• .img <description> - Alternative command",
-  
+  permissions: {
+    // All false = public command, no restrictions
+  },
   async execute(sock, sessionId, args, m) {
     try {
       // Validate input

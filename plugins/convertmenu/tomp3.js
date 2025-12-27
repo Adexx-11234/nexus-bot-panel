@@ -10,6 +10,9 @@ export default {
   category: "convertmenu",
   description: "Convert video/audio to MP3 document",
   usage: "Reply to video/audio with .tomp3",
+  permissions: {
+  // All false = public command, no restrictions
+},
 
   async execute(sock, sessionId, args, m) {
     if (!m.quoted) {

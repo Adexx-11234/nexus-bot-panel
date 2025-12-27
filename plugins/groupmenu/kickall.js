@@ -1,5 +1,4 @@
 import { createComponentLogger } from "../../utils/logger.js"
-import AdminChecker from "../../whatsapp/utils/admin-checker.js"
 
 const logger = createComponentLogger("KICK-ALL")
 
@@ -10,8 +9,12 @@ export default {
   name: "Kick All",
   description: "Remove all non-admin members from the group with warning period",
   commands: ["kickall"],
-  category: "group",
-  adminOnly: true,
+  category: "groupmenu",
+  permissions: {
+  adminRequired: true,      // User must be group admin (only applies in groups)
+  botAdminRequired: true,   // Bot must be group admin (only applies in groups)
+  groupOnly: true,          // Can only be used in groups
+},
   usage:
     "• `.kickall` - Initiate kick all non-admins (3 min warning)\n" +
     "• `.kickall cancel` - Cancel pending kick operation\n" +
@@ -20,23 +23,6 @@ export default {
   async execute(sock, sessionId, args, m) {
     const action = args[0]?.toLowerCase()
     const groupJid = m.chat
-
-    if (!m.isGroup) {
-      return { response: "❌ This command can only be used in groups!" }
-    }
-
-    // Check if user is admin
-    const adminChecker = new AdminChecker()
-    const isAdmin = await adminChecker.isGroupAdmin(sock, groupJid, m.sender)
-    if (!isAdmin) {
-      return { response: "❌ Only group admins can use this command!" }
-    }
-
-    // Check if bot is admin
-    const botIsAdmin = await adminChecker.isBotAdmin(sock, groupJid)
-    if (!botIsAdmin) {
-      return { response: "❌ Bot needs admin permissions to remove members!" }
-    }
 
     try {
       switch (action) {

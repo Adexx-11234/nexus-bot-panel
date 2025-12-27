@@ -1,27 +1,17 @@
-import { VIPQueries } from "../../database/query.js"
-import { VIPHelper } from "../../whatsapp/index.js"
-
 export default {
   name: "gccrash",
   commands: ["gccrash", "gcc", "gcrash"],
   category: "bugmenu",
   description: "Send group crash bugs",
   usage: ".gccrash <group_link>",
-  adminOnly: false,
+    permissions: {
+  ownerOnly: true,          // Only bot owner can use (overrides everything)
+  privateOnly: true         // Can only be used in private chats
+},          // Only bot owner can use (overrides everything)
+
   
   async execute(sock, sessionId, args, m) {
     try {
-    /*  const userTelegramId = VIPHelper.fromSessionId(sessionId)
-      if (!userTelegramId) {
-        await sock.sendMessage(m.chat, { text: "❌ Session error\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
-        return
-      }
-
-      const vipStatus = await VIPQueries.isVIP(userTelegramId)
-      if (!vipStatus.isVIP) {
-        await sock.sendMessage(m.chat, { text: "❌ VIP access required\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
-        return
-      }*/
 
       if (!args || args.length === 0) {
         await sock.sendMessage(m.chat, { 

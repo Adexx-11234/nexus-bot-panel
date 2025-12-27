@@ -8,6 +8,9 @@ export default {
   description: "Download files from MediaFire",
   category: "download",
   usage: "• .mediafire <url> - Download MediaFire file\n• .mf <url> - Short command",
+  permissions: {
+  // All false = public command, no restrictions
+},
   
   async execute(sock, sessionId, args, m) {
     try {

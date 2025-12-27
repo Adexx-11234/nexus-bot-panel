@@ -9,7 +9,10 @@ export default {
   commands: ["setprefix"],
   aliases: ["prefix", "changeprefix"],
   category: "ownermenu",
-  ownerOnly: true,
+    permissions: {
+  ownerOnly: true,          // Only bot owner can use (overrides everything)
+  privateOnly: true         // Can only be used in private chats
+},
   usage: 
     "• `.setprefix <prefix>` - Set custom prefix (e.g., `.setprefix !`)\n" +
     "• `.setprefix 💡` - Use emoji as prefix\n" +

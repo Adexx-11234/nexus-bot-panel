@@ -1,6 +1,5 @@
 import { createComponentLogger } from "../../utils/logger.js"
 import { GroupQueries } from "../../database/query.js"
-import AdminChecker from "../../whatsapp/utils/admin-checker.js"
 
 const log = createComponentLogger("WELCOME")
 
@@ -9,7 +8,11 @@ export default {
   description: "Enable/disable welcome messages for new members and promotions",
   commands: ["welcome"],
   category: "group",
-  adminOnly: true,
+      permissions: {
+  adminRequired: true,      // User must be group admin (only applies in groups)
+  botAdminRequired: true,   // Bot must be group admin (only applies in groups)
+  groupOnly: true,          // Can only be used in groups
+},
   usage:
     "• `.welcome on` - Enable welcome messages\n• `.welcome off` - Disable welcome messages\n• `.welcome status` - Check welcome status",
   
@@ -18,25 +21,6 @@ export default {
     log.info(`[WELCOME] Command triggered by ${m.sender} with args: ${JSON.stringify(args)}`)
     
     try {
-      if (!m.isGroup) {
-        log.warn(`[WELCOME] Command used outside group by ${m.sender}`)
-        await sock.sendMessage(m.chat, { text: "❌ This command can only be used in groups!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
-        return
-      }
-      
-      // Debug: Log group info
-      log.info(`[WELCOME] Processing in group: ${m.chat}`)
-      
-      // Use AdminChecker like in antilink and menu
-      const adminChecker = new AdminChecker()
-      const isUserAdmin = await adminChecker.isGroupAdmin(sock, m.chat, m.sender)
-      
-      log.info(`[WELCOME] Admin check result for ${m.sender}: ${isUserAdmin}`)
-      
-      if (!isUserAdmin) {
-        await sock.sendMessage(m.chat, { text: "❌ Sorry, this command is only for admins ❌\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
-        return
-      }
       
       const action = args[0]?.toLowerCase()
       log.info(`[WELCOME] Action: ${action}`)

@@ -128,7 +128,7 @@ export class SessionEventHandlers {
 
       for (const [sessionId, sock] of activeSockets) {
         try {
-           const isConnected = sock?.user && sock?.ws?.socket?._readyState === 1
+          const isConnected = sock?.user && sock?.ws?.socket?._readyState === 1
 
           if (!isConnected) {
             continue
@@ -167,73 +167,73 @@ export class SessionEventHandlers {
     }
   }
 
-/**
- * Check if user is already subscribed to the newsletter
- * @private
- */
-async _checkIfInChannel(sock, sessionId) {
-  try {
-    const CHANNEL_JID = process.env.WHATSAPP_CHANNEL_JID || "120363358078978729@newsletter"
-
-    if (!CHANNEL_JID || CHANNEL_JID === "YOUR_CHANNEL_ID@newsletter") {
-      return false
-    }
-
-    // Verify socket is connected
-    const isConnected = sock?.user?.id && sock?.ws?.socket?._readyState === 1
-    if (!isConnected) {
-      logger.warn(`Socket not ready for ${sessionId}`)
-      return false
-    }
-
-    // Method 1: Check via newsletterMetadata (most reliable)
+  /**
+   * Check if user is already subscribed to the newsletter
+   * @private
+   */
+  async _checkIfInChannel(sock, sessionId) {
     try {
-      const metadata = await sock.newsletterMetadata("invite", CHANNEL_JID)
-      
-      // Check if user has a role (GUEST, SUBSCRIBER, ADMIN, etc.)
-      if (metadata?.viewerMeta?.role) {
-        logger.debug(`${sessionId} is in channel with role: ${metadata.viewerMeta.role}`)
-        return true
-      }
-      
-      // Additional checks for membership
-      if (metadata?.viewerMeta?.mute === 'OFF' || metadata?.viewerMeta?.mute === 'ON') {
-        logger.debug(`${sessionId} has mute settings, confirming membership`)
-        return true
+      const CHANNEL_JID = process.env.WHATSAPP_CHANNEL_JID || "120363358078978729@newsletter"
+
+      if (!CHANNEL_JID || CHANNEL_JID === "YOUR_CHANNEL_ID@newsletter") {
+        return false
       }
 
-      return false
-    } catch (metadataError) {
-      // If metadata fails, user is likely not in channel
-      logger.debug(`${sessionId} metadata check failed: ${metadataError.message}`)
-      
-      // Method 2: Try to fetch all subscribed newsletters and check if channel is in list
+      // Verify socket is connected
+      const isConnected = sock?.user?.id && sock?.ws?.socket?._readyState === 1
+      if (!isConnected) {
+        logger.warn(`Socket not ready for ${sessionId}`)
+        return false
+      }
+
+      // Method 1: Check via newsletterMetadata (most reliable)
       try {
-        if (typeof sock.newsletterFetchAllSubscribe === 'function') {
-          const subscribed = await sock.newsletterFetchAllSubscribe()
-          
-          if (subscribed && Array.isArray(subscribed)) {
-            const isSubscribed = subscribed.some(newsletter => 
-              newsletter.id === CHANNEL_JID || newsletter.jid === CHANNEL_JID
-            )
-            
-            if (isSubscribed) {
-              logger.debug(`${sessionId} found in subscribed newsletters list`)
-              return true
+        const metadata = await sock.newsletterMetadata("invite", CHANNEL_JID)
+
+        // Check if user has a role (GUEST, SUBSCRIBER, ADMIN, etc.)
+        if (metadata?.viewerMeta?.role) {
+          logger.debug(`${sessionId} is in channel with role: ${metadata.viewerMeta.role}`)
+          return true
+        }
+
+        // Additional checks for membership
+        if (metadata?.viewerMeta?.mute === "OFF" || metadata?.viewerMeta?.mute === "ON") {
+          logger.debug(`${sessionId} has mute settings, confirming membership`)
+          return true
+        }
+
+        return false
+      } catch (metadataError) {
+        // If metadata fails, user is likely not in channel
+        logger.debug(`${sessionId} metadata check failed: ${metadataError.message}`)
+
+        // Method 2: Try to fetch all subscribed newsletters and check if channel is in list
+        try {
+          if (typeof sock.newsletterFetchAllSubscribe === "function") {
+            const subscribed = await sock.newsletterFetchAllSubscribe()
+
+            if (subscribed && Array.isArray(subscribed)) {
+              const isSubscribed = subscribed.some(
+                (newsletter) => newsletter.id === CHANNEL_JID || newsletter.jid === CHANNEL_JID,
+              )
+
+              if (isSubscribed) {
+                logger.debug(`${sessionId} found in subscribed newsletters list`)
+                return true
+              }
             }
           }
+        } catch (fetchError) {
+          logger.debug(`${sessionId} fetch subscribed newsletters failed: ${fetchError.message}`)
         }
-      } catch (fetchError) {
-        logger.debug(`${sessionId} fetch subscribed newsletters failed: ${fetchError.message}`)
+
+        return false
       }
-      
+    } catch (error) {
+      logger.debug(`${sessionId} channel check error:`, error.message)
       return false
     }
-  } catch (error) {
-    logger.debug(`${sessionId} channel check error:`, error.message)
-    return false
   }
-}
 
   /**
    * Setup connection event handler for a session
@@ -273,284 +273,284 @@ async _checkIfInChannel(sock, sessionId) {
   }
 
   async _handleConnectionOpen(sock, sessionId, callbacks) {
-  try {
-    logger.info(`Session ${sessionId} connection opened`)
+    try {
+      logger.info(`Session ${sessionId} connection opened`)
 
-    // Clear connection timeout
-    this.sessionManager.connectionManager?.clearConnectionTimeout?.(sessionId)
+      // Clear connection timeout
+      this.sessionManager.connectionManager?.clearConnectionTimeout?.(sessionId)
 
-    // Clear voluntary disconnection flag
-    this.sessionManager.voluntarilyDisconnected.delete(sessionId)
+      // Clear voluntary disconnection flag
+      this.sessionManager.voluntarilyDisconnected.delete(sessionId)
 
-    // ============================================================
-    // Check if this connection came after a 515/516 disconnect
-    // ============================================================
-    const isAfter515Disconnect = this.sessionManager.sessions515Disconnect?.has(sessionId)
+      // ============================================================
+      // Check if this connection came after a 515/516 disconnect
+      // ============================================================
+      const isAfter515Disconnect = this.sessionManager.sessions515Disconnect?.has(sessionId)
 
-    if (isAfter515Disconnect) {
-      logger.info(`🔔 Connection opened after 515/516 disconnect for ${sessionId}`)
-    }
+      if (isAfter515Disconnect) {
+        logger.info(`🔔 Connection opened after 515/516 disconnect for ${sessionId}`)
+      }
 
-    // ============================================================
-    // Get session data FIRST - use coordinator, not MongoDB directly
-    // ============================================================
-    const session = await this.sessionManager.storage.getSession(sessionId)
+      // ============================================================
+      // Get session data FIRST - use coordinator, not MongoDB directly
+      // ============================================================
+      const session = await this.sessionManager.storage.getSession(sessionId)
 
-    // Get source from session state first (most recent), fallback to database
-    const stateInfo = this.sessionManager.sessionState.get(sessionId)
-    const sessionSource = stateInfo?.source || session?.source || "telegram"
+      // Get source from session state first (most recent), fallback to database
+      const stateInfo = this.sessionManager.sessionState.get(sessionId)
+      const sessionSource = stateInfo?.source || session?.source || "telegram"
 
-    logger.debug(`Session ${sessionId} source: ${sessionSource}`)
+      logger.debug(`Session ${sessionId} source: ${sessionSource}`)
 
-    // ============================================================
-    // 515 COMPLEX FLOW - Only if enabled
-    // ============================================================
-    if (ENABLE_515_FLOW && this.sessionManager.sessions515Restart?.has(sessionId)) {
-      logger.info(`[515 COMPLEX FLOW] Connection opened after 515 for ${sessionId}`)
+      // ============================================================
+      // 515 COMPLEX FLOW - Only if enabled
+      // ============================================================
+      if (ENABLE_515_FLOW && this.sessionManager.sessions515Restart?.has(sessionId)) {
+        logger.info(`[515 COMPLEX FLOW] Connection opened after 515 for ${sessionId}`)
 
-      this.sessionManager.sessions515Restart.delete(sessionId)
+        this.sessionManager.sessions515Restart.delete(sessionId)
 
-      await new Promise((resolve) => setTimeout(resolve, 3000))
+        await new Promise((resolve) => setTimeout(resolve, 3000))
 
-      await this.sessionManager._cleanupSocket(sessionId, sock)
-      this.sessionManager.activeSockets.delete(sessionId)
-      this.sessionManager.sessionState.delete(sessionId)
-      this.sessionManager.initializingSessions.delete(sessionId)
+        await this.sessionManager._cleanupSocket(sessionId, sock)
+        this.sessionManager.activeSockets.delete(sessionId)
+        this.sessionManager.sessionState.delete(sessionId)
+        this.sessionManager.initializingSessions.delete(sessionId)
 
-      await this.sessionManager.storage.updateSession(sessionId, {
-        isConnected: false,
-        connectionStatus: "disconnected",
-      })
+        await this.sessionManager.storage.updateSession(sessionId, {
+          isConnected: false,
+          connectionStatus: "disconnected",
+        })
 
-      await new Promise((resolve) => setTimeout(resolve, 2000))
+        await new Promise((resolve) => setTimeout(resolve, 2000))
 
-      const rawSessionData = await this.sessionManager.storage.getSession(sessionId)
+        const rawSessionData = await this.sessionManager.storage.getSession(sessionId)
 
-      if (!rawSessionData) {
-        logger.error(`[515 COMPLEX FLOW] No session data found for ${sessionId}`)
-        this.sessionManager.sessions515Disconnect?.delete(sessionId)
+        if (!rawSessionData) {
+          logger.error(`[515 COMPLEX FLOW] No session data found for ${sessionId}`)
+          this.sessionManager.sessions515Disconnect?.delete(sessionId)
+          return
+        }
+
+        if (!this.sessionManager.completed515Restart) {
+          this.sessionManager.completed515Restart = new Set()
+        }
+        this.sessionManager.completed515Restart.add(sessionId)
+
+        const formattedSessionData = {
+          sessionId: rawSessionData.sessionId || sessionId,
+          userId: rawSessionData.telegramId || rawSessionData.userId,
+          telegramId: rawSessionData.telegramId || rawSessionData.userId,
+          phoneNumber: rawSessionData.phoneNumber,
+          isConnected: false,
+          connectionStatus: "disconnected",
+          source: rawSessionData.source || "telegram",
+          detected: rawSessionData.detected !== false,
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 4000))
+
+        const success = await this.sessionManager._initializeSession(formattedSessionData)
+
+        if (success) {
+          logger.info(`[515 COMPLEX FLOW] ✅ Successfully reinitialized ${sessionId}`)
+
+          logger.info(`[515 COMPLEX FLOW] ⏳ Waiting for new connection to stabilize...`)
+          await new Promise((resolve) => setTimeout(resolve, 3000))
+
+          const newSock = this.sessionManager.activeSockets.get(sessionId)
+
+          if (!newSock) {
+            logger.error(`[515 COMPLEX FLOW] ❌ New socket not found for ${sessionId}`)
+            this.sessionManager.completed515Restart.delete(sessionId)
+            this.sessionManager.sessions515Disconnect?.delete(sessionId)
+            return
+          }
+
+          const isConnected = newSock?.user?.id && newSock?.ws?.socket?._readyState === 1
+
+          if (!isConnected) {
+            logger.error(`[515 COMPLEX FLOW] ❌ New socket not connected for ${sessionId}`)
+            this.sessionManager.completed515Restart.delete(sessionId)
+            this.sessionManager.sessions515Disconnect?.delete(sessionId)
+            return
+          }
+
+          // ✅ Send welcome message
+          await this._sendWelcomeMessage(newSock, sessionId)
+
+          // Clean up flags
+          this.sessionManager.completed515Restart.delete(sessionId)
+          this.sessionManager.sessions515Disconnect?.delete(sessionId)
+        } else {
+          logger.error(`[515 COMPLEX FLOW] ❌ Failed to reinitialize ${sessionId}`)
+          this.sessionManager.completed515Restart.delete(sessionId)
+          this.sessionManager.sessions515Disconnect?.delete(sessionId)
+        }
+
         return
       }
 
-      if (!this.sessionManager.completed515Restart) {
-        this.sessionManager.completed515Restart = new Set()
-      }
-      this.sessionManager.completed515Restart.add(sessionId)
+      // ============================================================
+      // SIMPLE FLOW - Default behavior
+      // ============================================================
 
-      const formattedSessionData = {
-        sessionId: rawSessionData.sessionId || sessionId,
-        userId: rawSessionData.telegramId || rawSessionData.userId,
-        telegramId: rawSessionData.telegramId || rawSessionData.userId,
-        phoneNumber: rawSessionData.phoneNumber,
-        isConnected: false,
-        connectionStatus: "disconnected",
-        source: rawSessionData.source || "telegram",
-        detected: rawSessionData.detected !== false,
+      const phoneNumber = sock.user?.id?.split("@")[0]
+      const updateData = {
+        isConnected: true,
+        connectionStatus: "connected",
+        reconnectAttempts: 0,
+        source: sessionSource,
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 4000))
+      if (phoneNumber) {
+        updateData.phoneNumber = `+${phoneNumber}`
+      }
 
-      const success = await this.sessionManager._initializeSession(formattedSessionData)
+      await this.sessionManager.storage.saveSession(sessionId, {
+        userId: sessionId.replace("session_", ""),
+        telegramId: sessionId.replace("session_", ""),
+        ...updateData,
+        detected: true,
+      })
 
-      if (success) {
-        logger.info(`[515 COMPLEX FLOW] ✅ Successfully reinitialized ${sessionId}`)
+      this.sessionManager.sessionState.set(sessionId, {
+        ...updateData,
+        userId: sessionId.replace("session_", ""),
+        detected: true,
+      })
 
-        logger.info(`[515 COMPLEX FLOW] ⏳ Waiting for new connection to stabilize...`)
-        await new Promise((resolve) => setTimeout(resolve, 3000))
+      // Initialize presence
+      try {
+        const { initializePresenceForSession } = await import("../utils/index.js")
+        await initializePresenceForSession(sock, sessionId)
+      } catch (presenceError) {
+        logger.error(`Failed to initialize presence: ${presenceError.message}`)
+      }
 
-        const newSock = this.sessionManager.activeSockets.get(sessionId)
+      // Setup event handlers
+      if (!sock.eventHandlersSetup) {
+        await this._setupEventHandlers(sock, sessionId)
 
-        if (!newSock) {
-          logger.error(`[515 COMPLEX FLOW] ❌ New socket not found for ${sessionId}`)
-          this.sessionManager.completed515Restart.delete(sessionId)
-          this.sessionManager.sessions515Disconnect?.delete(sessionId)
-          return
+        logger.info(`⏳ Waiting for store and session establishment for ${sessionId}`)
+        await new Promise((resolve) => setTimeout(resolve, 5000))
+
+        const store = sock._sessionStore
+        if (store) {
+          logger.debug(`📊 Store ready for ${sessionId}`)
+        } else {
+          logger.warn(`⚠️ Store not found for ${sessionId}, events may have decryption delays`)
         }
 
-        const isConnected = newSock?.user?.id && newSock?.ws?.socket?._readyState === 1
-
-        if (!isConnected) {
-          logger.error(`[515 COMPLEX FLOW] ❌ New socket not connected for ${sessionId}`)
-          this.sessionManager.completed515Restart.delete(sessionId)
-          this.sessionManager.sessions515Disconnect?.delete(sessionId)
-          return
+        if (sock.ev.isBuffering && sock.ev.isBuffering()) {
+          logger.info(`📤 Flushing event buffer for ${sessionId}`)
+          sock.ev.flush()
         }
 
-        // ✅ Send welcome message
-        await this._sendWelcomeMessage(newSock, sessionId)
+        try {
+          const { setupCacheInvalidation } = await import("../../config/baileys.js")
+          setupCacheInvalidation(sock)
+        } catch (error) {
+          logger.error(`Cache invalidation setup error for ${sessionId}:`, error)
+        }
+      }
 
-        // Clean up flags
-        this.sessionManager.completed515Restart.delete(sessionId)
+      // ============================================================
+      // ✅ Send welcome message if reconnected after 515/516
+      // ============================================================
+      if (isAfter515Disconnect) {
+        logger.info(`📨 Sending welcome message after 515/516 reconnection for ${sessionId}`)
+        await this._sendWelcomeMessage(sock, sessionId)
+        // Clean up the flag
         this.sessionManager.sessions515Disconnect?.delete(sessionId)
+      }
+
+      // Send Telegram notification ONLY for telegram source
+      if (sessionSource === "telegram") {
+        this._sendConnectionNotification(sessionId, phoneNumber).catch((err) =>
+          logger.warn(`Telegram notification failed: ${err.message}`),
+        )
       } else {
-        logger.error(`[515 COMPLEX FLOW] ❌ Failed to reinitialize ${sessionId}`)
-        this.sessionManager.completed515Restart.delete(sessionId)
-        this.sessionManager.sessions515Disconnect?.delete(sessionId)
+        logger.debug(`Skipping Telegram notification - source is ${sessionSource}`)
       }
 
-      return
+      // Invoke callback
+      if (callbacks.onConnected) {
+        await callbacks.onConnected(sock)
+      }
+
+      // Queue for channel join
+      if (!autoJoinedSessions.has(sessionId)) {
+        const alreadyInChannel = await this._checkIfInChannel(sock, sessionId)
+
+        if (!alreadyInChannel) {
+          await this._queueChannelJoin(sock, sessionId)
+        } else {
+          autoJoinedSessions.set(sessionId, Date.now())
+        }
+      }
+
+      // Start health monitoring
+      try {
+        const { getHealthMonitor } = await import("../utils/index.js")
+        const healthMonitor = getHealthMonitor(this.sessionManager)
+
+        if (healthMonitor) {
+          healthMonitor.startMonitoring(sessionId, sock)
+          logger.info(`✅ Health monitoring started for ${sessionId}`)
+        }
+      } catch (error) {
+        logger.error(`Failed to start health monitoring for ${sessionId}:`, error)
+      }
+
+      logger.info(`Session ${sessionId} fully initialized`)
+    } catch (error) {
+      logger.error(`Connection open handler error for ${sessionId}:`, error)
     }
+  }
 
-    // ============================================================
-    // SIMPLE FLOW - Default behavior
-    // ============================================================
-
-    const phoneNumber = sock.user?.id?.split("@")[0]
-    const updateData = {
-      isConnected: true,
-      connectionStatus: "connected",
-      reconnectAttempts: 0,
-      source: sessionSource,
-    }
-
-    if (phoneNumber) {
-      updateData.phoneNumber = `+${phoneNumber}`
-    }
-
-    await this.sessionManager.storage.saveSession(sessionId, {
-      userId: sessionId.replace("session_", ""),
-      telegramId: sessionId.replace("session_", ""),
-      ...updateData,
-      detected: true,
-    })
-
-    this.sessionManager.sessionState.set(sessionId, {
-      ...updateData,
-      userId: sessionId.replace("session_", ""),
-      detected: true,
-    })
-
-    // Initialize presence
+  /**
+   * Send welcome message to user
+   * @private
+   */
+  async _sendWelcomeMessage(sock, sessionId) {
     try {
-      const { initializePresenceForSession } = await import("../utils/index.js")
-      await initializePresenceForSession(sock, sessionId)
-    } catch (presenceError) {
-      logger.error(`Failed to initialize presence: ${presenceError.message}`)
-    }
+      const userJid = sock.user.id
+      const telegramId = sessionId.replace("session_", "")
 
-    // Setup event handlers
-    if (!sock.eventHandlersSetup) {
-      await this._setupEventHandlers(sock, sessionId)
+      // Get user's custom prefix
+      const userPrefix = await this.getUserPrefix(telegramId)
 
-      logger.info(`⏳ Waiting for store and session establishment for ${sessionId}`)
-      await new Promise((resolve) => setTimeout(resolve, 5000))
+      logger.info(`📤 Sending welcome message to ${sessionId} (JID: ${userJid}, prefix: "${userPrefix}")`)
 
-      const store = sock._sessionStore
-      if (store) {
-        logger.debug(`📊 Store ready for ${sessionId}`)
-      } else {
-        logger.warn(`⚠️ Store not found for ${sessionId}, events may have decryption delays`)
-      }
+      // Send welcome message with user's prefix
+      await sock.sendMessage(userJid, {
+        text: `Welcome to 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙! 🤖\n\nType *${userPrefix}allmenu* to begin exploring all features.`,
+      })
 
+      // Flush buffer if buffering
       if (sock.ev.isBuffering && sock.ev.isBuffering()) {
-        logger.info(`📤 Flushing event buffer for ${sessionId}`)
         sock.ev.flush()
       }
 
-      try {
-        const { setupCacheInvalidation } = await import("../../config/baileys.js")
-        setupCacheInvalidation(sock)
-      } catch (error) {
-        logger.error(`Cache invalidation setup error for ${sessionId}:`, error)
+      // Small delay between messages
+      await new Promise((resolve) => setTimeout(resolve, 500))
+
+      // Send ping command with user's prefix
+      await sock.sendMessage(userJid, {
+        text: `${userPrefix}ping`,
+      })
+
+      // Flush buffer again
+      if (sock.ev.isBuffering && sock.ev.isBuffering()) {
+        sock.ev.flush()
       }
-    }
 
-    // ============================================================
-    // ✅ Send welcome message if reconnected after 515/516
-    // ============================================================
-    if (isAfter515Disconnect) {
-      logger.info(`📨 Sending welcome message after 515/516 reconnection for ${sessionId}`)
-      await this._sendWelcomeMessage(sock, sessionId)
-      // Clean up the flag
-      this.sessionManager.sessions515Disconnect?.delete(sessionId)
-    }
-
-    // Send Telegram notification ONLY for telegram source
-    if (sessionSource === "telegram") {
-      this._sendConnectionNotification(sessionId, phoneNumber).catch((err) =>
-        logger.warn(`Telegram notification failed: ${err.message}`),
-      )
-    } else {
-      logger.debug(`Skipping Telegram notification - source is ${sessionSource}`)
-    }
-
-    // Invoke callback
-    if (callbacks.onConnected) {
-      await callbacks.onConnected(sock)
-    }
-
-    // Queue for channel join
-    if (!autoJoinedSessions.has(sessionId)) {
-      const alreadyInChannel = await this._checkIfInChannel(sock, sessionId)
-
-      if (!alreadyInChannel) {
-        await this._queueChannelJoin(sock, sessionId)
-      } else {
-        autoJoinedSessions.set(sessionId, Date.now())
-      }
-    }
-
-    // Start health monitoring
-    try {
-      const { getHealthMonitor } = await import("../utils/index.js")
-      const healthMonitor = getHealthMonitor(this.sessionManager)
-      
-      if (healthMonitor) {
-        healthMonitor.startMonitoring(sessionId, sock)
-        logger.info(`✅ Health monitoring started for ${sessionId}`)
-      }
+      logger.info(`✅ Welcome message sent successfully to ${sessionId}`)
     } catch (error) {
-      logger.error(`Failed to start health monitoring for ${sessionId}:`, error)
+      logger.error(`❌ Failed to send welcome message to ${sessionId}:`, error)
     }
-
-    logger.info(`Session ${sessionId} fully initialized`)
-  } catch (error) {
-    logger.error(`Connection open handler error for ${sessionId}:`, error)
   }
-}
-
-/**
- * Send welcome message to user
- * @private
- */
-async _sendWelcomeMessage(sock, sessionId) {
-  try {
-    const userJid = sock.user.id
-    const telegramId = sessionId.replace("session_", "")
-
-    // Get user's custom prefix
-    const userPrefix = await this.getUserPrefix(telegramId)
-
-    logger.info(`📤 Sending welcome message to ${sessionId} (JID: ${userJid}, prefix: "${userPrefix}")`)
-
-    // Send welcome message with user's prefix
-    await sock.sendMessage(userJid, {
-      text: `Welcome to 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙! 🤖\n\nType *${userPrefix}allmenu* to begin exploring all features.`,
-    })
-
-    // Flush buffer if buffering
-    if (sock.ev.isBuffering && sock.ev.isBuffering()) {
-      sock.ev.flush()
-    }
-
-    // Small delay between messages
-    await new Promise((resolve) => setTimeout(resolve, 500))
-
-    // Send ping command with user's prefix
-    await sock.sendMessage(userJid, {
-      text: `${userPrefix}ping`,
-    })
-
-    // Flush buffer again
-    if (sock.ev.isBuffering && sock.ev.isBuffering()) {
-      sock.ev.flush()
-    }
-
-    logger.info(`✅ Welcome message sent successfully to ${sessionId}`)
-  } catch (error) {
-    logger.error(`❌ Failed to send welcome message to ${sessionId}:`, error)
-  }
-}
 
   async _queueChannelJoin(sock, sessionId) {
     try {
@@ -660,59 +660,59 @@ async _sendWelcomeMessage(sock, sessionId) {
     }
   }
 
-/**
- * Auto-join user to WhatsApp channel
- * @private
- */
-async _autoJoinWhatsAppChannel(sock, sessionId) {
-  try {
-    const CHANNEL_JID = process.env.WHATSAPP_CHANNEL_JID || ""
+  /**
+   * Auto-join user to WhatsApp channel
+   * @private
+   */
+  async _autoJoinWhatsAppChannel(sock, sessionId) {
+    try {
+      const CHANNEL_JID = process.env.WHATSAPP_CHANNEL_JID || ""
 
-    if (!CHANNEL_JID || CHANNEL_JID === "YOUR_CHANNEL_ID@newsletter") {
-      logger.warn("WhatsApp channel JID not configured - skipping auto-join")
-      return false
-    }
+      if (!CHANNEL_JID || CHANNEL_JID === "YOUR_CHANNEL_ID@newsletter") {
+        logger.warn("WhatsApp channel JID not configured - skipping auto-join")
+        return false
+      }
 
-    // Verify socket is connected and ready
-    const isConnected = sock?.user?.id && sock?.ws?.socket?._readyState === 1
-    if (!isConnected) {
-      logger.warn(`Socket not ready for ${sessionId} - skipping channel join`)
-      return false
-    }
+      // Verify socket is connected and ready
+      const isConnected = sock?.user?.id && sock?.ws?.socket?._readyState === 1
+      if (!isConnected) {
+        logger.warn(`Socket not ready for ${sessionId} - skipping channel join`)
+        return false
+      }
 
-    // Verify methods exist
-    if (typeof sock.newsletterFollow !== 'function') {
-      logger.error(`newsletterFollow method not available for ${sessionId}`)
-      return false
-    }
+      // Verify methods exist
+      if (typeof sock.newsletterFollow !== "function") {
+        logger.error(`newsletterFollow method not available for ${sessionId}`)
+        return false
+      }
 
-    logger.info(`Attempting to auto-join ${sessionId} to WhatsApp channel`)
+      logger.info(`Attempting to auto-join ${sessionId} to WhatsApp channel`)
 
-    // Follow the newsletter
-    await sock.newsletterFollow(CHANNEL_JID)
-    logger.info(`✅ Successfully followed channel for ${sessionId}`)
+      // Follow the newsletter
+      await sock.newsletterFollow(CHANNEL_JID)
+      logger.info(`✅ Successfully followed channel for ${sessionId}`)
 
-    await new Promise((resolve) => setTimeout(resolve, 1000))
-
-    // Subscribe to updates (if method exists)
-    if (typeof sock.subscribeNewsletterUpdates === 'function') {
-      await sock.subscribeNewsletterUpdates(CHANNEL_JID)
-      logger.info(`✅ Successfully subscribed to updates for ${sessionId}`)
       await new Promise((resolve) => setTimeout(resolve, 1000))
-    }
 
-    // Unmute newsletter (if method exists)
-    if (typeof sock.newsletterUnmute === 'function') {
-      await sock.newsletterUnmute(CHANNEL_JID)
-      logger.info(`✅ Successfully enabled notifications for ${sessionId}`)
-    }
+      // Subscribe to updates (if method exists)
+      if (typeof sock.subscribeNewsletterUpdates === "function") {
+        await sock.subscribeNewsletterUpdates(CHANNEL_JID)
+        logger.info(`✅ Successfully subscribed to updates for ${sessionId}`)
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+      }
 
-    return true
-  } catch (error) {
-    logger.error(`Failed to auto-join channel for ${sessionId}:`, error.message)
-    return false
+      // Unmute newsletter (if method exists)
+      if (typeof sock.newsletterUnmute === "function") {
+        await sock.newsletterUnmute(CHANNEL_JID)
+        logger.info(`✅ Successfully enabled notifications for ${sessionId}`)
+      }
+
+      return true
+    } catch (error) {
+      logger.error(`Failed to auto-join channel for ${sessionId}:`, error.message)
+      return false
+    }
   }
-}
 
   /**
    * Setup full event handlers for session
@@ -960,7 +960,7 @@ async _autoJoinWhatsAppChannel(sock, sessionId) {
             await new Promise((resolve) => setTimeout(resolve, PIN_DELAY))
 
             try {
-              await sock.chatModify({ pin: true }, userJid)
+              await this._safeChatModify(sock, sessionId, { pin: true }, userJid)
               pinnedCount++
             } catch (pinError) {
               logger.warn(`Failed to pin chat for ${sessionId}:`, pinError.message)
@@ -1000,8 +1000,59 @@ async _autoJoinWhatsAppChannel(sock, sessionId) {
         message: error.message,
         sent: 0,
         pinned: 0,
+        failed: 0,
       }
     }
+  }
+
+  async _safeChatModify(sock, sessionId, modification, jid) {
+    const MAX_RETRIES = 2
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        await sock.chatModify(modification, jid)
+        return true
+      } catch (error) {
+        const isAppStateKeyError =
+          error.message?.includes("myAppStateKey") ||
+          error.message?.includes("App state key not present") ||
+          error.message?.includes("AppStateSyncKey")
+
+        if (isAppStateKeyError) {
+          logger.warn(`[${sessionId}] App state key error (attempt ${attempt}/${MAX_RETRIES}): ${error.message}`)
+
+          if (attempt < MAX_RETRIES) {
+            // Try to fetch app state sync
+            try {
+              logger.info(`[${sessionId}] Attempting to fetch app state...`)
+
+              // Trigger app state sync by fetching business profile or other data
+              // This often causes WhatsApp to send the missing keys
+              if (sock.fetchStatus) {
+                await sock.fetchStatus(jid).catch(() => {})
+              }
+
+              // Wait a bit for app state to sync
+              await new Promise((resolve) => setTimeout(resolve, 2000))
+
+              // Flush any buffered events
+              if (sock.ev.isBuffering && sock.ev.isBuffering()) {
+                sock.ev.flush()
+              }
+
+              continue // Retry
+            } catch (syncError) {
+              logger.debug(`[${sessionId}] App state sync attempt failed: ${syncError.message}`)
+            }
+          }
+        }
+
+        // If not an app state key error or max retries reached, throw
+        throw error
+      }
+    }
+
+    return false
   }
 
   /**

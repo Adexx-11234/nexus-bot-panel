@@ -5,15 +5,15 @@ export default {
   description: "Join a WhatsApp group using invite link",
   usage: "join <group_invite_link>",
   cooldown: 10,
-  permissions: ["owner"],
+  permissions: {
+    ownerOnly: true, // Only bot owner can use (overrides everything)
+  },
 
-  async execute(sock, m, { args, isCreator }) {
-    if (!isCreator) {
-      return m.reply(`❌ This command is only for bot owners!` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`)
-    }
-
+  async execute(sock, m, { args }) {
     if (!args.length) {
-      return m.reply(`❌ Please provide a group invite link!\n\nExample: .join https://chat.whatsapp.com/...` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`)
+      return m.reply(
+        `❌ Please provide a group invite link!\n\nExample: .join https://chat.whatsapp.com/...` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+      )
     }
 
     const link = args[0]

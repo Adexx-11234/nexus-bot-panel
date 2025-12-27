@@ -1,38 +1,18 @@
-import { VIPQueries } from "../../database/query.js"
-import { VIPHelper } from "../../whatsapp/index.js"
 import { getSessionManager } from "../../whatsapp/index.js"
 
 export default {
   name: "connectedusers",
   commands: ["connectedusers", "connected", "activesessions"],
   description: "View all currently connected users (Default VIP only)",
-  adminOnly: true,
+permissions: {
+  defaultVipOnly: true,
+  privateOnly: true
+},
+
   usage: ".connectedusers - Display all connected users\n.connectedusers cleanup - Clean up stale sessions",
   
   async execute(sock, sessionId, args, m) {
     try {
-      // Get user telegram ID from session
-      const userTelegramId = VIPHelper.fromSessionId(sessionId)
-      
-      if (!userTelegramId) {
-        await sock.sendMessage(m.chat, { 
-          text: "❌ Could not identify your session\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" 
-        }, { quoted: m })
-        return { success: false, error: "Session not identified" }
-      }
-
-      // Check if user is default VIP
-      const vipStatus = await VIPQueries.isVIP(userTelegramId)
-      
-      if (!vipStatus.isDefault && vipStatus.level !== 99) {
-        await sock.sendMessage(m.chat, { 
-          text: "❌ *Access Denied*\n\n" +
-            "This command is restricted to Default VIP only.\n" +
-            "Only the bot administrator can view connected users.\n\n" +
-            "> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
-        }, { quoted: m })
-        return { success: false, error: "Not default VIP" }
-      }
 
       // Check for cleanup command
       if (args[0]?.toLowerCase() === 'cleanup') {

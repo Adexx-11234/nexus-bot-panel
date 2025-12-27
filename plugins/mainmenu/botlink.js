@@ -13,7 +13,8 @@ export default {
   description: "Get bot connection links and information",
   commands: ["botlink", "connect", "botinfo", "repo", "getbot"],
   category: "mainmenu",
-  adminOnly: false,
+  permissions: {
+},
   usage:
     "• `.botlink` - Show bot connection links\n• `.connect` - Alias for botlink\n• `.botinfo` - Alias for botlink",
 

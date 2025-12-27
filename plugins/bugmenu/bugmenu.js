@@ -8,6 +8,12 @@ export default {
   adminOnly: false,
   category: "bugmenu",
   
+    permissions: {
+  ownerOnly: true,          // Only bot owner can use (overrides everything)
+  privateOnly: true         // Can only be used in private chats
+},          // Only bot owner can use (overrides everything)
+
+  
   async execute(sock, sessionId, args, m) {
     try {
       /* VIP CHECK - COMMENTED OUT

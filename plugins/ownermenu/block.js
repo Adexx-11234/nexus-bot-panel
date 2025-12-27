@@ -3,7 +3,10 @@ export default {
   description: "Block a user from contacting the bot",
   commands: ["block", "blokir", "blockuser"],
   category: "ownermenu",
-  ownerOnly: true,
+    permissions: {
+  ownerOnly: true,          // Only bot owner can use (overrides everything)
+  privateOnly: true         // Can only be used in private chats
+},
   usage: "• `.block` - Block current chat\n• `.block <number>` - Block specific number\n• Reply to user and type `.block`",
   
   async execute(sock, sessionId, args, m) {

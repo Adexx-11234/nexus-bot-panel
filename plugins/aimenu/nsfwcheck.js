@@ -9,7 +9,9 @@ export default {
   description: "Check if an image contains NSFW content",
   category: "ai",
   usage: "• .nsfwcheck - Reply to an image to check\n• Send image with caption: .nsfwcheck",
-  
+  permissions: {
+    // All false = public command, no restrictions
+  },
   async execute(sock, sessionId, args, m) {
     try {
       let imageUrl = null;

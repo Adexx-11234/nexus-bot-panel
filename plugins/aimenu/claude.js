@@ -8,7 +8,9 @@ export default {
   description: "Chat with Claude AI model",
   category: "ai",
   usage: "• .claude <question> - Ask Claude AI anything\n• .anthropic <question> - Alternative command",
-  
+  permissions: {
+    // All false = public command, no restrictions
+  },
   async execute(sock, sessionId, args, m) {
     try {
       // Validate input

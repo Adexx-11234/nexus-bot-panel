@@ -1,6 +1,5 @@
 import { createComponentLogger } from "../../utils/logger.js"
 import { GroupQueries, WarningQueries, ViolationQueries } from "../../database/query.js"
-import AdminChecker from "../../whatsapp/utils/admin-checker.js"
 
 const logger = createComponentLogger("ANTI-TAG-ADMIN")
 
@@ -8,28 +7,27 @@ export default {
   name: "Anti-Tag-Admin",
   description: "Prevent non-admins from tagging admins excessively",
   commands: ["antitagadmin"],
-  category: "group",
-  adminOnly: true,
+  category: "groupmenu",
+  
+  // ✅ Permissions control BOTH command execution AND anti-plugin behavior
+  permissions: {
+    adminRequired: true,      // Non-admins get processed, admins bypass
+    botAdminRequired: true,   // Bot needs admin to delete/kick
+    groupOnly: true,          // Only works in groups
+  },
+  
   usage:
-    "• `.antitagadmin on` - Enable admin tag protection\n• `.antitagadmin off` - Disable protection\n• `.antitagadmin status` - Check protection status",
+    "• `.antitagadmin on` - Enable admin tag protection\n" +
+    "• `.antitagadmin off` - Disable protection\n" +
+    "• `.antitagadmin status` - Check protection status",
 
+  // ========================================
+  // COMMAND EXECUTION
+  // ========================================
   async execute(sock, sessionId, args, m) {
     const action = args[0]?.toLowerCase()
     const groupJid = m.chat
 
-    if (!m.isGroup) {
-      await sock.sendMessage(groupJid, {
-        text: "❌ This command can only be used in groups!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
-      }, { quoted: m })
-      return
-    }
-
-      // Check if user is admin
-      const adminChecker = new AdminChecker()
-      const isAdmin = await adminChecker.isGroupAdmin(sock, groupJid, m.sender)
-      if (!isAdmin) {
-        return { response: "❌ Only group admins can use this command!" }
-      }
     try {
       switch (action) {
         case "on":
@@ -38,9 +36,8 @@ export default {
             text: "👑 *Anti-admin-tag protection enabled!*\n\n" +
               "✅ Tagging admins excessively will be prevented\n" +
               "⚠️ Users get warnings for tagging admins without reason\n" +
-              "🔒 Admins are protected from unnecessary mentions" + `
-
-> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
+              "🔒 Admins are protected from unnecessary mentions\n\n" +
+              "> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
           }, { quoted: m })
           break
 
@@ -54,11 +51,7 @@ export default {
         case "status":
           const status = await GroupQueries.isAntiCommandEnabled(groupJid, "antitagadmin")
           await sock.sendMessage(groupJid, {
-            text: `👑 *Anti-Admin-Tag Status*\n\nStatus: ${status ? "✅ Enabled" : "❌ Disabled"}
-
-` + `
-
-> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
+            text: `👑 *Anti-Admin-Tag Status*\n\nStatus: ${status ? "✅ Enabled" : "❌ Disabled"}\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
           }, { quoted: m })
           break
 
@@ -83,6 +76,11 @@ export default {
     }
   },
 
+  // ========================================
+  // ANTI-PLUGIN PROCESSING
+  // ✅ NO ADMIN CHECKS - Plugin loader handles it!
+  // ========================================
+  
   async isEnabled(groupJid) {
     try {
       return await GroupQueries.isAntiCommandEnabled(groupJid, "antitagadmin")
@@ -93,28 +91,27 @@ export default {
   },
 
   async shouldProcess(m) {
+    // ✅ NO ADMIN CHECKS - Plugin loader handles permission filtering
+    // Only basic message filtering here
+    
     if (!m.isGroup || !m.text) return false
-    if (m.isCommand) return false
-    if (m.key?.fromMe) return false
+    if (m.isCommand) return false  // Don't process commands
+    if (m.key?.fromMe) return false  // Don't process bot's own messages
     
-    const adminChecker = new AdminChecker()
-    const isAdmin = await adminChecker.isGroupAdmin(sock, m.chat, m.sender)
-    if (isAdmin) return false
+    // Check if message has mentions (basic check)
+    const hasMentions = m.message?.extendedTextMessage?.contextInfo?.mentionedJid?.length > 0
+    if (!hasMentions) return false
     
-    return this.hasAdminMentions(sock, m)
+    return true
   },
 
   async processMessage(sock, sessionId, m) {
+    // ✅ NO ADMIN CHECKS - Plugin loader already filtered:
+    //    - Non-admins only (admins were skipped)
+    //    - Bot is admin (messages were skipped if bot isn't admin)
+    //    - In a group (messages were skipped if not in group)
+    
     try {
-      await this.handleAdminTagDetection(sock, sessionId, m)
-    } catch (error) {
-      logger.error("Error processing antitagadmin message:", error)
-    }
-  },
-
-  async handleAdminTagDetection(sock, sessionId, m) {
-    try {
-      const adminChecker = new AdminChecker()
       const groupJid = m.chat
       
       if (!groupJid) {
@@ -122,20 +119,11 @@ export default {
         return
       }
 
-      const botIsAdmin = await adminChecker.isBotAdmin(sock, groupJid)
-      if (!botIsAdmin) {
-        try {
-          await sock.sendMessage(groupJid, {
-            text: "👑 Admin tagging detected but bot lacks admin permissions to take action.\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
-          })
-        } catch (error) {
-          logger.error("Failed to send no-permission message:", error)
-        }
-        return
-      }
-
+      // Get mentioned admins
       const mentionedAdmins = await this.getMentionedAdmins(sock, m)
-      if (mentionedAdmins.length === 0) return
+      if (mentionedAdmins.length === 0) {
+        return // No admins mentioned, nothing to do
+      }
 
       const messageInfo = {
         sender: m.sender,
@@ -144,6 +132,7 @@ export default {
         mentionedAdmins: mentionedAdmins
       }
 
+      // Add warning
       let warnings
       try {
         warnings = await WarningQueries.addWarning(
@@ -157,12 +146,12 @@ export default {
         warnings = 1
       }
 
+      // Delete the message
       try {
         await sock.sendMessage(groupJid, { delete: m.key })
         m._wasDeletedByAntiPlugin = true
       } catch (error) {
         logger.error("Failed to delete message:", error)
-        m._wasDeletedByAntiPlugin = true
       }
 
       await new Promise(resolve => setTimeout(resolve, 800))
@@ -173,6 +162,7 @@ export default {
         `🔖 Tagged ${mentionedAdmins.length} admin(s)\n` +
         `⚠️ Warning: ${warnings}/4`
 
+      // Kick if reached limit
       if (warnings >= 4) {
         try {
           await sock.groupParticipantsUpdate(groupJid, [messageInfo.sender], "remove")
@@ -188,6 +178,7 @@ export default {
 
       response += `\n\n💡 *Note:* Only tag admins for important matters.`
 
+      // Send warning message
       try {
         await sock.sendMessage(groupJid, {
           text: response,
@@ -197,6 +188,7 @@ export default {
         logger.error("Failed to send warning message:", error)
       }
 
+      // Log violation
       try {
         await ViolationQueries.logViolation(
           groupJid,
@@ -213,34 +205,41 @@ export default {
       }
       
     } catch (error) {
-      logger.error("Error handling admin tag detection:", error)
+      logger.error("Error processing antitagadmin message:", error)
     }
   },
 
-  async hasAdminMentions(sock, m) {
-    const mentionedAdmins = await this.getMentionedAdmins(sock, m)
-    return mentionedAdmins.length > 0
-  },
-
+  // ========================================
+  // HELPER METHODS
+  // ✅ Only needs to identify admins, not check sender
+  // ========================================
+  
   async getMentionedAdmins(sock, m) {
     if (!m.message) return []
     
-    const adminChecker = new AdminChecker()
     const groupJid = m.chat
     let mentionedJids = []
     
-    // Get mentioned jids from message
-    if (m.message.extendedTextMessage && 
-        m.message.extendedTextMessage.contextInfo && 
-        m.message.extendedTextMessage.contextInfo.mentionedJid) {
+    // Extract mentioned JIDs from message
+    if (m.message.extendedTextMessage?.contextInfo?.mentionedJid) {
       mentionedJids = m.message.extendedTextMessage.contextInfo.mentionedJid
     }
     
-    // Check which mentioned users are admins
+    if (mentionedJids.length === 0) return []
+    
+    // ✅ We still need to check WHO is an admin (to know if they tagged admins)
+    // But we DON'T check if the SENDER is admin (plugin loader does that)
+    const { isGroupAdmin } = await import("../../whatsapp/groups/index.js")
+    
     const mentionedAdmins = []
     for (const jid of mentionedJids) {
-      if (await adminChecker.isGroupAdmin(sock, groupJid, jid)) {
-        mentionedAdmins.push(jid)
+      try {
+        const isAdmin = await isGroupAdmin(sock, groupJid, jid)
+        if (isAdmin) {
+          mentionedAdmins.push(jid)
+        }
+      } catch (error) {
+        logger.error(`Error checking if ${jid} is admin:`, error)
       }
     }
     

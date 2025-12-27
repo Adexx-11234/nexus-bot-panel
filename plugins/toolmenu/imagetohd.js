@@ -6,6 +6,9 @@ export default {
   commands: ["hd", "imagehd", "tohd", "enhancehd"],
   description: "Enhance image quality to HD",
   category: "toolmenu",
+  permissions: {
+
+},
   usage: "• .hd <image_url> - Enhance image to HD\n• .hd <reply to image> - Enhance replied image\n• Send image with caption: .hd",
   
   async execute(sock, sessionId, args, m) {

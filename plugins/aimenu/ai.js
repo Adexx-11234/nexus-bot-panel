@@ -6,8 +6,13 @@ export default {
   name: "ai",
   commands: ["ai", "gemini", "ask"],
   description: "Chat with Gemini AI (main AI assistant)",
-  category: "ai",
+  category: "aimenu", // Changed from "ai" to match menu system
   usage: "• .ai <question> - Ask Gemini AI anything\n• .ask <question> - Alternative command",
+  
+  // ✅ FIXED: Universal access - anyone can use
+  permissions: {
+    // All false = public command, no restrictions
+  },
   
   async execute(sock, sessionId, args, m) {
     try {

@@ -19,11 +19,7 @@ const CONFIG = {
 // ✅ Sanitize filename (replaces :: with __, : with -)
 const sanitizeFileName = (fileName) => {
   if (!fileName) return fileName
-  return fileName
-    .replace(/::/g, '__')
-    .replace(/:/g, '-')
-    .replace(/\//g, '_')
-    .replace(/\\/g, '_')
+  return fileName.replace(/::/g, "__").replace(/:/g, "-").replace(/\//g, "_").replace(/\\/g, "_")
 }
 
 export class MongoDBStorage {
@@ -39,20 +35,20 @@ export class MongoDBStorage {
     this.reconnectAttempts = 0
     this.shutdownRequested = false
 
-    const storageMode = process.env.STORAGE_MODE || 'mongodb'
-    
+    const storageMode = process.env.STORAGE_MODE || "mongodb"
+
     this._initConnection()
     this._startHealthCheck()
-    
-    if (storageMode === 'mongodb') {
-      logger.info('📦 MongoDB PRIMARY - metadata + auth storage')
+
+    if (storageMode === "mongodb") {
+      logger.info("📦 MongoDB PRIMARY - metadata + auth storage")
     } else {
-      logger.info('📁 MongoDB SECONDARY - web detection + auth backup')
+      logger.info("📁 MongoDB SECONDARY - web detection + auth backup")
     }
   }
 
   // ==================== CONNECTION MANAGEMENT ====================
-  
+
   async _initConnection() {
     if (this.isConnecting || this.shutdownRequested) return
     this.isConnecting = true
@@ -77,30 +73,27 @@ export class MongoDBStorage {
 
       await Promise.race([
         this.client.connect(),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('timeout')), CONFIG.CONNECTION_TIMEOUT)
-        ),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), CONFIG.CONNECTION_TIMEOUT)),
       ])
 
-      await this.client.db('admin').command({ ping: 1 })
+      await this.client.db("admin").command({ ping: 1 })
 
       this.db = this.client.db()
-      this.sessions = this.db.collection('sessions')
-      this.authBaileys = this.db.collection('auth_baileys')
+      this.sessions = this.db.collection("sessions")
+      this.authBaileys = this.db.collection("auth_baileys")
 
       await this._createIndexes()
 
       this.isConnected = true
       this.isConnecting = false
       this.reconnectAttempts = 0
-      
-      logger.info('✅ MongoDB connected successfully')
+
+      logger.info("✅ MongoDB connected successfully")
 
       if (this.reconnectTimer) {
         clearTimeout(this.reconnectTimer)
         this.reconnectTimer = null
       }
-
     } catch (error) {
       this.isConnected = false
       this.isConnecting = false
@@ -127,12 +120,9 @@ export class MongoDBStorage {
   _scheduleReconnect() {
     if (this.reconnectTimer || this.shutdownRequested) return
 
-    const delay = Math.min(
-      CONFIG.RECONNECT_DELAY * Math.pow(2, this.reconnectAttempts),
-      CONFIG.RECONNECT_DELAY * 16
-    )
+    const delay = Math.min(CONFIG.RECONNECT_DELAY * Math.pow(2, this.reconnectAttempts), CONFIG.RECONNECT_DELAY * 16)
 
-    logger.info(`Reconnecting in ${delay/1000}s...`)
+    logger.info(`Reconnecting in ${delay / 1000}s...`)
 
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
@@ -147,11 +137,11 @@ export class MongoDBStorage {
       if (this.isConnected && this.client) {
         try {
           await Promise.race([
-            this.client.db('admin').command({ ping: 1 }),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
+            this.client.db("admin").command({ ping: 1 }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 5000)),
           ])
         } catch (error) {
-          logger.warn('MongoDB health check failed - reconnecting...')
+          logger.warn("MongoDB health check failed - reconnecting...")
           this.isConnected = false
           this._scheduleReconnect()
         }
@@ -178,9 +168,9 @@ export class MongoDBStorage {
       await this.authBaileys.createIndex({ sessionId: 1, filename: 1 }, { unique: true })
       await this.authBaileys.createIndex({ sessionId: 1 })
 
-      logger.debug('MongoDB indexes created')
+      logger.debug("MongoDB indexes created")
     } catch (error) {
-      if (!error.message.includes('already exists')) {
+      if (!error.message.includes("already exists")) {
         logger.debug(`Index creation: ${error.message}`)
       }
     }
@@ -198,20 +188,16 @@ export class MongoDBStorage {
         userId: sessionData.userId || sessionData.telegramId,
         phoneNumber: sessionData.phoneNumber,
         isConnected: sessionData.isConnected !== undefined ? sessionData.isConnected : false,
-        connectionStatus: sessionData.connectionStatus || 'disconnected',
+        connectionStatus: sessionData.connectionStatus || "disconnected",
         reconnectAttempts: sessionData.reconnectAttempts || 0,
-        source: sessionData.source || 'telegram',
+        source: sessionData.source || "telegram",
         detected: sessionData.detected !== false,
         detectedAt: sessionData.detectedAt || (sessionData.detected ? new Date() : null),
         createdAt: sessionData.createdAt || new Date(),
         updatedAt: new Date(),
       }
 
-      const result = await this.sessions.replaceOne(
-        { sessionId },
-        document,
-        { upsert: true }
-      )
+      const result = await this.sessions.replaceOne({ sessionId }, document, { upsert: true })
 
       if (result.acknowledged) {
         logger.debug(`✅ Saved session metadata: ${sessionId}`)
@@ -239,7 +225,7 @@ export class MongoDBStorage {
         isConnected: session.isConnected,
         connectionStatus: session.connectionStatus,
         reconnectAttempts: session.reconnectAttempts,
-        source: session.source || 'telegram',
+        source: session.source || "telegram",
         detected: session.detected !== false,
         detectedAt: session.detectedAt,
         createdAt: session.createdAt,
@@ -255,9 +241,9 @@ export class MongoDBStorage {
     if (!this.isConnected || !this.sessions) return false
 
     try {
-      const updateDoc = { 
-        ...updates, 
-        updatedAt: new Date() 
+      const updateDoc = {
+        ...updates,
+        updatedAt: new Date(),
       }
 
       // If marking as detected, set timestamp
@@ -265,10 +251,7 @@ export class MongoDBStorage {
         updateDoc.detectedAt = new Date()
       }
 
-      const result = await this.sessions.updateOne(
-        { sessionId },
-        { $set: updateDoc }
-      )
+      const result = await this.sessions.updateOne({ sessionId }, { $set: updateDoc })
 
       if (result.acknowledged && result.modifiedCount > 0) {
         logger.debug(`✅ Updated session: ${sessionId}`)
@@ -286,7 +269,7 @@ export class MongoDBStorage {
 
     try {
       const result = await this.sessions.deleteOne({ sessionId })
-      
+
       if (result.deletedCount > 0) {
         logger.info(`✅ Deleted session metadata: ${sessionId}`)
       }
@@ -302,13 +285,9 @@ export class MongoDBStorage {
     if (!this.isConnected || !this.sessions) return []
 
     try {
-      const sessions = await this.sessions
-        .find({})
-        .sort({ updatedAt: -1 })
-        .limit(1000)
-        .toArray()
+      const sessions = await this.sessions.find({}).sort({ updatedAt: -1 }).limit(1000).toArray()
 
-      return sessions.map(s => ({
+      return sessions.map((s) => ({
         sessionId: s.sessionId,
         userId: s.telegramId || s.userId,
         telegramId: s.telegramId || s.userId,
@@ -316,7 +295,7 @@ export class MongoDBStorage {
         isConnected: s.isConnected,
         connectionStatus: s.connectionStatus,
         reconnectAttempts: s.reconnectAttempts,
-        source: s.source || 'telegram',
+        source: s.source || "telegram",
         detected: s.detected !== false,
         detectedAt: s.detectedAt,
         createdAt: s.createdAt,
@@ -332,7 +311,7 @@ export class MongoDBStorage {
 
   async getUndetectedWebSessions() {
     if (!this.isConnected || !this.sessions) {
-      logger.debug('MongoDB not connected - cannot get undetected web sessions')
+      logger.debug("MongoDB not connected - cannot get undetected web sessions")
       return []
     }
 
@@ -340,8 +319,8 @@ export class MongoDBStorage {
       // Find web sessions that are connected but not detected
       const sessions = await this.sessions
         .find({
-          source: 'web',
-          connectionStatus: 'connected',
+          source: "web",
+          connectionStatus: "connected",
           isConnected: true,
           detected: { $ne: true },
         })
@@ -351,7 +330,7 @@ export class MongoDBStorage {
 
       // Filter sessions that are old enough (5+ seconds)
       const now = Date.now()
-      const readySessions = sessions.filter(s => {
+      const readySessions = sessions.filter((s) => {
         const age = now - new Date(s.updatedAt).getTime()
         return age >= 5000
       })
@@ -360,7 +339,7 @@ export class MongoDBStorage {
         logger.info(`🔍 Found ${readySessions.length} undetected web sessions`)
       }
 
-      return readySessions.map(s => ({
+      return readySessions.map((s) => ({
         sessionId: s.sessionId,
         userId: s.telegramId || s.userId,
         telegramId: s.telegramId || s.userId,
@@ -384,13 +363,13 @@ export class MongoDBStorage {
 
     try {
       const sanitized = sanitizeFileName(fileName)
-      
+
       const result = await this.authBaileys.findOne(
-        { 
+        {
           sessionId,
-          filename: sanitized
+          filename: sanitized,
         },
-        { projection: { datajson: 1 } }
+        { projection: { datajson: 1 } },
       )
 
       if (result?.datajson) {
@@ -410,11 +389,11 @@ export class MongoDBStorage {
 
     try {
       const sanitized = sanitizeFileName(fileName)
-      
+
       const result = await this.authBaileys.updateOne(
-        { 
+        {
           sessionId,
-          filename: sanitized
+          filename: sanitized,
         },
         {
           $set: {
@@ -424,7 +403,7 @@ export class MongoDBStorage {
             updatedAt: new Date(),
           },
         },
-        { upsert: true }
+        { upsert: true },
       )
 
       if (result.acknowledged) {
@@ -443,7 +422,7 @@ export class MongoDBStorage {
 
     try {
       const sanitized = sanitizeFileName(fileName)
-      
+
       const result = await this.authBaileys.deleteOne({
         sessionId,
         filename: sanitized,
@@ -461,7 +440,7 @@ export class MongoDBStorage {
 
     try {
       const result = await this.authBaileys.deleteMany({ sessionId })
-      
+
       if (result.deletedCount > 0) {
         logger.info(`✅ Deleted ${result.deletedCount} auth docs: ${sessionId}`)
       }
@@ -477,12 +456,9 @@ export class MongoDBStorage {
     if (!this.isConnected || !this.authBaileys) return []
 
     try {
-      const files = await this.authBaileys
-        .find({ sessionId })
-        .project({ filename: 1 })
-        .toArray()
+      const files = await this.authBaileys.find({ sessionId }).project({ filename: 1 }).toArray()
 
-      return files.map(f => f.filename)
+      return files.map((f) => f.filename)
     } catch (error) {
       logger.error(`Failed to get auth files for ${sessionId}: ${error.message}`)
       return []
@@ -495,14 +471,12 @@ export class MongoDBStorage {
     try {
       const creds = await this.authBaileys.findOne({
         sessionId,
-        filename: 'creds.json'
+        filename: "creds.json",
       })
 
       if (!creds?.datajson) return false
 
-      const parsed = typeof creds.datajson === 'string' 
-        ? JSON.parse(creds.datajson) 
-        : creds.datajson
+      const parsed = typeof creds.datajson === "string" ? JSON.parse(creds.datajson) : creds.datajson
 
       return !!(parsed?.noiseKey && parsed?.signedIdentityKey)
     } catch (error) {
@@ -511,7 +485,44 @@ export class MongoDBStorage {
     }
   }
 
-  // ==================== COMPLETE CLEANUP ====================
+  // ==================== ORPHAN DETECTION ====================
+
+  async findOrphanedSessions() {
+    if (!this.isConnected || !this.sessions || !this.authBaileys) return []
+
+    try {
+      const allSessions = await this.sessions.find({}).toArray()
+      const orphans = []
+
+      for (const session of allSessions) {
+        const age = Date.now() - new Date(session.updatedAt || session.createdAt).getTime()
+
+        // Skip recently created sessions (3 minute grace period)
+        if (age < 180000) continue
+
+        // Check if has auth data
+        const hasAuth = await this.authBaileys.findOne({
+          sessionId: session.sessionId,
+          filename: "creds.json",
+        })
+
+        if (!hasAuth) {
+          orphans.push(session.sessionId)
+        }
+      }
+
+      if (orphans.length > 0) {
+        logger.info(`Found ${orphans.length} orphaned sessions in MongoDB`)
+      }
+
+      return orphans
+    } catch (error) {
+      logger.error(`Failed to find orphaned sessions: ${error.message}`)
+      return []
+    }
+  }
+
+  // ==================== CLEANUP ====================
 
   async completeCleanup(sessionId) {
     if (!this.isConnected) return { metadata: false, auth: false }
@@ -545,40 +556,89 @@ export class MongoDBStorage {
     }
   }
 
-  // ==================== ORPHAN DETECTION ====================
+  // ==================== PRE-KEY OPERATIONS ====================
 
-  async findOrphanedSessions() {
-    if (!this.isConnected || !this.sessions || !this.authBaileys) return []
+  async deleteOldPreKeys(sessionId, maxToKeep = 500) {
+    if (!this.isConnected || !this.authBaileys) return { deleted: 0 }
 
     try {
-      const allSessions = await this.sessions.find({}).toArray()
-      const orphans = []
-
-      for (const session of allSessions) {
-        const age = Date.now() - new Date(session.updatedAt || session.createdAt).getTime()
-        
-        // Skip recently created sessions (3 minute grace period)
-        if (age < 180000) continue
-
-        // Check if has auth data
-        const hasAuth = await this.authBaileys.findOne({
-          sessionId: session.sessionId,
-          filename: 'creds.json'
+      // Find all pre-key files for this session
+      const preKeyFiles = await this.authBaileys
+        .find({
+          sessionId,
+          filename: { $regex: /^pre-?key/i },
         })
+        .project({ filename: 1, updatedAt: 1 })
+        .sort({ updatedAt: 1 }) // Oldest first
+        .toArray()
 
-        if (!hasAuth) {
-          orphans.push(session.sessionId)
-        }
+      if (preKeyFiles.length <= maxToKeep) {
+        return { deleted: 0, total: preKeyFiles.length }
       }
 
-      if (orphans.length > 0) {
-        logger.info(`Found ${orphans.length} orphaned sessions in MongoDB`)
+      const toDeleteCount = preKeyFiles.length - maxToKeep
+      const toDelete = preKeyFiles.slice(0, toDeleteCount).map((f) => f.filename)
+
+      const result = await this.authBaileys.deleteMany({
+        sessionId,
+        filename: { $in: toDelete },
+      })
+
+      if (result.deletedCount > 0) {
+        logger.info(`✅ Deleted ${result.deletedCount} old pre-keys for ${sessionId}`)
       }
 
-      return orphans
+      return { deleted: result.deletedCount, total: preKeyFiles.length }
     } catch (error) {
-      logger.error(`Failed to find orphaned sessions: ${error.message}`)
-      return []
+      logger.error(`Failed to delete old pre-keys for ${sessionId}: ${error.message}`)
+      return { deleted: 0, error: error.message }
+    }
+  }
+
+  async getPreKeyCount(sessionId) {
+    if (!this.isConnected || !this.authBaileys) return 0
+
+    try {
+      return await this.authBaileys.countDocuments({
+        sessionId,
+        filename: { $regex: /^pre-?key/i },
+      })
+    } catch (error) {
+      logger.debug(`Failed to count pre-keys for ${sessionId}: ${error.message}`)
+      return 0
+    }
+  }
+
+  async cleanupAllPreKeys(maxToKeep = 500, threshold = 300) {
+    if (!this.isConnected || !this.authBaileys) return { sessions: 0, deleted: 0 }
+
+    try {
+      // Get unique session IDs with pre-key count
+      const sessionsWithPreKeys = await this.authBaileys
+        .aggregate([
+          { $match: { filename: { $regex: /^pre-?key/i } } },
+          { $group: { _id: "$sessionId", count: { $sum: 1 } } },
+          { $match: { count: { $gt: threshold } } },
+        ])
+        .toArray()
+
+      let totalDeleted = 0
+      let sessionsProcessed = 0
+
+      for (const session of sessionsWithPreKeys) {
+        const result = await this.deleteOldPreKeys(session._id, maxToKeep)
+        totalDeleted += result.deleted || 0
+        sessionsProcessed++
+      }
+
+      if (totalDeleted > 0) {
+        logger.info(`✅ Bulk pre-key cleanup: ${totalDeleted} deleted across ${sessionsProcessed} sessions`)
+      }
+
+      return { sessions: sessionsProcessed, deleted: totalDeleted }
+    } catch (error) {
+      logger.error(`Bulk pre-key cleanup failed: ${error.message}`)
+      return { sessions: 0, deleted: 0, error: error.message }
     }
   }
 
@@ -600,7 +660,7 @@ export class MongoDBStorage {
     if (this.client && this.isConnected) {
       try {
         await this.client.close(true)
-        logger.info('✅ MongoDB connection closed')
+        logger.info("✅ MongoDB connection closed")
       } catch (error) {
         logger.error(`MongoDB close error: ${error.message}`)
       }

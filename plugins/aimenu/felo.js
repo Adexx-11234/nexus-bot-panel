@@ -8,7 +8,9 @@ export default {
   description: "Research-focused AI with cited sources",
   category: "ai",
   usage: "• .felo <question> - Get researched answers with sources\n• .research <question> - Alternative command",
-  
+  permissions: {
+    // All false = public command, no restrictions
+  },
   async execute(sock, sessionId, args, m) {
     try {
       // Validate input

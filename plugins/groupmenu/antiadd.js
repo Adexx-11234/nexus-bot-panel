@@ -1,6 +1,5 @@
 import { createComponentLogger } from "../../utils/logger.js"
 import { GroupQueries, ViolationQueries } from "../../database/query.js"
-import AdminChecker from "../../whatsapp/utils/admin-checker.js"
 
 const logger = createComponentLogger("ANTI-ADD")
 
@@ -11,25 +10,18 @@ export default {
   name: "Anti-Add",
   description: "Prevent unauthorized member additions to the group",
   commands: ["antiadd"],
-  category: "group", 
-  adminOnly: true,
+  category: "groupmenu", 
+  permissions: {
+  adminRequired: true,      // User must be group admin (only applies in groups)
+  botAdminRequired: true,   // Bot must be group admin (only applies in groups)
+  groupOnly: true,          // Can only be used in groups
+},
   usage:
     "• `.antiadd on` - Enable anti-add protection\n• `.antiadd off` - Disable protection\n• `.antiadd status` - Check protection status",
 
   async execute(sock, sessionId, args, m) {
     const action = args[0]?.toLowerCase()
     const groupJid = m.chat
-
-    if (!m.isGroup) {
-      return { response: "❌ This command can only be used in groups!" }
-    }
-
-    // Check if user is admin
-    const adminChecker = new AdminChecker()
-    const isAdmin = await adminChecker.isGroupAdmin(sock, groupJid, m.sender)
-    if (!isAdmin) {
-      return { response: "❌ Only group admins can use this command!" }
-    }
 
     try {
       switch (action) {
@@ -96,7 +88,6 @@ export default {
 
   async handleAddition(sock, sessionId, update) {
     try {
-      const adminChecker = new AdminChecker()
       const groupJid = update.jid
       const addedUser = update.participants[0]
       
@@ -109,10 +100,6 @@ export default {
         logger.warn("Could not determine who performed the addition, skipping anti-add")
         return
       }
-      
-      // Skip if bot is not admin
-      const botIsAdmin = await adminChecker.isBotAdmin(sock, groupJid)
-      if (!botIsAdmin) return
       
       // Get group metadata
       const metadata = await sock.groupMetadata(groupJid)

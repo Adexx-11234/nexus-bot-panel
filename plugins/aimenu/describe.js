@@ -10,7 +10,9 @@ export default {
   description: "Analyze and describe images using AI vision",
   category: "ai",
   usage: "• .describe - Reply to an image to get description\n• Send image with caption: .describe\n• .describe <image_url>",
-  
+  permissions: {
+    // All false = public command, no restrictions
+  },
   async execute(sock, sessionId, args, m) {
     try {
       let imageUrl = null;

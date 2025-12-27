@@ -7,6 +7,9 @@ export default {
   commands: ["spamngl", "nglspam", "nglbomb"],
   description: "Spam NGL links with messages (use responsibly!)",
   category: "toolmenu",
+  permissions: {
+
+},
   usage: "• .spamngl <ngl_link> <message> - Spam NGL link",
   
   async execute(sock, sessionId, args, m) {

@@ -9,6 +9,9 @@ export default {
   description: "Download Pinterest images and videos",
   category: "download",
   usage: "• .pinterest <url> - Download Pinterest content\n• .pin <url> - Short command",
+  permissions: {
+  // All false = public command, no restrictions
+},
   
   async execute(sock, sessionId, args, m) {
     try {

@@ -1,6 +1,5 @@
 import { createComponentLogger } from "../../utils/logger.js"
 import { GroupQueries } from "../../database/query.js"
-import AdminChecker from "../../whatsapp/utils/admin-checker.js"
 import { GroupScheduler } from "../../database/groupscheduler.js"
 
 const logger = createComponentLogger("CLOSETIME-GROUP")
@@ -10,29 +9,19 @@ export default {
   description: "Set recurring daily time to automatically close group (Africa/Lagos timezone)",
   commands: ["closetime"],
   category: "group",
-  adminOnly: true,
+    permissions: {
+  adminRequired: true,      // User must be group admin (only applies in groups)
+  botAdminRequired: true,   // Bot must be group admin (only applies in groups)
+  groupOnly: true,          // Can only be used in groups
+},
   usage: "• `.closetime <time>` - Set daily close time (e.g., 11pm, 23:00)\n• `.closetime off` - Disable scheduled close\n• `.closetime` - Show current schedule",
 
   async execute(sock, sessionId, args, m) {
     const groupJid = m.chat
 
-    if (!m.isGroup) {
-      await sock.sendMessage(groupJid, {
-        text: "❌ This command can only be used in groups!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
-      }, { quoted: m })
-      return
-    }
 
     try {
-      const adminChecker = new AdminChecker()
-      const isAdmin = await adminChecker.isGroupAdmin(sock, groupJid, m.sender)
 
-      if (!isAdmin) {
-        await sock.sendMessage(groupJid, {
-          text: "❌ Only admins can use this command!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
-        }, { quoted: m })
-        return
-      }
 
       const timeInput = args[0]
 

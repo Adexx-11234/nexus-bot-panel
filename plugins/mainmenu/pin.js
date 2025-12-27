@@ -8,6 +8,9 @@ export default {
   description: "Pin a message in the chat",
   commands: ["pin"],
   category: "mainmenu",
+  permissions: {
+
+},
   usage:
     "• `.pin` (reply to message) - Pin the replied message\n" +
     "• Works in both groups and private chats\n" +

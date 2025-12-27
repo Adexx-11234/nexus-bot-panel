@@ -1,5 +1,4 @@
 import { createComponentLogger } from "../../utils/logger.js"
-import AdminChecker from "../../whatsapp/utils/admin-checker.js"
 
 const logger = createComponentLogger("TAG-ADMIN")
 
@@ -8,18 +7,15 @@ export default {
   description: "Mention all group admins",
   commands: ["tagadmin", "admins", "admin"],
   category: "group",
-  adminOnly: false,
+        permissions: {
+  adminRequired: true,      // User must be group admin (only applies in groups)
+  botAdminRequired: true,   // Bot must be group admin (only applies in groups)
+  groupOnly: true,          // Can only be used in groups
+},
   usage: "• `.tagadmin` - Mention all group admins",
 
   async execute(sock, sessionId, args, m) {
     const groupJid = m.chat
-
-    if (!m.isGroup) {
-      await sock.sendMessage(groupJid, {
-        text: "❌ This command can only be used in groups!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
-      }, { quoted: m })
-      return
-    }
 
     try {
       // Get group metadata

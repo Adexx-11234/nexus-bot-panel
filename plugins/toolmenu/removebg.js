@@ -8,6 +8,9 @@ export default {
   commands: ["removebg", "nobg", "rembg", "bgremove"],
   description: "Remove background from images",
   category: "toolmenu",
+  permissions: {
+
+},
   usage: "• .removebg <image_url> - Remove background from image\n• .removebg - Reply to an image to remove background",
   
   async execute(sock, sessionId, args, m) {

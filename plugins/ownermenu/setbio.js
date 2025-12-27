@@ -5,7 +5,10 @@ export default {
   description: "Change bot's WhatsApp bio/status",
   usage: "setbio <new bio text>",
   cooldown: 10,
-  permissions: ["owner"],
+    permissions: {
+  ownerOnly: true,          // Only bot owner can use (overrides everything)
+  privateOnly: true         // Can only be used in private chats
+},
 
   async execute(sock, m, { args, isCreator }) {
     if (!isCreator) {

@@ -2,16 +2,15 @@ export default {
   name: "promoteall",
   commands: ["promoteall"],
   description: "Promote all group members to admin (Owner only)",
-  adminOnly: true,
+        permissions: {
+  adminRequired: true,      // User must be group admin (only applies in groups)
+  botAdminRequired: true,   // Bot must be group admin (only applies in groups)
+  groupOnly: true,          // Can only be used in groups
+},
 
   async execute(sock, sessionId, args, m) {
     try {
-      // Check if it's a group
-      if (!m.isGroup) {
-        return await sock.sendMessage(m.chat, {
-          text: "❌ This command can only be used in groups!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙",
-        })
-      }
+
 
       // Get group metadata
       const groupMetadata = await sock.groupMetadata(m.chat)

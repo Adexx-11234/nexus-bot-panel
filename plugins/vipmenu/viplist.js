@@ -7,23 +7,12 @@ export default {
   commands: ["viplist", "vipowned", "myusers"],
   category: "vipmenu",
   usage: "• `.viplist` - View all your claimed users",
-
+  permissions: {
+  ownerAndVip: true,
+  privateOnly: true
+},
   async execute(sock, sessionId, args, m) {
     try {
-      const vipTelegramId = VIPHelper.fromSessionId(sessionId)
-      if (!vipTelegramId) {
-        await sock.sendMessage(m.chat, { text: "❌ Could not identify your session\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
-        return
-      }
-
-      const vipStatus = await VIPQueries.isVIP(vipTelegramId)
-      if (!vipStatus.isVIP) {
-        await sock.sendMessage(m.chat, { 
-          text: "❌ You don't have VIP access.\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" 
-        }, { quoted: m })
-        return
-      }
-
       const ownedUsers = await VIPQueries.getOwnedUsers(vipTelegramId)
 
       if (ownedUsers.length === 0) {

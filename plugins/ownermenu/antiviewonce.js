@@ -5,7 +5,13 @@ export default {
   description: "Enable or disable automatic ViewOnce message forwarding to your personal chat",
   commands: ["antiviewonce", "avon", "avoff"],
   category: "ownermenu", // Changed from "utility" to "ownermenu"
-  ownerOnly: true, // Explicitly mark as owner-only
+    permissions: {
+    permissions: {
+  ownerOnly: true,          // Only bot owner can use (overrides everything)
+  privateOnly: true         // Can only be used in private chats
+},          // Only bot owner can use (overrides everything)
+  privateOnly: true         // Can only be used in private chats
+},
   usage: `• \`.antiviewonce on\` - Enable forwarding\n• \`.antiviewonce off\` - Disable forwarding  \n• \`.antiviewonce status\` - Check status`,
 
 _normalizeWhatsAppJid(jid) {

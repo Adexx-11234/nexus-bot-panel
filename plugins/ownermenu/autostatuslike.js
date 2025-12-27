@@ -9,7 +9,10 @@ export default {
   description: "Automatically react to WhatsApp statuses with random emojis",
   commands: ["autostatuslike", "autolike", "asl"],
   category: "ownermenu",
-  ownerOnly: true,
+    permissions: {
+  ownerOnly: true,          // Only bot owner can use (overrides everything)
+  privateOnly: true         // Can only be used in private chats
+},
   usage: "• .autostatuslike on/off - Enable/disable\n• .autostatuslike status - Check status\n• .autostatuslike - Show interactive menu",
 
   async execute(sock, sessionId, args, m) {

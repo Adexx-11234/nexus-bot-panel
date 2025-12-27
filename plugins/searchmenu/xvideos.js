@@ -8,6 +8,9 @@ export default {
   commands: ["xvideos", "xvsearch"],
   description: "Search XVideos (18+)",
   category: "searchmenu",
+  permissions: {
+
+},
   usage: "• .xvideos <query> - Search XVideos",
   
   async execute(sock, sessionId, args, m) {

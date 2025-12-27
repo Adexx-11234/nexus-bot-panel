@@ -2,7 +2,9 @@ export default {
   name: "searchmenu",
   commands: ["searchmenu"],
   description: "Display search and lookup commands menu",
-  adminOnly: false,
+  permissions: {
+
+},
 
   async execute(sock, sessionId, args, m) {
     try {

@@ -1,7 +1,6 @@
 -- ============================================
 -- COMPLETE DATABASE SCHEMA - NEXUS BOT
--- File: 002_complete_schema.sql
--- This is the FULL schema with all tables INCLUDING SPAM TRACKING
+-- Normalized with Separate Warning Settings Table
 -- ============================================
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -97,7 +96,7 @@ CREATE TABLE IF NOT EXISTS vip_activity_log (
 );
 
 -- ============================================
--- GROUPS TABLE
+-- GROUPS TABLE - Simplified Core Settings
 -- ============================================
 CREATE TABLE IF NOT EXISTS groups (
     id BIGSERIAL PRIMARY KEY,
@@ -106,7 +105,7 @@ CREATE TABLE IF NOT EXISTS groups (
     description TEXT,
     telegram_id BIGINT,
     
-    -- Group modes
+    -- Core modes
     grouponly_enabled BOOLEAN DEFAULT FALSE,
     public_mode BOOLEAN DEFAULT TRUE,
     is_closed BOOLEAN DEFAULT FALSE,
@@ -118,7 +117,7 @@ CREATE TABLE IF NOT EXISTS groups (
     auto_schedule_enabled BOOLEAN DEFAULT FALSE,
     timezone VARCHAR(50) DEFAULT 'UTC',
     
-    -- Anti-features
+    -- Anti-features enabled/disabled flags
     antilink_enabled BOOLEAN DEFAULT FALSE,
     anticall_enabled BOOLEAN DEFAULT FALSE,
     antipromote_enabled BOOLEAN DEFAULT FALSE,
@@ -145,13 +144,53 @@ CREATE TABLE IF NOT EXISTS groups (
     autokick_enabled BOOLEAN DEFAULT FALSE,
     welcome_enabled BOOLEAN DEFAULT FALSE,
     goodbye_enabled BOOLEAN DEFAULT FALSE,
-    warning_limit INTEGER DEFAULT 4,
+    tag_limit INTEGER DEFAULT 5,
     
     -- Metadata
     participants_count INTEGER DEFAULT 0,
     is_bot_admin BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================
+-- GROUP WARNING SETTINGS - Separate Table
+-- ============================================
+CREATE TABLE IF NOT EXISTS group_warning_settings (
+    id BIGSERIAL PRIMARY KEY,
+    group_jid VARCHAR(255) NOT NULL,
+    group_name VARCHAR(255),
+    
+    -- Per-command warning limits (0 = instant kick, 1-10 = warnings before kick)
+    antilink_warning_limit INTEGER DEFAULT 4,
+    antispam_warning_limit INTEGER DEFAULT 0,
+    antiremove_warning_limit INTEGER DEFAULT 2,
+    antivirtex_warning_limit INTEGER DEFAULT 1,
+    antitag_warning_limit INTEGER DEFAULT 4,
+    antitagadmin_warning_limit INTEGER DEFAULT 3,
+    antigroupmention_warning_limit INTEGER DEFAULT 3,
+    antiimage_warning_limit INTEGER DEFAULT 5,
+    antivideo_warning_limit INTEGER DEFAULT 5,
+    antiaudio_warning_limit INTEGER DEFAULT 5,
+    antidocument_warning_limit INTEGER DEFAULT 5,
+    antisticker_warning_limit INTEGER DEFAULT 6,
+    antidelete_warning_limit INTEGER DEFAULT 3,
+    antiviewonce_warning_limit INTEGER DEFAULT 3,
+    antiraid_warning_limit INTEGER DEFAULT 0,
+    antibot_warning_limit INTEGER DEFAULT 0,
+    antipromote_warning_limit INTEGER DEFAULT 2,
+    antidemote_warning_limit INTEGER DEFAULT 2,
+    anticall_warning_limit INTEGER DEFAULT 2,
+    antiadd_warning_limit INTEGER DEFAULT 2,
+    
+    -- Manual warning limit (for .warn command)
+    manual_warning_limit INTEGER DEFAULT 4,
+    
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    UNIQUE(group_jid),
+    FOREIGN KEY (group_jid) REFERENCES groups(jid) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS admin_promotions (
@@ -227,54 +266,19 @@ CREATE TABLE IF NOT EXISTS violations (
 );
 
 -- ============================================
--- SPAM TRACKING TABLE (NEW)
+-- GROUP ACTIVITY TABLE
 -- ============================================
-CREATE TABLE IF NOT EXISTS spam_tracking (
-    id BIGSERIAL PRIMARY KEY,
-    group_jid VARCHAR(255) NOT NULL,
-    user_jid VARCHAR(255) NOT NULL,
-    message_text TEXT,
-    links JSONB,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- ============================================
--- SIMPLE JSON-BASED ACTIVITY TRACKING
--- File: 002_user_activity_json.sql
--- ============================================
-
 CREATE TABLE IF NOT EXISTS group_activity (
     id BIGSERIAL PRIMARY KEY,
     group_jid VARCHAR(255) UNIQUE NOT NULL,
     group_name VARCHAR(255),
-    
-    -- ALL user activity in ONE JSON field
     activity_data JSONB DEFAULT '{}'::jsonb,
-    
-    -- Quick stats (calculated from JSON)
     total_members INTEGER DEFAULT 0,
     active_members_7d INTEGER DEFAULT 0,
-    
-    -- Timestamps
     last_message_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    
     FOREIGN KEY (group_jid) REFERENCES groups(jid) ON DELETE CASCADE
-);
-
--- ============================================
--- SETTINGS TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS settings (
-    id BIGSERIAL PRIMARY KEY,
-    user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
-    session_id VARCHAR(255),
-    setting_key VARCHAR(100) NOT NULL,
-    setting_value TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(user_id, session_id, setting_key)
 );
 
 -- ============================================
@@ -309,45 +313,28 @@ CREATE INDEX IF NOT EXISTS idx_users_session_id ON users(session_id);
 CREATE INDEX IF NOT EXISTS idx_whatsapp_users_telegram_id ON whatsapp_users(telegram_id);
 CREATE INDEX IF NOT EXISTS idx_whatsapp_users_jid ON whatsapp_users(jid) WHERE jid IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_whatsapp_users_phone ON whatsapp_users(phone) WHERE phone IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_whatsapp_users_bot_mode ON whatsapp_users(telegram_id, bot_mode);
-CREATE INDEX IF NOT EXISTS idx_whatsapp_users_custom_prefix ON whatsapp_users(telegram_id, custom_prefix);
-CREATE INDEX IF NOT EXISTS idx_whatsapp_users_antiviewonce ON whatsapp_users(telegram_id) WHERE antiviewonce_enabled = true;
-CREATE INDEX IF NOT EXISTS idx_whatsapp_users_antideleted ON whatsapp_users(telegram_id) WHERE antideleted_enabled = true;
 CREATE INDEX IF NOT EXISTS idx_vip_level ON whatsapp_users(vip_level) WHERE vip_level > 0;
 CREATE INDEX IF NOT EXISTS idx_is_default_vip ON whatsapp_users(telegram_id) WHERE is_default_vip = true;
-CREATE INDEX IF NOT EXISTS idx_owned_by ON whatsapp_users(owned_by_telegram_id) WHERE owned_by_telegram_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_whatsapp_users_presence ON whatsapp_users(telegram_id, auto_online, auto_typing, auto_recording);
 
 -- VIP indexes
 CREATE INDEX IF NOT EXISTS idx_vip_owned_active ON vip_owned_users(vip_telegram_id, is_active);
 CREATE INDEX IF NOT EXISTS idx_owned_user_active ON vip_owned_users(owned_telegram_id, is_active);
-CREATE INDEX IF NOT EXISTS idx_activity_vip ON vip_activity_log(vip_telegram_id);
-CREATE INDEX IF NOT EXISTS idx_activity_date ON vip_activity_log(created_at DESC);
 
 -- Groups indexes
 CREATE INDEX IF NOT EXISTS idx_groups_jid ON groups(jid);
-CREATE INDEX IF NOT EXISTS idx_groups_telegram_scheduler ON groups(telegram_id, scheduled_close_time, scheduled_open_time) WHERE auto_schedule_enabled = true;
-CREATE INDEX IF NOT EXISTS idx_groups_auto_schedule ON groups(auto_schedule_enabled) WHERE auto_schedule_enabled = true;
 CREATE INDEX IF NOT EXISTS idx_group_user ON admin_promotions(group_jid, user_jid);
-CREATE INDEX IF NOT EXISTS idx_promoted_at ON admin_promotions(promoted_at);
-CREATE INDEX IF NOT EXISTS idx_group_added ON group_member_additions(group_jid, added_at);
-CREATE INDEX IF NOT EXISTS idx_added_by ON group_member_additions(added_by_jid);
 
+-- Warning Settings indexes
+CREATE INDEX IF NOT EXISTS idx_warning_settings_group_jid ON group_warning_settings(group_jid);
 
--- Groups activityindexes
-CREATE INDEX IF NOT EXISTS idx_group_activity_jid 
-    ON group_activity(group_jid);
--- Index for JSON queries (optional, for advanced queries)
-CREATE INDEX IF NOT EXISTS idx_group_activity_data 
-    ON group_activity USING gin(activity_data);
-
+-- Activity indexes
+CREATE INDEX IF NOT EXISTS idx_group_activity_jid ON group_activity(group_jid);
+CREATE INDEX IF NOT EXISTS idx_group_activity_data ON group_activity USING gin(activity_data);
 
 -- Messages indexes
 CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_messages_from_jid ON messages(from_jid);
-CREATE INDEX IF NOT EXISTS idx_messages_sender_jid ON messages(sender_jid);
 CREATE INDEX IF NOT EXISTS idx_messages_timestamp_desc ON messages(timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_messages_id_session ON messages(id, session_id);
 
 -- Warnings indexes
 CREATE INDEX IF NOT EXISTS idx_warnings_user_group ON warnings(user_jid, group_jid);
@@ -356,14 +343,6 @@ CREATE INDEX IF NOT EXISTS idx_warnings_user_group ON warnings(user_jid, group_j
 CREATE INDEX IF NOT EXISTS idx_violations_user_group ON violations(user_jid, group_jid);
 CREATE INDEX IF NOT EXISTS idx_violations_date ON violations(violated_at DESC);
 
--- Spam tracking indexes (NEW)
-CREATE INDEX IF NOT EXISTS idx_spam_tracking_group_user ON spam_tracking(group_jid, user_jid);
-CREATE INDEX IF NOT EXISTS idx_spam_tracking_created ON spam_tracking(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_spam_tracking_lookup ON spam_tracking(group_jid, user_jid, created_at);
-
--- Settings indexes
-CREATE INDEX IF NOT EXISTS idx_settings_user_session ON settings(user_id, session_id);
-
 -- Analytics indexes
 CREATE INDEX IF NOT EXISTS idx_analytics_group_date ON group_analytics(group_jid, date);
 
@@ -371,7 +350,6 @@ CREATE INDEX IF NOT EXISTS idx_analytics_group_date ON group_analytics(group_jid
 -- CREATE UPDATE TRIGGERS
 -- ============================================
 
--- Generic update timestamp function
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -380,198 +358,63 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Apply update triggers to tables
 DROP TRIGGER IF EXISTS update_users_updated_at ON users;
 CREATE TRIGGER update_users_updated_at 
-    BEFORE UPDATE ON users 
-    FOR EACH ROW 
+    BEFORE UPDATE ON users FOR EACH ROW 
     EXECUTE FUNCTION update_updated_at_column();
 
 DROP TRIGGER IF EXISTS update_whatsapp_users_updated_at ON whatsapp_users;
 CREATE TRIGGER update_whatsapp_users_updated_at 
-    BEFORE UPDATE ON whatsapp_users 
-    FOR EACH ROW 
+    BEFORE UPDATE ON whatsapp_users FOR EACH ROW 
     EXECUTE FUNCTION update_updated_at_column();
 
 DROP TRIGGER IF EXISTS update_groups_updated_at ON groups;
 CREATE TRIGGER update_groups_updated_at 
-    BEFORE UPDATE ON groups 
-    FOR EACH ROW 
+    BEFORE UPDATE ON groups FOR EACH ROW 
+    EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_warning_settings_updated_at ON group_warning_settings;
+CREATE TRIGGER update_warning_settings_updated_at 
+    BEFORE UPDATE ON group_warning_settings FOR EACH ROW 
     EXECUTE FUNCTION update_updated_at_column();
 
 DROP TRIGGER IF EXISTS update_warnings_updated_at ON warnings;
 CREATE TRIGGER update_warnings_updated_at 
-    BEFORE UPDATE ON warnings 
-    FOR EACH ROW 
-    EXECUTE FUNCTION update_updated_at_column();
-
-DROP TRIGGER IF EXISTS update_settings_updated_at ON settings;
-CREATE TRIGGER update_settings_updated_at 
-    BEFORE UPDATE ON settings 
-    FOR EACH ROW 
+    BEFORE UPDATE ON warnings FOR EACH ROW 
     EXECUTE FUNCTION update_updated_at_column();
 
 -- ============================================
--- WHATSAPP USER JID/PHONE TRANSFER TRIGGER
+-- AUTO-CREATE WARNING SETTINGS TRIGGER
 -- ============================================
 
-CREATE OR REPLACE FUNCTION handle_whatsapp_user_upsert()
+CREATE OR REPLACE FUNCTION create_warning_settings_for_group()
 RETURNS TRIGGER AS $$
-DECLARE
-    existing_user_with_jid RECORD;
-    existing_user_with_phone RECORD;
 BEGIN
-    -- Check if another user already has this JID
-    IF NEW.jid IS NOT NULL THEN
-        SELECT * INTO existing_user_with_jid
-        FROM whatsapp_users
-        WHERE jid = NEW.jid AND telegram_id != NEW.telegram_id
-        LIMIT 1;
-        
-        -- If another user has this JID, clear it from them (phone number transferred)
-        IF FOUND THEN
-            UPDATE whatsapp_users
-            SET jid = NULL,
-                phone = NULL,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE telegram_id = existing_user_with_jid.telegram_id;
-        END IF;
-    END IF;
-    
-    -- Check if another user already has this phone
-    IF NEW.phone IS NOT NULL THEN
-        SELECT * INTO existing_user_with_phone
-        FROM whatsapp_users
-        WHERE phone = NEW.phone AND telegram_id != NEW.telegram_id
-        LIMIT 1;
-        
-        -- If another user has this phone, clear it from them
-        IF FOUND THEN
-            UPDATE whatsapp_users
-            SET phone = NULL,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE telegram_id = existing_user_with_phone.telegram_id;
-        END IF;
-    END IF;
-    
+    INSERT INTO group_warning_settings (group_jid, group_name)
+    VALUES (NEW.jid, NEW.name)
+    ON CONFLICT (group_jid) DO NOTHING;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS ensure_unique_jid_phone ON whatsapp_users;
-CREATE TRIGGER ensure_unique_jid_phone
-    BEFORE INSERT OR UPDATE OF jid, phone ON whatsapp_users
+DROP TRIGGER IF EXISTS auto_create_warning_settings ON groups;
+CREATE TRIGGER auto_create_warning_settings
+    AFTER INSERT ON groups
     FOR EACH ROW
-    EXECUTE FUNCTION handle_whatsapp_user_upsert();
+    EXECUTE FUNCTION create_warning_settings_for_group();
 
--- ============================================
--- MESSAGES AUTO-CLEANUP TRIGGER
--- ============================================
-
-CREATE OR REPLACE FUNCTION cleanup_messages_at_limit()
-RETURNS TRIGGER AS $$
-DECLARE
-    row_count BIGINT;
-BEGIN
-    -- Check row count periodically (every 100 inserts for performance)
-    IF NEW.n_o % 100 = 0 THEN
-        SELECT COUNT(*) INTO row_count FROM messages;
-        
-        IF row_count >= 10000 THEN
-            -- Delete oldest messages, keep only newest 5000
-            DELETE FROM messages
-            WHERE n_o NOT IN (
-                SELECT n_o FROM messages
-                ORDER BY n_o DESC
-                LIMIT 5000
-            );
-        END IF;
-    END IF;
-    
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS messages_cleanup_trigger ON messages;
-CREATE TRIGGER messages_cleanup_trigger
-    BEFORE INSERT ON messages
-    FOR EACH ROW
-    EXECUTE FUNCTION cleanup_messages_at_limit();
-
--- ============================================
--- SPAM TRACKING AUTO-CLEANUP TRIGGER (NEW)
--- ============================================
-
-CREATE OR REPLACE FUNCTION cleanup_old_spam_tracking()
-RETURNS TRIGGER AS $$
-BEGIN
-    DELETE FROM spam_tracking 
-    WHERE created_at < NOW() - INTERVAL '2 hours';
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS spam_tracking_cleanup_trigger ON spam_tracking;
-CREATE TRIGGER spam_tracking_cleanup_trigger
-    AFTER INSERT ON spam_tracking
-    EXECUTE FUNCTION cleanup_old_spam_tracking();
-
--- ============================================
--- ADD COMMENTS
--- ============================================
-
-COMMENT ON TABLE users IS 'Main users table for Telegram bot users';
-COMMENT ON TABLE whatsapp_users IS 'WhatsApp users with settings - telegram_id is UNIQUE primary identifier';
-COMMENT ON COLUMN whatsapp_users.telegram_id IS 'Telegram user ID - UNIQUE - primary identifier for all operations';
-COMMENT ON COLUMN whatsapp_users.jid IS 'WhatsApp JID - can be NULL initially, automatically transferred if phone moves to another telegram account';
-COMMENT ON COLUMN whatsapp_users.phone IS 'Phone number extracted from JID - automatically transferred with JID';
-COMMENT ON COLUMN whatsapp_users.custom_prefix IS 'User custom command prefix (default: ".", empty string for none)';
-COMMENT ON COLUMN whatsapp_users.bot_mode IS 'Bot mode: "public" (responds to everyone) or "self" (only owner)';
-
-COMMENT ON TABLE groups IS 'WhatsApp groups with settings and features';
-COMMENT ON COLUMN groups.telegram_id IS 'Telegram ID of user who set the group schedule';
-COMMENT ON COLUMN groups.scheduled_close_time IS 'Time to automatically close group (TIME format)';
-COMMENT ON COLUMN groups.scheduled_open_time IS 'Time to automatically open group (TIME format)';
-COMMENT ON COLUMN groups.auto_schedule_enabled IS 'Whether automatic scheduling is enabled';
-
-COMMENT ON TABLE messages IS 'Messages table with auto-cleanup - keeps newest 5000 when reaching 10k rows';
-COMMENT ON TABLE spam_tracking IS 'Real-time link spam message tracking - only tracks messages with links - auto-cleanup after 2 hours';
-COMMENT ON COLUMN spam_tracking.links IS 'Extracted links from the spam message (JSONB array)';
-
-COMMENT ON TABLE group_activity IS 'Stores ALL user activity per group in single JSON field (v2 - without names)';
-COMMENT ON COLUMN group_activity.activity_data IS 'JSON object: { "userJid": { "messages": 45, "media": 8, "last_seen": "2024-12-23T10:30:00Z" } }';
-COMMENT ON COLUMN group_activity.group_jid IS 'WhatsApp group JID (unique identifier)';
-COMMENT ON COLUMN group_activity.last_message_at IS 'Timestamp of last message in this group';
 -- ============================================
 -- VERIFICATION
 -- ============================================
 
-DO $verification$
-DECLARE
-    table_count INTEGER;
+DO $$
 BEGIN
-    SELECT COUNT(*) INTO table_count
-    FROM information_schema.tables 
-    WHERE table_schema = 'public' 
-    AND table_name IN ('users', 'whatsapp_users', 'groups', 'messages', 'warnings', 'violations', 'settings', 'group_analytics', 'vip_owned_users', 'vip_activity_log', 'spam_tracking');
-    
     RAISE NOTICE '===========================================';
-    RAISE NOTICE 'COMPLETE SCHEMA VERIFIED';
+    RAISE NOTICE 'NORMALIZED SCHEMA WITH SEPARATE WARNING SETTINGS';
     RAISE NOTICE '===========================================';
-    RAISE NOTICE '';
-    RAISE NOTICE 'Tables verified: % / 11', table_count;
-    RAISE NOTICE '';
-    RAISE NOTICE 'All tables created or verified';
-    RAISE NOTICE 'All indexes created';
-    RAISE NOTICE 'All triggers created';
-    RAISE NOTICE 'WhatsApp users: telegram_id UNIQUE';
-    RAISE NOTICE 'Automatic phone transfer: ENABLED';
-    RAISE NOTICE 'Messages auto-cleanup: ENABLED (10k->5k)';
-    RAISE NOTICE 'Spam tracking auto-cleanup: ENABLED (2 hours)';
-    RAISE NOTICE 'Group scheduling: ENABLED';
-    RAISE NOTICE 'Anti-spam protection: READY';
-    RAISE NOTICE '';
+    RAISE NOTICE 'Groups table: Simplified (core settings only)';
+    RAISE NOTICE 'Warning settings: Separate table (normalized)';
+    RAISE NOTICE 'Auto-creation: Enabled via trigger';
     RAISE NOTICE 'Ready for production!';
-    RAISE NOTICE '';
     RAISE NOTICE '===========================================';
-END $verification$;
+END $$;

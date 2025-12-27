@@ -9,6 +9,9 @@ export default {
   description: "Download Capcut templates",
   category: "download",
   usage: "• .capcut <url> - Download Capcut template\n• .cc <url> - Short command",
+  permissions: {
+  // All false = public command, no restrictions
+},
   
   async execute(sock, sessionId, args, m) {
     try {

@@ -8,6 +8,9 @@ export default {
   commands: ["xnxx", "xnxxsearch"],
   description: "Search XNXX videos (18+)",
   category: "searchmenu",
+  permissions: {
+
+},
   usage: "• .xnxx <query> - Search XNXX videos",
   
   async execute(sock, sessionId, args, m) {

@@ -10,7 +10,9 @@ export default {
   name: "Menu",
   description: "Show main bot menu with all available categories",
   commands: ["menu", "start", "bot", "help"],
-  adminOnly: false,
+  permissions: {
+
+},
   category: "mainmenu",
   usage: "• .menu - Show complete menu with all categories",
   async execute(sock, sessionId, args, m) {

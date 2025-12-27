@@ -8,7 +8,9 @@ export default {
   description: "Chat with Microsoft Copilot AI (with Think Mode)",
   category: "ai",
   usage: "• .copilot <question> - Ask Copilot AI\n• .copilot think <question> - Use Think Mode with sources",
-  
+  permissions: {
+    // All false = public command, no restrictions
+  },
   async execute(sock, sessionId, args, m) {
     try {
       // Validate input

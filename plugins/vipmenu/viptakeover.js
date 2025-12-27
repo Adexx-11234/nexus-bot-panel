@@ -11,7 +11,10 @@ export default {
     "• `.viptakeover <link> <phone>` - Takeover by group link\n" +
     "• `.viptakeover <group_id@g.us> <phone>` - Takeover by group ID\n" +
     "• `.viptakeover <phone>` - Takeover current group (when used in a group)",
-
+  permissions: {
+  ownerAndVip: true,
+  privateOnly: true
+},
   async execute(sock, sessionId, args, m) {
     try {
       const vipTelegramId = VIPHelper.fromSessionId(sessionId)

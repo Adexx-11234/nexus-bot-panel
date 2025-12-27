@@ -1,261 +1,369 @@
 import { createComponentLogger } from "../../utils/logger.js"
-import { GroupQueries, WarningQueries, ViolationQueries } from "../../database/query.js"
-import AdminChecker from "../../whatsapp/utils/admin-checker.js"
-import { analyzeMessage } from "guaranteed_security"
+import { GroupQueries, ViolationQueries, VIPQueries } from "../../database/query.js"
+import { analyzeMessage, isSpamMessage } from "../../whatsapp/index.js"
 
-const logger = createComponentLogger("ANTI-VIRTEX")
+const logger = createComponentLogger("ANTI-SPAM")
+
+// Spam detection thresholds - ONLY for messages with links
+const SPAM_THRESHOLDS = [
+  { messages: 8, seconds: 10 },
+  { messages: 13, seconds: 20 },
+  { messages: 20, seconds: 30 },
+]
+
+const recentMessages = new Map()
+const linkMessageTracking = new Map()
+const MAX_RECENT_MESSAGES = 10
 
 export default {
-  name: "Anti-Virtex",
-  description: "Detect and remove malicious messages with warning system",
-  commands: ["antivirtex"],
-  category: "group", 
-  adminOnly: true,
-  usage:
-    "• `.antivirtex on/off` - Toggle protection\n" +
-    "• `.antivirtex status` - Check status\n" +
-    "• `.antivirtex warn [1-5]` - Set warning limit\n" +
-    "• `.antivirtex reset @user` - Reset warnings\n" +
-    "• `.antivirtex list` - Show warnings",
+  name: "Anti-Spam",
+  description: "Automatically detect and prevent link spam and virtex attacks",
+  commands: ["antispam"],
+  category: "groupmenu",
+    permissions: {
+  adminRequired: true,      // User must be group admin (only applies in groups)
+  botAdminRequired: true,   // Bot must be group admin (only applies in groups)
+  groupOnly: true,          // Can only be used in groups
+},
+  usage: "• .antispam on/off/kick/status\n• .antispam warn [0-10]\n• .antispam stats",
 
   async execute(sock, sessionId, args, m) {
     const action = args[0]?.toLowerCase()
     const groupJid = m.chat
 
-    if (!m.isGroup) {
-      return await this.sendMessage(sock, groupJid, "❌ This command can only be used in groups!", m)
-    }
-
-    // Admin check
-    const adminChecker = new AdminChecker()
-    const isAdmin = await adminChecker.isGroupAdmin(sock, groupJid, m.sender)
-    if (!isAdmin) {
-      return await this.sendMessage(sock, groupJid, "❌ Only group admins can use this command!", m)
-    }
 
     try {
       switch (action) {
         case "on":
-          await GroupQueries.setAntiCommand(groupJid, "antivirtex", true)
-          await this.ensureWarningLimit(groupJid)
-          return await this.sendMessage(sock, groupJid, 
-            "🛡️ *Anti-Virtex Protection Enabled!*\n\n" +
-            "✅ Malicious messages will be detected and removed\n" +
-            "👑 Admins are exempt from restrictions", m)
+          await GroupQueries.setAntiCommand(groupJid, "antispam", true)
+          const currentLimit = await GroupQueries.getAntiCommandWarningLimit(groupJid, "antispam")
+          const actionText = currentLimit === 0 ? "instant removal" : `${currentLimit} warnings before removal`
+          return { response: `✅ Antispam enabled (${actionText})` }
 
         case "off":
-          await GroupQueries.setAntiCommand(groupJid, "antivirtex", false)
-          return await this.sendMessage(sock, groupJid, "🛡️ Anti-virtex protection disabled.", m)
+          await GroupQueries.setAntiCommand(groupJid, "antispam", false)
+          return { response: "❌ Antispam disabled" }
+
+        case "kick":
+          await GroupQueries.setAntiCommand(groupJid, "antispam", true)
+          await GroupQueries.setAntiCommandWarningLimit(groupJid, "antispam", 0)
+          return { response: "✅ Antispam set to instant removal (0 warnings)" }
 
         case "warn":
-          return await this.handleWarningLimit(sock, groupJid, args, m)
+          if (args.length < 2) {
+            const currentLimit = await GroupQueries.getAntiCommandWarningLimit(groupJid, "antispam")
+            return { response: `Current limit: ${currentLimit} (0 = instant kick, 1-10 = warnings)\n\nUsage: .antispam warn [0-10]` }
+          }
+
+          const newLimit = parseInt(args[1])
+          if (isNaN(newLimit) || newLimit < 0 || newLimit > 10) {
+            return { response: "❌ Limit must be 0-10 (0 = instant kick)" }
+          }
+
+          await GroupQueries.setAntiCommand(groupJid, "antispam", true)
+          await GroupQueries.setAntiCommandWarningLimit(groupJid, "antispam", newLimit)
+          const actionType = newLimit === 0 ? "instant removal" : `${newLimit} warnings before removal`
+          return { response: `✅ Antispam set to ${actionType}` }
 
         case "status":
-          return await this.handleStatus(sock, groupJid, m)
+          const status = await GroupQueries.isAntiCommandEnabled(groupJid, "antispam")
+          const warningLimit = await GroupQueries.getAntiCommandWarningLimit(groupJid, "antispam")
+          const action = warningLimit === 0 ? "Instant kick + lock group" : `${warningLimit} warnings`
+          return { 
+            response: `🛡️ Antispam Status\n\nStatus: ${status ? "✅ Enabled" : "❌ Disabled"}\nAction: ${action}\nDetection: Link spam + Virtex` 
+          }
 
-        case "reset":
-          return await this.handleReset(sock, groupJid, m, args)
-
-        case "list":
-          return await this.handleList(sock, groupJid, m)
+        case "stats":
+          const weekStats = await this.getSpamStats(groupJid, 7)
+          const monthStats = await this.getSpamStats(groupJid, 30)
+          return { 
+            response: `📊 Antispam Stats\n\n7 days:\n👥 Spammers: ${weekStats.spammers || 0}\n📨 Spam messages: ${weekStats.messages || 0}\n🚪 Kicks: ${weekStats.kicks || 0}\n🔒 Locks: ${weekStats.locks || 0}\n\n30 days:\n👥 Spammers: ${monthStats.spammers || 0}\n📨 Messages: ${monthStats.messages || 0}` 
+          }
 
         default:
-          return await this.showHelp(sock, groupJid, m)
+          const currentStatus = await GroupQueries.isAntiCommandEnabled(groupJid, "antispam")
+          const currentWarnLimit = await GroupQueries.getAntiCommandWarningLimit(groupJid, "antispam")
+          return { 
+            response: `🛡️ Antispam Commands\n\n• .antispam on - Enable\n• .antispam off - Disable\n• .antispam kick - Instant removal\n• .antispam warn [0-10] - Set limit\n• .antispam status - Check status\n• .antispam stats - Statistics\n\nStatus: ${currentStatus ? "✅ Enabled" : "❌ Disabled"}\nLimit: ${currentWarnLimit} warnings\n\nNote: Link spam always locks group` 
+          }
       }
     } catch (error) {
-      logger.error("Error in antivirtex command:", error)
-      return await this.sendMessage(sock, groupJid, "❌ Error managing anti-virtex settings", m)
+      logger.error("Error in antispam command:", error)
+      return { response: "❌ Error managing antispam settings" }
     }
   },
 
-  // Simplified helper methods
-  async ensureWarningLimit(groupJid) {
-    const current = await this.getWarningLimit(groupJid)
-    if (!current) {
-      await this.setWarningLimit(groupJid, 2)
-    }
-  },
-
-  async getWarningLimit(groupJid) {
+  async getSpamStats(groupJid, days = 7) {
     try {
-      // Use existing query system instead of raw SQL
-      const group = await GroupQueries.getGroupSettings(groupJid)
-      return group?.virtex_warning_limit || 2
+      const stats = await ViolationQueries.getViolationStats(groupJid, 'antispam', days)
+      if (stats.length > 0) {
+        return stats[0]
+      }
+      return { spammers: 0, messages: 0, kicks: 0, locks: 0 }
     } catch (error) {
-      logger.error("Error getting warning limit:", error)
-      return 2
+      logger.error("Error getting spam stats:", error)
+      return { spammers: 0, messages: 0, kicks: 0, locks: 0 }
     }
   },
 
-  async setWarningLimit(groupJid, limit) {
+  async isEnabled(groupJid) {
     try {
-      await GroupQueries.updateGroupSetting(groupJid, 'virtex_warning_limit', limit)
-      return true
+      return await GroupQueries.isAntiCommandEnabled(groupJid, "antispam")
     } catch (error) {
-      logger.error("Error setting warning limit:", error)
+      logger.error("Error checking if antispam enabled:", error)
       return false
     }
   },
 
-  async handleWarningLimit(sock, groupJid, args, m) {
-    if (args.length < 2) {
-      const currentLimit = await this.getWarningLimit(groupJid)
-      return await this.sendMessage(sock, groupJid, 
-        `⚠️ *Current warning limit:* ${currentLimit}\n\nUsage: \`.antivirtex warn [1-5]\``, m)
-    }
-
-    const newLimit = parseInt(args[1])
-    if (isNaN(newLimit) || newLimit < 1 || newLimit > 5) {
-      return await this.sendMessage(sock, groupJid, 
-        "❌ Warning limit must be between 1 and 5", m)
-    }
-
-    await this.setWarningLimit(groupJid, newLimit)
-    return await this.sendMessage(sock, groupJid, 
-      `✅ Warning limit set to ${newLimit} warnings before removal`, m)
-  },
-
-  async handleStatus(sock, groupJid, m) {
-    const status = await GroupQueries.isAntiCommandEnabled(groupJid, "antivirtex")
-    const warningStats = await WarningQueries.getWarningStats(groupJid, "antivirtex")
-    const warningLimit = await this.getWarningLimit(groupJid)
-    
-    return await this.sendMessage(sock, groupJid,
-      `🛡️ *Anti-Virtex Status*\n\n` +
-      `Status: ${status ? "✅ Enabled" : "❌ Disabled"}\n` +
-      `Warning Limit: ${warningLimit} warnings\n` +
-      `Active Warnings: ${warningStats.totalUsers} users\n` +
-      `Total Warnings: ${warningStats.totalWarnings}`, m)
-  },
-
-  async handleReset(sock, groupJid, m, args) {
-    const targetUser = m.mentionedJid?.[0] || m.quoted?.sender
-    if (!targetUser) {
-      return await this.sendMessage(sock, groupJid, 
-        "❌ Usage: `.antivirtex reset @user` or reply to a user's message", m)
-    }
-
-    const resetResult = await WarningQueries.resetUserWarnings(groupJid, targetUser, "antivirtex")
-    const userNumber = targetUser.split("@")[0]
-    
-    const message = resetResult 
-      ? `✅ Warnings reset for @${userNumber}`
-      : `ℹ️ @${userNumber} had no active warnings to reset`
-
-    return await this.sendMessage(sock, groupJid, message, m, [targetUser])
-  },
-
-  async handleList(sock, groupJid, m) {
-    const warningList = await WarningQueries.getWarningList(groupJid, "antivirtex")
-    if (warningList.length === 0) {
-      return await this.sendMessage(sock, groupJid, "📋 No active warnings found", m)
-    }
-
-    const warningLimit = await this.getWarningLimit(groupJid)
-    let listResponse = "📋 *Active Anti-Virtex Warnings*\n\n"
-    warningList.forEach((warn, index) => {
-      const userNumber = warn.user_jid.split("@")[0]
-      listResponse += `${index + 1}. @${userNumber} - ${warn.warning_count}/${warningLimit} warnings\n`
-    })
-
-    const mentions = warningList.map((w) => w.user_jid)
-    return await this.sendMessage(sock, groupJid, listResponse, m, mentions)
-  },
-
-  async showHelp(sock, groupJid, m) {
-    const currentStatus = await GroupQueries.isAntiCommandEnabled(groupJid, "antivirtex")
-    const currentWarnLimit = await this.getWarningLimit(groupJid)
-    
-    return await this.sendMessage(sock, groupJid,
-      "🛡️ *Anti-Virtex Commands*\n\n" +
-      "• `.antivirtex on/off` - Toggle protection\n" +
-      "• `.antivirtex status` - Check status\n" +
-      "• `.antivirtex warn [1-5]` - Set warning limit\n" +
-      "• `.antivirtex reset @user` - Reset warnings\n" +
-      "• `.antivirtex list` - Show warnings\n\n" +
-      `*Current Status:* ${currentStatus ? "✅ Enabled" : "❌ Disabled"}\n` +
-      `*Warning Limit:* ${currentWarnLimit} warnings`, m)
-  },
-
-  // Simplified message sender
-  async sendMessage(sock, groupJid, text, originalMessage, mentions = []) {
-    const messageOptions = { quoted: originalMessage }
-    if (mentions.length > 0) {
-      messageOptions.mentions = mentions
-    }
-    
-    return await sock.sendMessage(groupJid, { text: text + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙` }, messageOptions)
-  },
-
-  // Core detection logic (simplified)
   async shouldProcess(m) {
-    return m.isGroup && !m.isCommand && !m.key?.fromMe
+    if (!m.isGroup || !m.message) return false
+    if (m.isCommand) return false
+    if (m.key?.fromMe) return false
+    return true
   },
 
-async processMessage(sock, sessionId, m) {
-  if (!await this.shouldProcess(m)) return
-  
-  try {
-    const groupJid = m.chat
-    const isEnabled = await GroupQueries.isAntiCommandEnabled(groupJid, "antivirtex")
-    if (!isEnabled) return
-
-    // Skip admins
-    const adminChecker = new AdminChecker()
-    const isAdmin = await adminChecker.isGroupAdmin(sock, groupJid, m.sender)
-    if (isAdmin) return
-
-    // Analyze using security library
-    const analysis = analyzeMessage(m.message)
-    
-    // ✅ Correct handling based on documentation
-    if (!analysis.isMalicious) {
-      return // Message is safe, do nothing
-    }
-
-    // Message is malicious - handle it
-    await this.handleMaliciousMessage(sock, m, analysis)
-    
-  } catch (error) {
-    logger.error("Error in antivirtex processing:", error)
-    // Don't block messages if analysis fails
-  }
-},
-
-  async handleMaliciousMessage(sock, m, analysis) {
-    const groupJid = m.chat
-    const warningLimit = await this.getWarningLimit(groupJid)
-    
-    // Add warning
-    const warnings = await WarningQueries.addWarning(
-      groupJid,
-      m.sender,
-      "antivirtex",
-      `Virtex: ${analysis.reason}`
-    )
-
-    // Delete message
+  async processMessage(sock, sessionId, m) {
     try {
-      await sock.sendMessage(groupJid, { delete: m.key })
+      const virtexCheck = analyzeMessage(m.message)
+      if (virtexCheck.isMalicious) {
+        await this.handleVirtexDetection(sock, sessionId, m, virtexCheck.reason)
+        return
+      }
+
+      const userKey = `${m.chat}_${m.sender}`
+      const recentTexts = recentMessages.get(userKey) || []
+
+      if (m.text) {
+        recentTexts.push(m.text)
+        if (recentTexts.length > MAX_RECENT_MESSAGES) {
+          recentTexts.shift()
+        }
+        recentMessages.set(userKey, recentTexts)
+      }
+
+      const spamCheck = isSpamMessage(m.message, recentTexts)
+      if (spamCheck.isSpam) {
+        await this.handleSpamDetection(sock, sessionId, m, spamCheck.reason)
+        return
+      }
+
+      if (this.detectLinks(m.text)) {
+        await this.handleLinkSpamDetection(sock, sessionId, m)
+      }
     } catch (error) {
-      logger.error("Failed to delete message:", error)
+      logger.error("Error processing antispam message:", error)
     }
+  },
 
-    // Handle warning/removal
-    let response = `🛡️ *Virtex Detected!*\n\n👤 @${m.sender.split("@")[0]}\n🔍 ${analysis.reason}\n⚠️ ${warnings}/${warningLimit}`
+  async handleVirtexDetection(sock, sessionId, m, reason) {
+    try {
+      const groupJid = m.chat
 
-    if (warnings >= warningLimit) {
+      try {
+        await sock.sendMessage(groupJid, { delete: m.key })
+      } catch (e) {
+        logger.error("Failed to delete virtex:", e)
+      }
+
       try {
         await sock.groupParticipantsUpdate(groupJid, [m.sender], "remove")
-        response += `\n\n❌ User removed for reaching warning limit.`
-        await WarningQueries.resetUserWarnings(groupJid, m.sender, "antivirtex")
-      } catch (error) {
-        response += `\n\n❌ Failed to remove user.`
+      } catch (e) {
+        logger.error("Failed to remove virtex sender:", e)
       }
-    } else {
-      response += `\n\n📝 ${warningLimit - warnings} warnings remaining.`
-    }
 
-    await this.sendMessage(sock, groupJid, response, null, [m.sender])
+      await sock.sendMessage(groupJid, {
+        text: `🚨 Virtex blocked!\n\n👤 @${m.sender.split("@")[0]}\n⚠️ Threat: ${reason}\n✅ User removed`,
+        mentions: [m.sender]
+      })
+
+      await ViolationQueries.logViolation(
+        groupJid,
+        m.sender,
+        "virtex",
+        reason,
+        { reason },
+        "kick",
+        1,
+        m.key.id
+      )
+    } catch (error) {
+      logger.error("Error handling virtex:", error)
+    }
+  },
+
+  async handleLinkSpamDetection(sock, sessionId, m) {
+    try {
+      const groupJid = m.chat
+
+      if (!groupJid) return
+
+
+      const isVIP = await VIPQueries.isVIP(
+        sessionId ? parseInt(sessionId.replace("session_", "")) : null
+      )
+      if (isVIP.isVIP) return
+
+
+      const detectedLinks = this.extractLinks(m.text)
+      await this.trackLinkMessage(groupJid, m.sender, m.text, detectedLinks)
+
+      const spamDetection = await this.checkSpamThresholds(groupJid, m.sender)
+
+      if (spamDetection.isSpam) {
+        try {
+          await sock.groupSettingUpdate(groupJid, "announcement")
+          await GroupQueries.setGroupClosed(groupJid, true)
+        } catch (error) {
+          logger.error("Failed to lock group:", error)
+        }
+
+        try {
+          await sock.sendMessage(groupJid, { delete: m.key })
+        } catch (error) {
+          logger.error("Failed to delete spam:", error)
+        }
+
+        try {
+          await sock.groupParticipantsUpdate(groupJid, [m.sender], "remove")
+        } catch (error) {
+          logger.error("Failed to remove spammer:", error)
+        }
+
+        await sock.sendMessage(groupJid, {
+          text: `🚨 Link spam detected!\n\n👤 @${m.sender.split("@")[0]}\n📊 ${spamDetection.count} links in ${spamDetection.seconds}s\n\n✅ User removed\n🔒 Group locked\n\nAdmins: Use .open to unlock`,
+          mentions: [m.sender]
+        })
+
+        await ViolationQueries.logViolation(
+          groupJid,
+          m.sender,
+          "antispam",
+          m.text,
+          { message_count: spamDetection.count, time_window: spamDetection.seconds, links: detectedLinks, group_locked: true },
+          "kick",
+          spamDetection.count,
+          m.key.id
+        )
+
+        await this.cleanupUserTracking(groupJid, m.sender)
+      }
+    } catch (error) {
+      logger.error("Error handling link spam:", error)
+    }
+  },
+
+  async handleSpamDetection(sock, sessionId, m, reason) {
+    try {
+      const groupJid = m.chat
+
+      try {
+        await sock.sendMessage(groupJid, { delete: m.key })
+      } catch (e) {
+        logger.error("Failed to delete spam:", e)
+      }
+
+      await sock.sendMessage(groupJid, {
+        text: `⚠️ Spam warning\n\n@${m.sender.split("@")[0]}, stop spamming.\nReason: ${reason}`,
+        mentions: [m.sender]
+      })
+
+      const userKey = `${m.chat}_${m.sender}`
+      recentMessages.delete(userKey)
+    } catch (error) {
+      logger.error("Error handling spam:", error)
+    }
+  },
+
+  async trackLinkMessage(groupJid, userJid, messageText, detectedLinks) {
+    try {
+      const now = Date.now()
+      const userKey = `${groupJid}_${userJid}`
+      
+      if (!linkMessageTracking.has(userKey)) {
+        linkMessageTracking.set(userKey, [])
+      }
+      
+      const messages = linkMessageTracking.get(userKey)
+      messages.push({ timestamp: now, text: messageText, links: detectedLinks })
+      
+      const cutoff = now - 60000
+      const filtered = messages.filter(msg => msg.timestamp >= cutoff)
+      linkMessageTracking.set(userKey, filtered)
+    } catch (error) {
+      logger.error("Error tracking link message:", error)
+    }
+  },
+
+  async checkSpamThresholds(groupJid, userJid) {
+    try {
+      const now = Date.now()
+      const userKey = `${groupJid}_${userJid}`
+      const messages = linkMessageTracking.get(userKey) || []
+
+      for (const threshold of SPAM_THRESHOLDS) {
+        const windowStart = now - (threshold.seconds * 1000)
+        const count = messages.filter(msg => msg.timestamp >= windowStart).length
+
+        if (count >= threshold.messages) {
+          return {
+            isSpam: true,
+            count: count,
+            seconds: threshold.seconds,
+            threshold: threshold.messages
+          }
+        }
+      }
+
+      return { isSpam: false }
+    } catch (error) {
+      logger.error("Error checking spam thresholds:", error)
+      return { isSpam: false }
+    }
+  },
+
+  async cleanupUserTracking(groupJid, userJid) {
+    try {
+      const userKey = `${groupJid}_${userJid}`
+      linkMessageTracking.delete(userKey)
+      recentMessages.delete(userKey)
+    } catch (error) {
+      logger.error("Error cleaning up tracking:", error)
+    }
+  },
+
+  detectLinks(text) {
+    if (!text) return false
+    const cleanText = text.trim().replace(/\s+/g, " ")
+
+    const linkPatterns = [
+      /https?:\/\/(?:[-\w.])+(?::[0-9]+)?(?:\/[^\s]*)?/gi,
+      /\bwww\.(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}(?:\/[^\s]*)?/gi,
+      /\bt\.me\/[a-zA-Z0-9_]+/gi,
+      /\bwa\.me\/[0-9]+/gi
+    ]
+
+    return linkPatterns.some(pattern => pattern.test(cleanText))
+  },
+
+  extractLinks(text) {
+    const links = new Set()
+    const cleanText = text.trim().replace(/\s+/g, " ")
+
+    const linkPatterns = [
+      /https?:\/\/(?:[-\w.])+(?::[0-9]+)?(?:\/[^\s]*)?/gi,
+      /\bwww\.(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}(?:\/[^\s]*)?/gi,
+      /\bt\.me\/[a-zA-Z0-9_]+/gi,
+      /\bwa\.me\/[0-9]+/gi
+    ]
+
+    linkPatterns.forEach(pattern => {
+      let match
+      pattern.lastIndex = 0
+      while ((match = pattern.exec(cleanText)) !== null) {
+        links.add(match[0].trim())
+      }
+    })
+
+    return Array.from(links)
   }
 }

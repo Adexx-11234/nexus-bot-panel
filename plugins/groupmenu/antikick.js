@@ -1,6 +1,5 @@
 import { createComponentLogger } from "../../utils/logger.js"
 import { GroupQueries, ViolationQueries } from "../../database/query.js"
-import AdminChecker from "../../whatsapp/utils/admin-checker.js"
 
 const logger = createComponentLogger("ANTI-REMOVE")
 
@@ -12,7 +11,11 @@ export default {
   description: "Prevent unauthorized member removals in the group",
   commands: ["antiremove", "antikick"],
   category: "group",
-  adminOnly: true,
+  permissions: {
+  adminRequired: true,      // User must be group admin (only applies in groups)
+  botAdminRequired: true,   // Bot must be group admin (only applies in groups)
+  groupOnly: true,          // Can only be used in groups
+},
   usage:
     "• `.antiremove on` - Enable anti-remove protection\n• `.antiremove off` - Disable protection\n• `.antiremove status` - Check protection status",
 
@@ -20,16 +23,6 @@ export default {
     const action = args[0]?.toLowerCase()
     const groupJid = m.chat
 
-    if (!m.isGroup) {
-      return { response: "❌ This command can only be used in groups!" }
-    }
-
-    // Check if user is admin
-    const adminChecker = new AdminChecker()
-    const isAdmin = await adminChecker.isGroupAdmin(sock, groupJid, m.sender)
-    if (!isAdmin) {
-      return { response: "❌ Only group admins can use this command!" }
-    }
 
     try {
       switch (action) {
@@ -96,7 +89,6 @@ export default {
 
   async handleRemoval(sock, sessionId, update) {
     try {
-      const adminChecker = new AdminChecker()
       const groupJid = update.jid
       const removedUser = update.participants[0]
       
@@ -109,10 +101,6 @@ export default {
         logger.warn("Could not determine who performed the removal, skipping anti-remove")
         return
       }
-      
-      // Skip if bot is not admin
-      const botIsAdmin = await adminChecker.isBotAdmin(sock, groupJid)
-      if (!botIsAdmin) return
       
       // Get group metadata
       const metadata = await sock.groupMetadata(groupJid)

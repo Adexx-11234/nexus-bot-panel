@@ -11,6 +11,9 @@ export default {
   category: "convertmenu",
   description: "Convert sticker to video",
   usage: "Reply to animated sticker with .tovideo",
+  permissions: {
+  // All false = public command, no restrictions
+},
   
   async execute(sock, sessionId, args, m) {
     if (!m.quoted) {

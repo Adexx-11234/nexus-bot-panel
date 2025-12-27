@@ -4,8 +4,9 @@ export default {
   name: "games",
   commands: ["games", "gamelist", "activegames"],
   description: "🎮 Show active games and gaming statistics",
-  adminOnly: false,
-  groupOnly: true,
+  permissions: {
+  // All false = public command, no restrictions
+},
 
   async execute(sock, sessionId, args, m) {
     try {
