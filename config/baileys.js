@@ -38,10 +38,9 @@ export const baileysConfig = {
   logger: pino({ level: "silent" }),
   printQRInTerminal: false,
   msgRetryCounterMap: {},
-  retryRequestDelayMs: 350,
-  markOnlineOnConnect: true,
+  markOnlineOnConnect: false,
   getMessage: defaultGetMessage,
-  // version: [2, 3000, 1025190524], // remove comments if connection open but didn't connect on WhatsApp
+  version: [2, 3000, 1025190524], // remove comments if connection open but didn't connect on WhatsApp
   emitOwnEvents: true,
   shouldIgnoreJid: (jid) => false,
   // Remove mentionedJid to avoid issues
@@ -52,9 +51,7 @@ export const baileysConfig = {
   appStateSyncInitialTimeoutMs: 10000,
   generateHighQualityLinkPreview: true,
   syncFullHistory: false,
-  defaultQueryTimeoutMs: 60000,
-  // Don't send ACKs to avoid potential bans
-  sendAcks: false,
+  defaultQueryTimeoutMs: 60000
 }
 
 export function getBaileysConfig() {
