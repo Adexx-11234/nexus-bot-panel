@@ -44,7 +44,7 @@ export const baileysConfig = {
   // version: [2, 3000, 1025190524], // remove comments if connection open but didn't connect on WhatsApp
   generateHighQualityLinkPreview: true,
   syncFullHistory: false,
-  defaultQueryTimeoutMs: undefined,
+  defaultQueryTimeoutMs: 60000,
   markOnlineOnConnect: true,
 }
 
