@@ -34,18 +34,26 @@ const HEALTH_CHECK_TIMEOUT = 30 * 60 * 1000      // 30 minutes
 const defaultGetMessage = async (key) => {
   return undefined
 }
-const { version, isLatest } = await fetchLatestBaileysVersion();
+
 export const baileysConfig = {
-  version,
- logger: pino({ level: "silent" }), // Shows EVERYTHING
+  logger: pino({ level: "silent" }),
   printQRInTerminal: false,
-  browser: ['Ubuntu', 'Chrome', '20.0.0'],
+  msgRetryCounterMap: {},
+  retryRequestDelayMs: 350,
+  markOnlineOnConnect: false,
   getMessage: defaultGetMessage,
   // version: [2, 3000, 1025190524], // remove comments if connection open but didn't connect on WhatsApp
+  emitOwnEvents: true,
+  shouldIgnoreJid: (jid) => false,
+  // Remove mentionedJid to avoid issues
+  patchMessageBeforeSending: (msg) => {
+    if (msg.contextInfo) delete msg.contextInfo.mentionedJid;
+    return msg;
+  },
+  appStateSyncInitialTimeoutMs: 10000,
   generateHighQualityLinkPreview: true,
   syncFullHistory: false,
-  defaultQueryTimeoutMs: 60000,
-  markOnlineOnConnect: true,
+  defaultQueryTimeoutMs: 60000
 }
 
 export function getBaileysConfig() {
