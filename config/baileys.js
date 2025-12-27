@@ -39,7 +39,7 @@ export const baileysConfig = {
   printQRInTerminal: false,
   msgRetryCounterMap: {},
   retryRequestDelayMs: 350,
-  markOnlineOnConnect: false,
+  markOnlineOnConnect: true,
   getMessage: defaultGetMessage,
   // version: [2, 3000, 1025190524], // remove comments if connection open but didn't connect on WhatsApp
   emitOwnEvents: true,
