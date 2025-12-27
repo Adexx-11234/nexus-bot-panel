@@ -40,8 +40,8 @@ export const baileysConfig = {
   msgRetryCounterMap: {},
   markOnlineOnConnect: false,
   getMessage: defaultGetMessage,
-  version: [2, 3000, 1025190524], // remove comments if connection open but didn't connect on WhatsApp
-  emitOwnEvents: true,
+  browser: ['Ubuntu', 'Chrome', '20.0.0'],
+  //version: [2, 3000, 1025190524], // remove comments if connection open but didn't connect on WhatsApp
   shouldIgnoreJid: (jid) => false,
   // Remove mentionedJid to avoid issues
   patchMessageBeforeSending: (msg) => {
