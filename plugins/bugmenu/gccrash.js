@@ -4,6 +4,7 @@ export default {
   category: "bugmenu",
   description: "Send group crash bugs",
   usage: ".gccrash <group_link>",
+  
     permissions: {
   ownerOnly: true,          // Only bot owner can use (overrides everything)
   privateOnly: true         // Can only be used in private chats
