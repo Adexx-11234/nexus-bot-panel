@@ -34,7 +34,6 @@ const HEALTH_CHECK_TIMEOUT = 30 * 60 * 1000      // 30 minutes
 const defaultGetMessage = async (key) => {
   return undefined
 }
-
 export const baileysConfig = {
   logger: pino({ level: "silent" }),
   printQRInTerminal: false,
@@ -53,7 +52,9 @@ export const baileysConfig = {
   appStateSyncInitialTimeoutMs: 10000,
   generateHighQualityLinkPreview: true,
   syncFullHistory: false,
-  defaultQueryTimeoutMs: 60000
+  defaultQueryTimeoutMs: 60000,
+  // Don't send ACKs to avoid potential bans
+  sendAcks: false,
 }
 
 export function getBaileysConfig() {
