@@ -8,7 +8,7 @@ import { VIPQueries } from "../database/query.js"
 import { VIPHelper } from "../whatsapp/index.js"
 
 const log = {
-  debug: (msg) => { /* console.log(`[PermChecker] ${msg}`) */ },
+ debug: (msg) => console.log(`[PermChecker] ${msg}`),
   warn: (msg) => console.warn(`[PermChecker] ${msg}`),
   error: (msg, err) => console.error(`[PermChecker] ${msg}`, err?.message || ""),
 }
