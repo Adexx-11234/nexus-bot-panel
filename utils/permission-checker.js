@@ -484,29 +484,47 @@ class PermissionChecker {
   // ================================================================================
   
   async getCachedBotAdmin(sock, groupJid) {
+  try {
+    if (!groupJid || typeof groupJid !== 'string') {
+      log.warn("Invalid groupJid for bot admin check")
+      return false
+    }
+
+    const cacheKey = `botadmin_${groupJid}`
+    const cached = this.getFromCache(cacheKey)
+    
+    if (cached !== null) {
+      log.debug(`Bot admin cache hit for ${groupJid}: ${cached}`)
+      return cached
+    }
+    
+    log.debug(`Bot admin cache miss for ${groupJid} - fetching fresh`)
+    
+    // ✅ ADD: More detailed logging
+    let botIsAdmin = false
     try {
-      if (!groupJid || typeof groupJid !== 'string') {
-        log.warn("Invalid groupJid for bot admin check")
+      botIsAdmin = await isBotAdmin(sock, groupJid)
+      log.debug(`✅ isBotAdmin result for ${groupJid}: ${botIsAdmin}`)
+    } catch (checkError) {
+      log.error(`❌ isBotAdmin failed for ${groupJid}:`, checkError)
+      // ✅ FIX: On error, retry once after short delay
+      await new Promise(resolve => setTimeout(resolve, 500))
+      try {
+        botIsAdmin = await isBotAdmin(sock, groupJid)
+        log.debug(`✅ Retry isBotAdmin result for ${groupJid}: ${botIsAdmin}`)
+      } catch (retryError) {
+        log.error(`❌ Retry failed for ${groupJid}:`, retryError)
         return false
       }
-
-      const cacheKey = `botadmin_${groupJid}`
-      const cached = this.getFromCache(cacheKey)
-      
-      if (cached !== null) {
-        log.debug(`Bot admin cache hit for ${groupJid}`)
-        return cached
-      }
-      
-      log.debug(`Bot admin cache miss for ${groupJid} - fetching fresh`)
-      const botIsAdmin = await isBotAdmin(sock, groupJid)
-      this.setCache(cacheKey, botIsAdmin)
-      return botIsAdmin
-    } catch (error) {
-      log.error("Error checking bot admin:", error)
-      return false // Safe default: assume not admin
     }
+    
+    this.setCache(cacheKey, botIsAdmin)
+    return botIsAdmin
+  } catch (error) {
+    log.error("Error checking bot admin:", error)
+    return false // Safe default: assume not admin
   }
+}
 
   async getCachedUserAdmin(sock, groupJid, userJid) {
     try {
