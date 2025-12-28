@@ -4,7 +4,7 @@ import fsr from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
 import chalk from "chalk"
-import { isGroupAdmin } from "../whatsapp/groups/index.js"
+import { isGroupAdmin, isBotAdmin } from "../whatsapp/groups/index.js"
 import permissionChecker from "./permission-checker.js"
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -987,7 +987,7 @@ async checkAntiPluginPermissions(sock, permissions, m) {
       if (cached && Date.now() - cached.timestamp < this.PERMISSION_CACHE_TTL) {
         isAdmin = cached.result
       } else {
-        const { isGroupAdmin } = await import("../whatsapp/groups/index.js")
+        const { isGroupAdmin, isBotAdmin } = await import("../whatsapp/groups/index.js")
         isAdmin = await isGroupAdmin(sock, m.chat, m.sender)
         
         this.permissionCache.set(cacheKey, {
