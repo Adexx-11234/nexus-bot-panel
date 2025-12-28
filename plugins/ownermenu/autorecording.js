@@ -9,13 +9,7 @@ export default {
   description: "Automatically show recording indicator when receiving messages",
   commands: ["autorecording", "autorecord", "ar"],
   category: "ownermenu",
-    permissions: {
-    permissions: {
-  ownerOnly: true,          // Only bot owner can use (overrides everything)
-  privateOnly: true         // Can only be used in private chats
-},          // Only bot owner can use (overrides everything)
-  privateOnly: true         // Can only be used in private chats
-},
+  ownerOnly: true,
   usage: "• .autorecording on/off - Enable/disable\n• .autorecording status - Check status\n• .autorecording - Show interactive menu",
 
   async execute(sock, sessionId, args, m) {

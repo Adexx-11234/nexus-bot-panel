@@ -34,10 +34,7 @@ export default {
   description: "Submit unban request to WhatsApp for banned numbers",
   commands: ["unbanwa", "waunban"],
   category: "ownermenu",
-    permissions: {
-  ownerOnly: true,          // Only bot owner can use (overrides everything)
-  privateOnly: true         // Can only be used in private chats
-},
+  ownerOnly: true,
   usage: "• `.unbanwa temp <number>` - Temporary unban request\n• `.unbanwa perm <number>` - Permanent unban request\n\nExample:\n• `.unbanwa temp +2348123456789`\n• `.unbanwa perm +2348123456789`",
 
   async execute(sock, sessionId, args, m) {

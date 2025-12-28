@@ -1,12 +1,8 @@
 export default {
   name: "toolmenu",
   commands: ["toolmenu"],
-  category: "toolmenu",
   description: "Display tools and utility commands menu",
-  permissions: {
-
-},
-usage: "• .toolmenu - Show the tool menu",
+  adminOnly: false,
 
   async execute(sock, sessionId, args, m) {
     try {

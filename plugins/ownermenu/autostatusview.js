@@ -9,10 +9,7 @@ export default {
   description: "Automatically view WhatsApp statuses",
   commands: ["autostatusview", "autoview", "asv"],
   category: "ownermenu",
-    permissions: {
-  ownerOnly: true,          // Only bot owner can use (overrides everything)
-  privateOnly: true         // Can only be used in private chats
-},
+  ownerOnly: true,
   usage: "• .autostatusview on/off - Enable/disable\n• .autostatusview status - Check status\n• .autostatusview - Show interactive menu",
 
   async execute(sock, sessionId, args, m) {

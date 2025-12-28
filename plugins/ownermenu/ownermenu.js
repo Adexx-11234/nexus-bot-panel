@@ -3,10 +3,7 @@ export default {
   commands: ["ownermenu", "owner"],
   description: "Display owner-only commands menu",
   category: "ownermenu", // Changed from "utility" to "ownermenu"
-    permissions: {
-  ownerOnly: true,          // Only bot owner can use (overrides everything)
-  privateOnly: true         // Can only be used in private chats
-}, // Explicitly mark as owner-only
+  ownerOnly: true, // Explicitly mark as owner-only
 
   async execute(sock, sessionId, args, m) {
     try {

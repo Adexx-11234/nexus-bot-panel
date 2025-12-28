@@ -57,7 +57,7 @@ export class GroupAdminChecker {
       const participants = await this.metadataManager.getParticipants(sock, groupJid)
 
       const isAdmin = participants.some(p => {
-        const participantId = p.jid || p.id
+        const participantId = p.id || p.jid
         const participantJid = p.jid || p.id
         
         const normalizedParticipantId = this._normalizeJid(participantId)

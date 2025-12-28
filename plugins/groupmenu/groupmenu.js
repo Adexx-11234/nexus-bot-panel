@@ -2,11 +2,7 @@ export default {
   name: "groupmenu",
   commands: ["groupmenu"],
   description: "Display group management commands menu",
-    permissions: {
-  adminRequired: true,      // User must be group admin (only applies in groups)
-  botAdminRequired: true,   // Bot must be group admin (only applies in groups)
-  groupOnly: true,          // Can only be used in groups
-},
+  adminOnly: false,
   async execute(sock, sessionId, args, m) {
     try {
       // Import menu system

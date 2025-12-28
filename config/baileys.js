@@ -1,16 +1,8 @@
 import NodeCache from "node-cache"
-import { Browsers, makeCacheableSignalKeyStore, fetchLatestBaileysVersion } from "@whiskeysockets/baileys"
+import { makeWASocket, Browsers, makeCacheableSignalKeyStore } from "@whiskeysockets/baileys"
 import { createFileStore, deleteFileStore, getFileStore } from "../whatsapp/index.js"
 import { logger } from "../utils/logger.js"
 import pino from "pino"
-
-// ✅ CRITICAL FIX: Will be injected by socket-manager patch at startup
-let makeWASocket = null
-
-export function setMakeWASocket(patchedFn) {
-  makeWASocket = patchedFn
-  logger.info('✅ Patched makeWASocket injected into baileys config')
-}
 
 // ==================== LOGGER CONFIGURATION ====================
 const baileysLogger = pino({
@@ -36,19 +28,23 @@ const sessionLastMessage = new Map()
 // Session cleanup intervals
 const SESSION_CLEANUP_INTERVAL = 60 * 1000        // Clean every 1 minute
 const SESSION_INACTIVITY_TIMEOUT = 10 * 60 * 1000 // 10 minutes inactivity
+const KEEPALIVE_INTERVAL = 5000                   // 5 seconds
 const HEALTH_CHECK_TIMEOUT = 30 * 60 * 1000      // 30 minutes
 
 // ==================== BAILEYS DEFAULT CONFIGURATION ====================
 const defaultGetMessage = async (key) => {
   return undefined
 }
+
 export const baileysConfig = {
   logger: pino({ level: "silent" }),
   printQRInTerminal: false,
   msgRetryCounterMap: {},
+  retryRequestDelayMs: 350,
   markOnlineOnConnect: false,
   getMessage: defaultGetMessage,
-  //version: [2, 3000, 1025190524], // remove comments if connection open but didn't connect on WhatsApp
+  // version: [2, 3000, 1025190524], // remove comments if connection open but didn't connect on WhatsApp
+  emitOwnEvents: true,
   shouldIgnoreJid: (jid) => false,
   // Remove mentionedJid to avoid issues
   patchMessageBeforeSending: (msg) => {
@@ -58,7 +54,9 @@ export const baileysConfig = {
   appStateSyncInitialTimeoutMs: 10000,
   generateHighQualityLinkPreview: true,
   syncFullHistory: false,
-  defaultQueryTimeoutMs: 60000
+  defaultQueryTimeoutMs: 60000,
+  // Don't send ACKs to avoid potential bans
+  sendAcks: false,
 }
 
 export function getBaileysConfig() {
@@ -397,17 +395,11 @@ const normalizeMetadata = (metadata) => {
  */
 export function createBaileysSocket(authState, sessionId, getMessage = null) {
   try {
-    // ✅ CRITICAL: Use patched makeWASocket if available, otherwise fall back
-    if (!makeWASocket) {
-      throw new Error('makeWASocket not initialized - socket-manager patch must be applied at startup!')
-    }
-
     const sock = makeWASocket({
       ...baileysConfig,
       auth: authState,
       getMessage: getMessage || defaultGetMessage,
       msgRetryCounterCache,
-      sessionId  // ✅ Pass sessionId for socket tracking
     })
 
     setupSocketDefaults(sock)

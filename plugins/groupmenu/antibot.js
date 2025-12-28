@@ -1,5 +1,6 @@
 import { createComponentLogger } from "../../utils/logger.js"
 import { GroupQueries, ViolationQueries } from "../../database/query.js"
+import AdminChecker from "../../whatsapp/utils/admin-checker.js"
 
 const logger = createComponentLogger("ANTI-BOT")
 
@@ -26,12 +27,8 @@ export default {
   name: "Anti-Bot",
   description: "Detect and remove Baileys/WhatsApp bots from the group (excludes all admins)",
   commands: ["antibot"],
-  category: "groupmenu",
-  permissions: {
-  adminRequired: true,      // User must be group admin (only applies in groups)
-  botAdminRequired: true,   // Bot must be group admin (only applies in groups)
-  groupOnly: true,          // Can only be used in groups
-},
+  category: "group",
+  adminOnly: true,
   usage:
     "• `.antibot on` - Enable bot protection\n• `.antibot off` - Disable bot protection\n• `.antibot status` - Check protection status\n• `.antibot scan` - Manually scan for bots",
 
@@ -39,6 +36,16 @@ export default {
     const action = args[0]?.toLowerCase()
     const groupJid = m.chat
 
+    if (!m.isGroup) {
+      return { response: "❌ This command can only be used in groups!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }
+    }
+
+    // Check if user is admin
+    const adminChecker = new AdminChecker()
+    const isAdmin = await adminChecker.isGroupAdmin(sock, groupJid, m.sender)
+    if (!isAdmin) {
+      return { response: "❌ Only group admins can use this command!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }
+    }
     
     try {
       switch (action) {
@@ -126,6 +133,11 @@ async processMessage(sock, sessionId, m) {
 
   async checkNewParticipant(sock, groupJid, participantJid) {
     try {
+      const adminChecker = new AdminChecker()
+      
+      // Skip if bot is not admin
+      const botIsAdmin = await adminChecker.isBotAdmin(sock, groupJid)
+      if (!botIsAdmin) return
       
       // CRITICAL: Skip if the new participant is protected (admin/owner/bot itself)
       if (await this.isProtectedUser(sock, groupJid, participantJid)) {
@@ -153,6 +165,13 @@ async processMessage(sock, sessionId, m) {
 
   async scanExistingMembers(sock, groupJid) {
     try {
+      const adminChecker = new AdminChecker()
+      
+      // Check if bot is admin
+      const botIsAdmin = await adminChecker.isBotAdmin(sock, groupJid)
+      if (!botIsAdmin) {
+        return { response: "❌ Bot needs admin permissions to scan and remove bots!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }
+      }
 
       // Get group metadata
       const groupMetadata = await sock.groupMetadata(groupJid)
@@ -288,6 +307,13 @@ async processMessage(sock, sessionId, m) {
         return true
       }
       
+      // Check if user is admin using AdminChecker
+      const adminChecker = new AdminChecker()
+      const isAdmin = await adminChecker.isGroupAdmin(sock, groupJid, userJid)
+      if (isAdmin) {
+        logger.info(`Protected: Admin user - ${userJid}`)
+        return true
+      }
       
       // Additional check: Get group metadata to double-check admin status
       try {

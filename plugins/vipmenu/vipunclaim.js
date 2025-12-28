@@ -7,13 +7,23 @@ export default {
   commands: ["vipunclaim", "viprelease-admin"],
   category: "vipmenu",
   usage: "• `.vipunclaim <phone>` - Force release user from VIP ownership",
-        permissions: {
-  ownerAndVip: true,
-  privateOnly: true
-},
 
   async execute(sock, sessionId, args, m) {
     try {
+      const adminTelegramId = VIPHelper.fromSessionId(sessionId)
+      if (!adminTelegramId) {
+        await sock.sendMessage(m.chat, { text: "❌ Could not identify your session\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
+        return
+      }
+
+      // Check if user is Default VIP
+      const adminStatus = await VIPQueries.isVIP(adminTelegramId)
+      if (!adminStatus.isDefault && adminStatus.level !== 99) {
+        await sock.sendMessage(m.chat, { 
+          text: "❌ This command is only available to Default VIP (bot owner).\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" 
+        }, { quoted: m })
+        return
+      }
 
       // Parse target phone
       let targetPhone = null

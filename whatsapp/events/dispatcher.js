@@ -72,26 +72,6 @@ export class EventDispatcher {
       try {
         recordSessionActivity(sessionId)
 
-                // Pre-fetch Signal keys for individual messages with CIPHERTEXT errors
-        // This prevents "Message absent from node" errors on first message from a user
-        if (messageUpdate.messages && messageUpdate.messages.length > 0) {
-          for (const msg of messageUpdate.messages) {
-            // If individual (non-group) message failed to decrypt (CIPHERTEXT = 11)
-            if (msg.messageStubType === 11 && !msg.key.participant) {
-              const sender = msg.key.remoteJid
-              try {
-                // Force fresh key fetch without cache
-                if (sock.getUSyncDevices) {
-                  await sock.getUSyncDevices([sender], false, false)
-                  logger.debug(`Pre-fetched Signal keys for ${sender}`)
-                }
-              } catch (err) {
-                logger.trace(`Key pre-fetch failed for ${sender}: ${err.message}`)
-              }
-            }
-          }
-        }
-
         // Fire and forget - process without blocking
         this.messageHandler
           .handleMessagesUpsert(sock, sessionId, messageUpdate)

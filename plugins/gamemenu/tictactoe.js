@@ -5,11 +5,8 @@ export default {
   name: "tictactoe",
   commands: ["tictactoe", "ttt", "xo"],
   description: "⭕ Start a TicTacToe game - Classic 3x3 grid battle vs human or bot!",
-  permissions: {
-  // All false = public command, no restrictions
-},
-category: "gamemenu",
-  usage: "• .tictactoe [option] - Start TicTacToe game\n\n*Options:*\n• start - Human vs Human\n• bot [easy|medium|hard] - vs Bot\n\n*Example:*\n.tictactoe start\n.tictactoe bot hard",
+  adminOnly: false,
+  groupOnly: false,
 
   async execute(sock, sessionId, args, m) {
     try {

@@ -10,13 +10,32 @@ export default {
   description: "Get all groups from all connected users (Default VIP only)",
   adminOnly: true,
   usage: ".vipallgroups - Export all groups to file",
-        permissions: {
-  defaultVipOnly: true,
-  privateOnly: true
-},
   
   async execute(sock, sessionId, args, m) {
     try {
+      // Get user telegram ID from session
+      const userTelegramId = VIPHelper.fromSessionId(sessionId)
+      
+      if (!userTelegramId) {
+        await sock.sendMessage(m.chat, { 
+          text: "❌ Could not identify your session\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" 
+        }, { quoted: m })
+        return { success: false, error: "Session not identified" }
+      }
+
+      // Check if user is default VIP
+      const vipStatus = await VIPQueries.isVIP(userTelegramId)
+      
+      if (!vipStatus.isDefault && vipStatus.level !== 99) {
+        await sock.sendMessage(m.chat, { 
+          text: "❌ *Access Denied*\n\n" +
+            "This command is restricted to Default VIP only.\n" +
+            "Only the bot administrator can view all groups.\n\n" +
+            "> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
+        }, { quoted: m })
+        return { success: false, error: "Not default VIP" }
+      }
+
       // Get session manager
       const sessionManager = getSessionManager()
       

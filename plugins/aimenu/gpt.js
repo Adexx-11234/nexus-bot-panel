@@ -8,9 +8,7 @@ export default {
   description: "Chat with GPT-4o AI model",
   category: "ai",
   usage: "• .gpt <question> - Ask GPT-4o anything\n• .gpt4o <question> - Alternative command",
-  permissions: {
-    // All false = public command, no restrictions
-  },
+  
   async execute(sock, sessionId, args, m) {
     try {
       // Validate input

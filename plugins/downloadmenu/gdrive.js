@@ -8,9 +8,6 @@ export default {
   description: "Download files from Google Drive",
   category: "download",
   usage: "• .gdrive <url> - Download Google Drive file\n• .gd <url> - Short command",
-  permissions: {
-  // All false = public command, no restrictions
-},
   
   async execute(sock, sessionId, args, m) {
     try {

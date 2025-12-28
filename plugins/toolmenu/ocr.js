@@ -9,9 +9,6 @@ export default {
   commands: ["ocr", "readtext", "extracttext", "imgtotxt", "imagetotext"],
   description: "Extract text from images using OCR",
   category: "toolmenu",
-  permissions: {
-
-},
   usage: "• .ocr <image_url> - Extract text from image\n• .ocr <reply to image> - Extract text from replied image\n• Send image with caption: .ocr",
   
   async execute(sock, sessionId, args, m) {

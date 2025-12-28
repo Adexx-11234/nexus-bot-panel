@@ -9,9 +9,7 @@ export default {
   description: "Generate videos from text descriptions using Sora AI",
   category: "ai",
   usage: "• .vgen <description> - Generate video from text\n• .sora <description> - Alternative command",
-  permissions: {
-    // All false = public command, no restrictions
-  },
+  
   async execute(sock, sessionId, args, m) {
     try {
       // Validate input

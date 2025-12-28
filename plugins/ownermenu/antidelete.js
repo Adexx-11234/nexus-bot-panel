@@ -5,13 +5,7 @@ export default {
   description: "Enable or disable automatic deleted message recovery and forwarding to your personal chat",
   commands: ["antidelete", "adon", "adoff", "antideleted"],
   category: "ownermenu", // Changed from "utility" to "ownermenu"
-  permissions: {
-    permissions: {
-  ownerOnly: true,          // Only bot owner can use (overrides everything)
-  privateOnly: true         // Can only be used in private chats
-},          // Only bot owner can use (overrides everything)
-  privateOnly: true         // Can only be used in private chats
-},
+  ownerOnly: true, // Explicitly mark as owner-only
   usage: `• \`.antidelete on\` - Enable deleted message recovery\n• \`.antidelete off\` - Disable deleted message recovery\n• \`.antidelete status\` - Check current status`,
 
   _normalizeWhatsAppJid(jid) {

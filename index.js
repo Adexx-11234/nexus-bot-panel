@@ -62,8 +62,6 @@ import { quickSetup as quickSetupWhatsApp, VIPHelper } from "./whatsapp/index.js
 import { WebInterface } from "./web/index.js"
 import { GroupScheduler } from "./database/groupscheduler.js"
 import pluginLoader from "./utils/plugin-loader.js"
-import { createPatchedMakeWASocket } from "./whatsapp/core/socket-manager.js"
-import { setMakeWASocket } from "./config/baileys.js"
 
 const logger = createComponentLogger("MAIN")
 const PORT = process.env.PORT || 3000
@@ -117,17 +115,6 @@ app.get("/api/status", async (req, res) => {
   })
 })
 
-// ✅ Socket diagnostics endpoint - for debugging multi-socket issues
-app.get("/api/sockets/diagnostics", async (req, res) => {
-  try {
-    const { getSocketDiagnostics } = await import('./whatsapp/core/socket-manager.js')
-    const diagnostics = getSocketDiagnostics()
-    res.json(diagnostics)
-  } catch (error) {
-    res.status(500).json({ error: error.message })
-  }
-})
-
 // Safe async wrapper - never throws
 async function safeAsync(fn, fallback = null) {
   try {
@@ -148,18 +135,6 @@ async function initializePlatform() {
   logger.info("═══════════════════════════════════════════════")
   logger.info("🚀 Starting Platform Initialization")
   logger.info("═══════════════════════════════════════════════")
-  
-  // ✅ 0. Apply Socket Manager Patch (CRITICAL - must be first!)
-  logger.info("🔧 [0/9] Applying multi-socket patch to baileys...")
-  try {
-    const patchedMakeWASocket = createPatchedMakeWASocket()
-    setMakeWASocket(patchedMakeWASocket)
-    logger.info("✅ Multi-socket patch applied - multiple concurrent sessions now supported")
-  } catch (error) {
-    logger.error("❌ CRITICAL: Failed to apply socket manager patch!")
-    logger.error(error.message)
-    logger.error("⚠️  Continuing, but multi-socket support may not work correctly")
-  }
   
   // 1. Database Connection
   logger.info("📊 [1/9] Connecting to database...")

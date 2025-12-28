@@ -10,9 +10,6 @@ export default {
   description: "Download Apple Music tracks",
   category: "download",
   usage: "• .applemusic <url> - Download Apple Music track\n• .am <url> - Short command",
-  permissions: {
-  // All false = public command, no restrictions
-},
   
   async execute(sock, sessionId, args, m) {
     try {

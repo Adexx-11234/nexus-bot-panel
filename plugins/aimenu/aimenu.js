@@ -2,9 +2,7 @@ export default {
   name: "aimenu",
   commands: ["aimenu"],
   description: "Display AI and artificial intelligence commands menu",
-  permissions: {
-    // All false = public command, no restrictions
-  },
+  adminOnly: false,
 
   async execute(sock, sessionId, args, m) {
     try {

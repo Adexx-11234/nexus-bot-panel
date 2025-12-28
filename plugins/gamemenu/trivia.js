@@ -5,11 +5,8 @@ export default {
   name: "trivia",
   commands: ["trivia", "knowledge"],
   description: "🧠 Start a trivia quiz game - Test your knowledge across multiple categories!",
-  permissions: {
-  // All false = public command, no restrictions
-},
-  category: "gamemenu",
-  usage: "• .trivia [category/difficulty] - Start trivia quiz game\n\n*Categories:*\n• science\n• history\n• geography\n• entertainment\n• mixed\n\n*Difficulties:*\n• easy\n• medium\n• hard\n• mixed\n\n*Example:*\n.trivia science\n.trivia hard",
+  adminOnly: false,
+  groupOnly: true,
 
   async execute(sock, sessionId, args, m) {
     try {

@@ -4,13 +4,20 @@ export default {
   category: "groupmenu",
   description: "Add a member to the group",
   usage: "add <number> or reply to user",
-  permissions: {
-  adminRequired: true,      // User must be group admin (only applies in groups)
-  botAdminRequired: true,   // Bot must be group admin (only applies in groups)
-  groupOnly: true,          // Can only be used in groups
-},
+  permissions: ["admin"],
 
-  async execute(sock, m, { args, quoted }) {
+  async execute(sock, m, { args, quoted, isAdmin, isBotAdmin }) {
+    if (!m.isGroup) {
+      return m.reply(`❌ This command can only be used in groups!` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`)
+    }
+
+    if (!isAdmin) {
+      return m.reply(`❌ Only group admins can use this command!` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`)
+    }
+
+    if (!isBotAdmin) {
+      return m.reply(`❌ Bot needs to be admin to add members!` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`)
+    }
 
     let targetNumber
     if (quoted && quoted.sender) {

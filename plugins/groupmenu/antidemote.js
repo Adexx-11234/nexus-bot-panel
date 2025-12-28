@@ -1,5 +1,6 @@
 import { createComponentLogger } from "../../utils/logger.js"
 import { GroupQueries, WarningQueries, ViolationQueries } from "../../database/query.js"
+import AdminChecker from "../../whatsapp/utils/admin-checker.js"
 
 const logger = createComponentLogger("ANTI-DEMOTE")
 
@@ -10,18 +11,25 @@ export default {
   name: "Anti-Demote",
   description: "Prevent unauthorized demotions in the group",
   commands: ["antidemote"],
-  category: "groupmenu",
-  permissions: {
-    adminRequired: true,      // User must be group admin (only applies in groups)
-    botAdminRequired: true,   // Bot must be group admin (only applies in groups)
-    groupOnly: true,          // Can only be used in groups
-  },
+  category: "group",
+  adminOnly: true,
   usage:
     "• `.antidemote on` - Enable anti-demote protection\n• `.antidemote off` - Disable protection\n• `.antidemote status` - Check protection status",
 
   async execute(sock, sessionId, args, m) {
     const action = args[0]?.toLowerCase()
     const groupJid = m.chat
+
+    if (!m.isGroup) {
+      return { response: "❌ This command can only be used in groups!" }
+    }
+
+    // Check if user is admin
+    const adminChecker = new AdminChecker()
+    const isAdmin = await adminChecker.isGroupAdmin(sock, groupJid, m.sender)
+    if (!isAdmin) {
+      return { response: "❌ Only group admins can use this command!" }
+    }
 
     try {
       switch (action) {
@@ -88,6 +96,7 @@ export default {
 
   async handleDemotion(sock, sessionId, update) {
     try {
+      const adminChecker = new AdminChecker()
       const groupJid = update.jid
       const demotedUser = update.participants[0]
       
@@ -102,6 +111,9 @@ export default {
         return
       }
       
+      // Skip if bot is not admin
+      const botIsAdmin = await adminChecker.isBotAdmin(sock, groupJid)
+      if (!botIsAdmin) return
       
       // Get group metadata to check owner
       const metadata = await sock.groupMetadata(groupJid)

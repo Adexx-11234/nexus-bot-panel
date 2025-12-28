@@ -9,9 +9,6 @@ export default {
   description: "Download Facebook videos",
   category: "download",
   usage: "• .fb <url> - Download Facebook video\n• .fbdl <url> - Download video",
-  permissions: {
-  // All false = public command, no restrictions
-},
   
   async execute(sock, sessionId, args, m) {
     try {

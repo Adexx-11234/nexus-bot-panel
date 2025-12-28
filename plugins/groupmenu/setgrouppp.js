@@ -1,4 +1,6 @@
 import { createComponentLogger } from "../../utils/logger.js"
+import { GroupQueries } from "../../database/query.js"
+import AdminChecker from "../../whatsapp/utils/admin-checker.js"
 import { downloadMediaMessage } from "@whiskeysockets/baileys"
 
 const logger = createComponentLogger("SETGROUPPP")
@@ -7,12 +9,8 @@ export default {
   name: "Set Group Profile Picture",
   description: "Change the group's profile picture",
   commands: ["setgrouppp", "setpp", "setgroupicon", "setgcpp"],
-  category: "groupmenu",
-  permissions: {
-  adminRequired: true,      // User must be group admin (only applies in groups)
-  botAdminRequired: true,   // Bot must be group admin (only applies in groups)
-  groupOnly: true,          // Can only be used in groups
-},
+  category: "group",
+  adminOnly: true,
   usage: "• Reply to an image with `.setgrouppp` - Set that image as group profile picture\n• `.setgrouppp` with attached image - Set attached image as group profile picture",
 
   /**
@@ -21,6 +19,21 @@ export default {
   async execute(sock, sessionId, args, m) {
     try {
       const groupJid = m.chat
+
+      // Ensure this is a group
+      if (!this.isGroupMessage(m)) {
+        await sock.sendMessage(groupJid, {
+          text: "❌ This command can only be used in groups!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
+        }, { quoted: m })
+        return
+      }
+
+      // Check admin permissions
+      if (!(await this.checkAdminPermission(sock, groupJid, m.sender, m))) return
+
+      // Check if bot has admin permissions
+      if (!(await this.checkBotAdminPermission(sock, groupJid, m))) return
+
       // Get image buffer from message or quoted message
       const imageBuffer = await this.getImageBuffer(sock, m)
 
@@ -47,6 +60,65 @@ export default {
               "• Image size is reasonable\n\n" +
               "> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
       }, { quoted: m })
+    }
+  },
+
+  // ===================
+  // VALIDATION METHODS
+  // ===================
+
+  /**
+   * Check if message is from a group
+   */
+  isGroupMessage(m) {
+    return m?.isGroup === true || (m?.chat && m.chat.endsWith('@g.us'))
+  },
+
+  /**
+   * Check if user is admin
+   */
+  async isUserAdmin(sock, groupJid, userJid) {
+    try {
+      const adminChecker = new AdminChecker()
+      return await adminChecker.isGroupAdmin(sock, groupJid, userJid)
+    } catch (error) {
+      logger.error("Error checking user admin status:", error)
+      return false
+    }
+  },
+
+  /**
+   * Check admin permission for command execution
+   */
+  async checkAdminPermission(sock, groupJid, userJid, m) {
+    const isAdmin = await this.isUserAdmin(sock, groupJid, userJid)
+    if (!isAdmin) {
+      await sock.sendMessage(groupJid, {
+        text: "❌ Only group admins can use this command!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
+      }, { quoted: m })
+      return false
+    }
+    return true
+  },
+
+  /**
+   * Check if bot has admin permissions
+   */
+  async checkBotAdminPermission(sock, groupJid, m) {
+    try {
+      const adminChecker = new AdminChecker()
+      const botIsAdmin = await adminChecker.isBotAdmin(sock, groupJid)
+      
+      if (!botIsAdmin) {
+        await sock.sendMessage(groupJid, {
+          text: "❌ Bot needs to be a group admin to change the profile picture!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
+        }, { quoted: m })
+        return false
+      }
+      return true
+    } catch (error) {
+      logger.error("Error checking bot admin permission:", error)
+      return false
     }
   },
 

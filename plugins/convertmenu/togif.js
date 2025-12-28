@@ -11,9 +11,6 @@ export default {
   category: "convertmenu",
   description: "Convert animated sticker to GIF",
   usage: "Reply to animated sticker with .togif",
-  permissions: {
-  // All false = public command, no restrictions
-},
 
   async execute(sock, sessionId, args, m) {
     if (!m.quoted) {

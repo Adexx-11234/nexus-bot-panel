@@ -4,8 +4,7 @@ import fsr from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
 import chalk from "chalk"
-import { isGroupAdmin, isBotAdmin } from "../whatsapp/groups/index.js"
-import permissionChecker from "./permission-checker.js"
+import { isGroupAdmin } from "../whatsapp/groups/index.js"
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
@@ -481,121 +480,105 @@ class PluginLoader {
   }
 
   async executeCommand(sock, sessionId, commandName, args, m) {
-  try {
-    const plugin = this.findCommand(commandName)
-    if (!plugin) return { success: false, silent: true }
+    try {
+      const plugin = this.findCommand(commandName)
+      if (!plugin) return { success: false, silent: true }
 
-    // Extract push name
-    if (!m.pushName) {
-      this.extractPushName(sock, m)
-        .then((name) => {
-          m.pushName = name
-        })
-        .catch(() => {})
-    }
-
-    const isCreator = this.checkIsBotOwner(sock, m.sender, m.key?.fromMe)
-
-    const enhancedM = {
-      ...m,
-      chat: m.chat || m.key?.remoteJid || m.from,
-      sender: m.sender || m.key?.participant || m.from,
-      isCreator,
-      isOwner: isCreator,
-      isGroup: m.isGroup || (m.chat && m.chat.endsWith("@g.us")),
-      sessionContext: m.sessionContext || { telegram_id: "Unknown", session_id: sessionId },
-      sessionId,
-      reply: m.reply,
-      prefix: m.prefix || ".",
-      pluginCategory: plugin.category,
-      commandName: commandName.toLowerCase()
-    }
-
-    // ✅ FIX: Pre-populate admin status BEFORE permission check
-    if (enhancedM.isGroup) {
-      try {
-        // Check admin statuses in parallel
-        const [userIsAdmin, botIsAdmin] = await Promise.all([
-          isGroupAdmin(sock, enhancedM.chat, enhancedM.sender),
-          isBotAdmin(sock, enhancedM.chat)
-        ])
-        
-        enhancedM.isAdmin = userIsAdmin
-        enhancedM.isBotAdmin = botIsAdmin
-        
-        log.debug(`Admin status for ${commandName}: user=${userIsAdmin}, bot=${botIsAdmin}`)
-      } catch (adminCheckError) {
-        log.error("Error pre-checking admin status:", adminCheckError)
-        // Don't fail - let permission checker handle it
+      if (!m.pushName) {
+        this.extractPushName(sock, m)
+          .then((name) => {
+            m.pushName = name
+          })
+          .catch(() => {})
       }
-    }
 
-    const [modeAllowed, permissionCheck] = await Promise.all([
-      this._checkBotMode(enhancedM),
-      this._checkPermissionsCached(sock, plugin, enhancedM),
-    ])
+      const isCreator = this.checkIsBotOwner(sock, m.sender, m.key?.fromMe)
 
-    if (!modeAllowed) {
-      this.clearTempData()
-      return { success: false, silent: true }
-    }
+      const enhancedM = {
+        ...m,
+        chat: m.chat || m.key?.remoteJid || m.from,
+        sender: m.sender || m.key?.participant || m.from,
+        isCreator,
+        isOwner: isCreator,
+        isGroup: m.isGroup || (m.chat && m.chat.endsWith("@g.us")),
+        sessionContext: m.sessionContext || { telegram_id: "Unknown", session_id: sessionId },
+        sessionId,
+        reply: m.reply,
+        prefix: m.prefix || ".",
+        pluginCategory: plugin.category, // ← ADD THIS LINE
+        commandName: commandName.toLowerCase() // ← OPTIONAL: Also add this
+      }
 
-    if (enhancedM.isGroup) {
-      const groupOnlyAllowed = await this._checkGroupOnly(sock, enhancedM, commandName)
-      if (!groupOnlyAllowed) {
+      const [modeAllowed, permissionCheck] = await Promise.all([
+        this._checkBotMode(enhancedM),
+        this._checkPermissionsCached(sock, plugin, enhancedM),
+      ])
+
+      if (!modeAllowed) {
         this.clearTempData()
         return { success: false, silent: true }
       }
-    }
 
-    if (!permissionCheck.allowed) {
-      this.clearTempData()
+      if (enhancedM.isGroup) {
+        const groupOnlyAllowed = await this._checkGroupOnly(sock, enhancedM, commandName)
+        if (!groupOnlyAllowed) {
+          this.clearTempData()
+          return { success: false, silent: true }
+        }
+      }
 
-      if (permissionCheck.silent) {
+      if (!permissionCheck.allowed) {
+  this.clearTempData()
+
+  if (permissionCheck.silent) {
+    return { success: false, silent: true }
+  }
+
+  // For groupmenu/gamemenu: Only first bot sends error, then mark as processed
+  const needsDeduplication = plugin.category === 'groupmenu' || plugin.category === 'gamemenu'
+  
+  if (needsDeduplication) {
+    const messageKey = this.deduplicator.generateKey(enhancedM.chat, m.key?.id)
+    if (messageKey) {
+      const actionKey = `permission-error-${commandName}`
+      
+      // Try to lock for sending error
+      if (!this.deduplicator.tryLockForProcessing(messageKey, sessionId, actionKey)) {
+        // Another bot already sent the error
         return { success: false, silent: true }
       }
-
-      // For groupmenu/gamemenu: Only first bot sends error
-      const needsDeduplication = plugin.category === 'groupmenu' || plugin.category === 'gamemenu'
       
-      if (needsDeduplication) {
-        const messageKey = this.deduplicator.generateKey(enhancedM.chat, m.key?.id)
-        if (messageKey) {
-          const actionKey = `permission-error-${commandName}`
-          
-          if (!this.deduplicator.tryLockForProcessing(messageKey, sessionId, actionKey)) {
-            return { success: false, silent: true }
-          }
-          
-          try {
-            await sock.sendMessage(enhancedM.chat, { text: permissionCheck.message }, { quoted: m })
-            this.deduplicator.markAsProcessed(messageKey, sessionId, actionKey)
-          } catch (sendError) {
-            log.error("Failed to send permission error:", sendError)
-          }
-        }
-      } else {
-        try {
-          await sock.sendMessage(enhancedM.chat, { text: permissionCheck.message }, { quoted: m })
-        } catch (sendError) {
-          log.error("Failed to send permission error:", sendError)
-        }
+      // Send error and mark as processed
+      try {
+        await sock.sendMessage(enhancedM.chat, { text: permissionCheck.message }, { quoted: m })
+        this.deduplicator.markAsProcessed(messageKey, sessionId, actionKey)
+      } catch (sendError) {
+        log.error("Failed to send permission error:", sendError)
       }
-
-      return { success: false, error: permissionCheck.message }
     }
-
-    // Execute plugin
-    const result = await this.executePluginWithFallback(sock, sessionId, args, enhancedM, plugin)
-
-    this.clearTempData()
-    return { success: true, result }
-  } catch (error) {
-    log.error(`Error executing command ${commandName}:`, error)
-    this.clearTempData()
-    return { success: false, error: error.message }
+  } else {
+    // Non-deduplicated commands: each bot sends its own error
+    try {
+      await sock.sendMessage(enhancedM.chat, { text: permissionCheck.message }, { quoted: m })
+    } catch (sendError) {
+      log.error("Failed to send permission error:", sendError)
+    }
   }
+
+  return { success: false, error: permissionCheck.message }
 }
+
+      // Execute plugin
+      const result = await this.executePluginWithFallback(sock, sessionId, args, enhancedM, plugin)
+
+      this.clearTempData()
+      return { success: true, result }
+    } catch (error) {
+      log.error(`Error executing command ${commandName}:`, error)
+      this.clearTempData()
+      return { success: false, error: error.message }
+    }
+  }
 
   async _checkBotMode(m) {
     if (m.isCreator) return true
@@ -634,32 +617,133 @@ class PluginLoader {
   }
 
   async _checkPermissionsCached(sock, plugin, m) {
-  const cacheKey = `${plugin.id}_${m.sender}_${m.chat}`
-  const cached = this.permissionCache.get(cacheKey)
+    const cacheKey = `${plugin.id}_${m.sender}_${m.chat}`
+    const cached = this.permissionCache.get(cacheKey)
 
-  if (cached && Date.now() - cached.timestamp < this.PERMISSION_CACHE_TTL) {
-    return cached.result
+    if (cached && Date.now() - cached.timestamp < this.PERMISSION_CACHE_TTL) {
+      return cached.result
+    }
+
+    const result = await this.checkPluginPermissions(sock, plugin, m)
+
+    // Cache the result
+    this.permissionCache.set(cacheKey, {
+      result,
+      timestamp: Date.now(),
+    })
+
+    // Cleanup old cache entries
+    if (this.permissionCache.size > 500) {
+      const entries = Array.from(this.permissionCache.entries())
+      const toRemove = entries.slice(0, 200)
+      toRemove.forEach(([key]) => this.permissionCache.delete(key))
+    }
+
+    return result
   }
-
-  // ✅ Use centralized permission checker for COMMANDS
-  const result = await permissionChecker.checkCommandPermissions(sock, plugin, m)
-
-  this.permissionCache.set(cacheKey, {
-    result,
-    timestamp: Date.now(),
-  })
-
-  if (this.permissionCache.size > 500) {
-    const entries = Array.from(this.permissionCache.entries())
-    const toRemove = entries.slice(0, 200)
-    toRemove.forEach(([key]) => this.permissionCache.delete(key))
-  }
-
-  return result
-}
 
   // ==================== PERMISSION CHECKS ====================
 
+  async checkPluginPermissions(sock, plugin, m) {
+    try {
+      if (!plugin) {
+        return { allowed: false, message: "❌ Plugin not found.", silent: false }
+      }
+
+      const commandName = plugin.commands?.[0]?.toLowerCase() || ""
+
+      // Menu commands - everyone can view (except vipmenu)
+      const publicMenus = ["aimenu", "convertmenu", "downloadmenu", "gamemenu", "groupmenu", "mainmenu", "ownermenu", "toolmenu", "searchmenu", "bugmenu"]
+      if (publicMenus.includes(commandName)) {
+        return { allowed: true }
+      }
+
+      // VIP menu - VIP and owner only
+      if (commandName === "vipmenu") {
+        const { VIPQueries } = await import("../database/query.js")
+        const { VIPHelper } = await import("../whatsapp/index.js")
+
+        const userTelegramId = VIPHelper.fromSessionId(m.sessionId)
+        if (!userTelegramId) {
+          return { allowed: false, message: "❌ Could not verify VIP status.", silent: false }
+        }
+
+        const vipStatus = await VIPQueries.isVIP(userTelegramId)
+        if (!vipStatus.isVIP && !m.isCreator) {
+          return {
+            allowed: false,
+            message: "❌ VIP menu requires VIP access.\n\nContact bot owner for privileges.",
+            silent: false,
+          }
+        }
+        return { allowed: true }
+      }
+
+      // Game menu - everyone can use
+      if (plugin.category === "gamemenu") {
+        return { allowed: true }
+      }
+
+      // === CRITICAL: GROUP PERMISSION LOGIC ===
+      // In groups: ONLY bot owner (m.sender === sock.user.id) and group admins can use commands
+      if (m.isGroup) {
+        // Fresh admin check - always get latest metadata
+        const isAdmin = await isGroupAdmin(sock, m.chat, m.sender)
+
+        // Only bot owner or group admin allowed
+        if (!m.isCreator && !isAdmin) {
+          return { allowed: false, silent: true }
+        }
+      }
+
+      // Check specific command permissions
+      const requiredPermission = this.determineRequiredPermission(plugin)
+
+      // Owner-only commands
+      if (requiredPermission === "owner" && !m.isCreator) {
+        return { allowed: false, message: "❌ Bot owner only.", silent: false }
+      }
+
+      // VIP commands
+      if (requiredPermission === "vip") {
+        const { VIPQueries } = await import("../database/query.js")
+        const { VIPHelper } = await import("../whatsapp/index.js")
+
+        const userTelegramId = VIPHelper.fromSessionId(m.sessionId)
+        if (!userTelegramId) {
+          return { allowed: false, message: "❌ Could not verify VIP status.", silent: false }
+        }
+
+        const vipStatus = await VIPQueries.isVIP(userTelegramId)
+        if (!vipStatus.isVIP && !m.isCreator) {
+          return {
+            allowed: false,
+            message: "❌ VIP access required.\n\nContact bot owner.",
+            silent: false,
+          }
+        }
+      }
+
+      // Group admin commands
+      if ((requiredPermission === "admin" || requiredPermission === "group_admin") && m.isGroup) {
+        const isAdmin = await isGroupAdmin(sock, m.chat, m.sender)
+
+        if (!isAdmin && !m.isCreator) {
+          return { allowed: false, message: "❌ Admin privileges required.", silent: false }
+        }
+      }
+
+      // Owner menu category
+      if (plugin.category === "ownermenu" && !m.isCreator) {
+        return { allowed: false, message: "❌ Bot owner only.", silent: false }
+      }
+
+      return { allowed: true }
+    } catch (error) {
+      log.error("Error checking permissions:", error)
+      return { allowed: false, message: "❌ Permission check failed.", silent: false }
+    }
+  }
 async executePluginWithFallback(sock, sessionId, args, m, plugin) {
   // Retry logic for database conflicts (groupmenu only)
   const maxRetries = plugin.category === 'groupmenu' ? 2 : 0
@@ -818,244 +902,50 @@ async executePluginWithFallback(sock, sessionId, args, m, plugin) {
     }
   }
 
- async processAntiPlugins(sock, sessionId, m) {
-  const messageKey = this.deduplicator.generateKey(m.chat, m.key?.id)
-  
-  // ✅ NEW: Validate message key
-  if (!messageKey) {
-    log.warn("Cannot generate message key for anti-plugin processing - missing chat or message ID")
-    return // Exit early if we can't deduplicate
-  }
+  async processAntiPlugins(sock, sessionId, m) {
+    // DEDUPLICATION: Generate message key
+    const messageKey = this.deduplicator.generateKey(m.chat, m.key?.id)
+    if (!messageKey) {
+      log.warn("Cannot generate message key for anti-plugin processing")
+      return
+    }
 
-  for (const plugin of this.antiPlugins.values()) {
-    // ✅ NEW: Comprehensive try-catch for each plugin
-    try {
-      // ✅ STEP 1: Validate plugin and message
-      if (!this.validateAntiPluginInput(sock, sessionId, m, plugin)) {
-        log.warn(`Skipping ${plugin?.name || "unknown"} - validation failed`)
-        continue
-      }
+    for (const plugin of this.antiPlugins.values()) {
+      try {
+        if (!sock || !sessionId || !m || !plugin) continue
 
-      // ✅ STEP 2: Check if feature is enabled
-      let enabled = true
-      if (typeof plugin.isEnabled === "function") {
-        try {
+        let enabled = true
+        if (typeof plugin.isEnabled === "function") {
           enabled = await plugin.isEnabled(m.chat)
-        } catch (enableError) {
-          log.error(`Error checking if ${plugin.name} is enabled:`, enableError)
-          continue // Skip to next plugin if enable check fails
         }
-      }
-      if (!enabled) continue
+        if (!enabled) continue
 
-      // ✅ STEP 3: Basic shouldProcess check with error handling
-      let shouldProcess = true
-      if (typeof plugin.shouldProcess === "function") {
-        try {
+        let shouldProcess = true
+        if (typeof plugin.shouldProcess === "function") {
           shouldProcess = await plugin.shouldProcess(m)
-        } catch (shouldProcessError) {
-          log.error(`Error in shouldProcess for ${plugin.name}:`, shouldProcessError)
-          continue // Skip to next plugin if shouldProcess fails
         }
-      }
-      if (!shouldProcess) continue
+        if (!shouldProcess) continue
 
-      // ✅ STEP 4: CHECK PERMISSIONS BEFORE LOCKING (with error handling)
-      let shouldProcessMessage = false
-      try {
-        shouldProcessMessage = await permissionChecker.checkAntiPluginPermissions(sock, plugin, m)
-      } catch (permError) {
-        log.error(`Error checking anti-plugin permissions for ${plugin.name}:`, permError)
-        // ✅ Safe default: don't process if permission check fails
-        continue
-      }
-      
-      if (!shouldProcessMessage) {
-        log.debug(`Skipping ${plugin.name} for ${m.sender} - bypasses anti-plugin (admin/vip/owner)`)
-        continue  // ← Skip WITHOUT acquiring lock
-      }
+        // DEDUPLICATION: Try to acquire lock BEFORE processing
+        const actionKey = `anti-${plugin.name || "unknown"}` // e.g., 'anti-Anti-Link'
 
-      // ✅ STEP 5: NOW try to acquire lock (only if should process)
-      const actionKey = `anti-${plugin.name || "unknown"}`
+        if (!this.deduplicator.tryLockForProcessing(messageKey, sessionId, actionKey)) {
+          log.debug(`Skipping ${plugin.name} - already being processed by another session`)
+          continue // Another session is processing, SKIP
+        }
 
-      let lockAcquired = false
-      try {
-        lockAcquired = this.deduplicator.tryLockForProcessing(messageKey, sessionId, actionKey)
-      } catch (lockError) {
-        log.error(`Error acquiring lock for ${plugin.name}:`, lockError)
-        continue // Skip if lock fails
-      }
-
-      if (!lockAcquired) {
-        log.debug(`Skipping ${plugin.name} - already being processed by another session`)
-        continue  // Another session is already processing this message
-      }
-
-      // ✅ STEP 6: Got lock - process the message with error handling
-      if (typeof plugin.processMessage === "function") {
-        try {
-          log.debug(`Processing ${plugin.name} for message from ${m.sender}`)
+        // Got lock - process the message
+        if (typeof plugin.processMessage === "function") {
           await plugin.processMessage(sock, sessionId, m)
-        } catch (processError) {
-          log.error(`Error processing message in ${plugin.name}:`, processError)
-          // ✅ Don't crash - continue to mark as processed
         }
-      }
 
-      // ✅ STEP 7: Mark as processed
-      try {
+        // DEDUPLICATION: Mark as processed AFTER completion
         this.deduplicator.markAsProcessed(messageKey, sessionId, actionKey)
-      } catch (markError) {
-        log.error(`Error marking ${plugin.name} as processed:`, markError)
-        // Continue anyway - error won't crash other plugins
+      } catch (pluginErr) {
+        log.warn(`Anti-plugin error in ${plugin?.name || "unknown"}: ${pluginErr.message}`)
       }
-
-    } catch (pluginErr) {
-      // ✅ FINAL SAFETY NET: Catch ANY error that slipped through
-      log.warn(`Unexpected error in anti-plugin ${plugin?.name || "unknown"}:`, pluginErr?.message || "Unknown error")
-      // Continue to next plugin - don't let one plugin crash others
     }
   }
-}
-
-
-validateAntiPluginInput(sock, sessionId, m, plugin) {
-  try {
-    // Check socket
-    if (!sock || typeof sock !== 'object') {
-      log.warn("Invalid socket object for anti-plugin")
-      return false
-    }
-
-    // Check sessionId
-    if (!sessionId || typeof sessionId !== 'string') {
-      log.warn("Invalid sessionId for anti-plugin")
-      return false
-    }
-
-    // Check message
-    if (!m || typeof m !== 'object') {
-      log.warn("Invalid message object for anti-plugin")
-      return false
-    }
-
-    // Check required message properties
-    if (!m.chat || typeof m.chat !== 'string') {
-      log.warn("Invalid m.chat for anti-plugin")
-      return false
-    }
-
-    if (!m.sender || typeof m.sender !== 'string') {
-      log.warn("Invalid m.sender for anti-plugin")
-      return false
-    }
-
-    if (typeof m.isGroup !== 'boolean') {
-      log.warn("m.isGroup is not boolean")
-      return false
-    }
-
-    // Check plugin
-    if (!plugin || typeof plugin !== 'object' || !plugin.name) {
-      log.warn("Invalid plugin object for anti-plugin")
-      return false
-    }
-
-    return true
-  } catch (error) {
-    log.error("Anti-plugin input validation error:", error)
-    return false
-  }
-}
-
-/**
- * ✅ NEW METHOD: Check if sender meets anti-plugin permission requirements
- * This is INVERTED logic - we're checking if the SENDER is allowed to bypass the anti-plugin
- */
-async checkAntiPluginPermissions(sock, permissions, m) {
-  try {
-    // For anti-plugins, we want to process messages from NON-ADMINS
-    // So if adminRequired is true, we SKIP processing for admins
-    
-    // If plugin requires admin to ENABLE (like antitagadmin)
-    // Then non-admins get processed, admins are skipped
-    if (permissions.adminRequired && m.isGroup) {
-      const cacheKey = `admin_${m.chat}_${m.sender}`
-      const cached = this.permissionCache.get(cacheKey)
-      
-      let isAdmin
-      if (cached && Date.now() - cached.timestamp < this.PERMISSION_CACHE_TTL) {
-        isAdmin = cached.result
-      } else {
-        const { isGroupAdmin, isBotAdmin } = await import("../whatsapp/groups/index.js")
-        isAdmin = await isGroupAdmin(sock, m.chat, m.sender)
-        
-        this.permissionCache.set(cacheKey, {
-          result: isAdmin,
-          timestamp: Date.now()
-        })
-      }
-      
-      // If sender is admin, SKIP processing (admins bypass anti-plugins)
-      if (isAdmin) {
-        return false
-      }
-    }
-
-    // If bot needs admin to enforce actions
-    if (permissions.botAdminRequired && m.isGroup) {
-      const cacheKey = `botadmin_${m.chat}`
-      const cached = this.permissionCache.get(cacheKey)
-      
-      let isBotAdmin
-      if (cached && Date.now() - cached.timestamp < this.PERMISSION_CACHE_TTL) {
-        isBotAdmin = cached.result
-      } else {
-        const { isBotAdmin: checkBotAdmin } = await import("../whatsapp/groups/index.js")
-        isBotAdmin = await checkBotAdmin(sock, m.chat)
-        
-        this.permissionCache.set(cacheKey, {
-          result: isBotAdmin,
-          timestamp: Date.now()
-        })
-      }
-      
-      // If bot is not admin, SKIP processing (can't enforce)
-      if (!isBotAdmin) {
-        return false
-      }
-    }
-
-    // Group-only check
-    if (permissions.groupOnly && !m.isGroup) {
-      return false
-    }
-
-    // Passed all checks - process this message
-    return true
-
-  } catch (error) {
-    log.error("Error checking anti-plugin permissions:", error)
-    return false
-  }
-}
-
-/**
- * Normalize plugin permissions to standard format
- */
-normalizePermissions(plugin) {
-  const perms = plugin.permissions || {}
-  
-  // Support legacy formats
-  return {
-    adminRequired: perms.adminRequired || plugin.adminOnly || false,
-    botAdminRequired: perms.botAdminRequired || false,
-    ownerOnly: perms.ownerOnly || plugin.ownerOnly || false,
-    vipRequired: perms.vipRequired || plugin.vipOnly || false,
-    groupOnly: perms.groupOnly || plugin.category === "groupmenu" || false,
-    privateOnly: perms.privateOnly || false,
-  }
-}
 
   async shutdown() {
     await this.clearWatchers()

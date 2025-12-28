@@ -1,103 +1,110 @@
 import { createComponentLogger } from "../../utils/logger.js"
 import { GroupQueries, WarningQueries, ViolationQueries } from "../../database/query.js"
+import AdminChecker from "../../whatsapp/utils/admin-checker.js"
 
 const logger = createComponentLogger("ANTI-IMAGE")
 
 export default {
   name: "Anti-Image",
-  description: "Detect and remove images with configurable warning system",
+  description: "Detect and remove images with warning system",
   commands: ["antiimage"],
-  category: "groupmenu",
-  permissions: {
-  adminRequired: true,      // User must be group admin (only applies in groups)
-  botAdminRequired: true,   // Bot must be group admin (only applies in groups)
-  groupOnly: true,          // Can only be used in groups
-},
-  usage: "• .antiimage on/off/kick/status\n• .antiimage warn [0-10]\n• .antiimage reset @user\n• .antiimage list/stats",
+  category: "group",
+  adminOnly: true,
+  usage:
+    "• `.antiimage on` - Enable image protection\n• `.antiimage off` - Disable image protection\n• `.antiimage status` - Check protection status\n• `.antiimage reset @user` - Reset user warnings\n• `.antiimage list` - Show warning list\n• `.antiimage stats` - View statistics",
 
   async execute(sock, sessionId, args, m) {
     const action = args[0]?.toLowerCase()
     const groupJid = m.chat
 
+    if (!m.isGroup) {
+      return { response: "❌ This command can only be used in groups!" }
+    }
 
     try {
       switch (action) {
         case "on":
           await GroupQueries.setAntiCommand(groupJid, "antiimage", true)
-          const currentLimit = await GroupQueries.getAntiCommandWarningLimit(groupJid, "antiimage")
-          const actionText = currentLimit === 0 ? "instant removal" : `${currentLimit} warnings before removal`
-          return { response: `✅ Anti-image enabled (${actionText})` }
+          return {
+            response:
+              "📷 *Anti-image protection enabled!*\n\n" +
+              "✅ Images will be detected and removed\n" +
+              "⚠️ Users get 4 warnings before removal\n" +
+              "👑 Admins are exempt from image restrictions",
+          }
 
         case "off":
           await GroupQueries.setAntiCommand(groupJid, "antiimage", false)
-          return { response: "❌ Anti-image disabled" }
-
-        case "kick":
-          await GroupQueries.setAntiCommand(groupJid, "antiimage", true)
-          await GroupQueries.setAntiCommandWarningLimit(groupJid, "antiimage", 0)
-          return { response: "✅ Anti-image set to instant removal (0 warnings)" }
-
-        case "warn":
-          if (args.length < 2) {
-            const currentLimit = await GroupQueries.getAntiCommandWarningLimit(groupJid, "antiimage")
-            return { response: `Current limit: ${currentLimit} (0 = instant kick, 1-10 = warnings)\n\nUsage: .antiimage warn [0-10]` }
-          }
-
-          const newLimit = parseInt(args[1])
-          if (isNaN(newLimit) || newLimit < 0 || newLimit > 10) {
-            return { response: "❌ Limit must be 0-10 (0 = instant kick)" }
-          }
-
-          await GroupQueries.setAntiCommand(groupJid, "antiimage", true)
-          await GroupQueries.setAntiCommandWarningLimit(groupJid, "antiimage", newLimit)
-          const actionType = newLimit === 0 ? "instant removal" : `${newLimit} warnings before removal`
-          return { response: `✅ Anti-image set to ${actionType}` }
+          return { response: "📷 Anti-image protection disabled." }
 
         case "status":
           const status = await GroupQueries.isAntiCommandEnabled(groupJid, "antiimage")
-          const warningLimit = await GroupQueries.getAntiCommandWarningLimit(groupJid, "antiimage")
           const warningStats = await WarningQueries.getWarningStats(groupJid, "antiimage")
-          const action = warningLimit === 0 ? "Instant kick" : `${warningLimit} warnings`
-          return { 
-            response: `📷 Anti-Image Status\n\nStatus: ${status ? "✅ Enabled" : "❌ Disabled"}\nAction: ${action}\nActive warnings: ${warningStats.totalUsers} users\nTotal warnings: ${warningStats.totalWarnings}` 
+          return {
+            response:
+              `📷 *Anti-Image Status*\n\n` +
+              `Status: ${status ? "✅ Enabled" : "❌ Disabled"}\n` +
+              `Active Warnings: ${warningStats.totalUsers} users\n` +
+              `Total Warnings: ${warningStats.totalWarnings}\n` +
+              `Max Warnings: ${warningStats.maxWarnings}/4`,
           }
 
         case "reset":
-          const targetUser = await this.extractTargetUser(m, args)
-          if (!targetUser) {
-            return { response: "❌ Usage: .antiimage reset @user or reply to user's message" }
+          if (args.length < 2) {
+            return { response: "❌ Usage: `.antiimage reset @user`" }
           }
 
-          await WarningQueries.resetUserWarnings(groupJid, targetUser, "antiimage")
-          return { response: `✅ Warnings reset for @${targetUser.split("@")[0]}`, mentions: [targetUser] }
+          // Extract mentioned user
+          const mentionedJid = m.message?.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0]
+          if (!mentionedJid) {
+            return { response: "❌ Please mention a user to reset their warnings" }
+          }
+
+          await WarningQueries.resetUserWarnings(groupJid, mentionedJid, "antiimage")
+          return {
+            response: `✅ Warnings reset for @${mentionedJid.split("@")[0]}`,
+            mentions: [mentionedJid],
+          }
 
         case "list":
           const warningList = await WarningQueries.getWarningList(groupJid, "antiimage")
           if (warningList.length === 0) {
-            return { response: "📋 No active warnings" }
+            return { response: "📋 No active warnings found" }
           }
 
-          const limit = await GroupQueries.getAntiCommandWarningLimit(groupJid, "antiimage")
-          let listResponse = "📋 Active Anti-Image Warnings\n\n"
+          let listResponse = "📋 *Active Anti-image Warnings*\n\n"
           warningList.forEach((warn, index) => {
             const userNumber = warn.user_jid.split("@")[0]
-            listResponse += `${index + 1}. @${userNumber} - ${warn.warning_count}/${limit}\n`
+            listResponse += `${index + 1}. @${userNumber} - ${warn.warning_count}/4 warnings\n`
           })
 
-          return { response: listResponse, mentions: warningList.map(w => w.user_jid) }
+          const mentions = warningList.map((w) => w.user_jid)
+          return { response: listResponse, mentions }
 
         case "stats":
           const violationStats = await ViolationQueries.getViolationStats(groupJid, "antiimage", 7)
-          const weekStats = violationStats[0] || { unique_violators: 0, warnings: 0, kicks: 0 }
-          return { 
-            response: `📊 Anti-Image Stats (7 days)\n\n👥 Users warned: ${weekStats.unique_violators}\n⚠️ Warnings: ${weekStats.warnings}\n🚪 Kicks: ${weekStats.kicks}` 
+          const weekStats = violationStats[0] || { total_violations: 0, unique_violators: 0, kicks: 0, warnings: 0 }
+
+          return {
+            response:
+              `📊 *Anti-image Statistics (Last 7 days)*\n\n` +
+              `👥 Users warned: ${weekStats.unique_violators}\n` +
+              `⚠️ Warnings issued: ${weekStats.warnings}\n` +
+              `🚪 Users kicked: ${weekStats.kicks}`,
           }
 
         default:
           const currentStatus = await GroupQueries.isAntiCommandEnabled(groupJid, "antiimage")
-          const currentWarnLimit = await GroupQueries.getAntiCommandWarningLimit(groupJid, "antiimage")
-          return { 
-            response: `📷 Anti-Image Commands\n\n• .antiimage on - Enable\n• .antiimage off - Disable\n• .antiimage kick - Instant removal\n• .antiimage warn [0-10] - Set limit\n• .antiimage status - Check status\n• .antiimage reset @user - Reset warnings\n• .antiimage list - Show warnings\n• .antiimage stats - Statistics\n\nStatus: ${currentStatus ? "✅ Enabled" : "❌ Disabled"}\nLimit: ${currentWarnLimit} warnings` 
+          return {
+            response:
+              "📷 *Anti-image Commands*\n\n" +
+              "• `.antiimage on` - Enable protection\n" +
+              "• `.antiimage off` - Disable protection\n" +
+              "• `.antiimage status` - Check status\n" +
+              "• `.antiimage reset @user` - Reset warnings\n" +
+              "• `.antiimage list` - Show warning list\n" +
+              "• `.antiimage stats` - View statistics\n\n" +
+              `*Current Status:* ${currentStatus ? "✅ Enabled" : "❌ Disabled"}`,
           }
       }
     } catch (error) {
@@ -106,127 +113,132 @@ export default {
     }
   },
 
-  async extractTargetUser(m, args) {
-    const contextInfo = m.message?.message?.extendedTextMessage?.contextInfo
-    if (contextInfo?.mentionedJid && contextInfo.mentionedJid.length > 0) {
-      return contextInfo.mentionedJid[0]
-    }
-    if (contextInfo?.quotedMessage && contextInfo.participant) {
-      return contextInfo.participant
-    }
-    if (m.quoted && m.quoted.sender) {
-      return m.quoted.sender
-    }
-    return null
-  },
-
   async isEnabled(groupJid) {
     try {
       return await GroupQueries.isAntiCommandEnabled(groupJid, "antiimage")
     } catch (error) {
-      logger.error("Error checking if antiimage enabled:", error)
+      logger.error(`[Anti-Image] Error checking if enabled: ${error.message}`)
       return false
     }
   },
 
   async shouldProcess(m) {
-    if (!m.isGroup || !this.detectImages(m)) return false
+    if (!m.isGroup) return false
     if (m.isCommand) return false
     if (m.key?.fromMe) return false
-    return true
+    return this.detectImages(m)
   },
 
   async processMessage(sock, sessionId, m) {
     try {
       await this.handleImageDetection(sock, sessionId, m)
     } catch (error) {
-      logger.error("Error processing antiimage message:", error)
+      logger.error(`[Anti-Image] Error processing message: ${error.message}`)
     }
   },
 
   async handleImageDetection(sock, sessionId, m) {
     try {
+      const adminChecker = new AdminChecker()
       const groupJid = m.chat
-      
-      if (!groupJid) return
-
-      const warningLimit = await GroupQueries.getAntiCommandWarningLimit(groupJid, "antiimage")
-
-      // Delete message first
-      try {
-        await sock.sendMessage(groupJid, { delete: m.key })
-        m._wasDeletedByAntiPlugin = true
-      } catch (error) {
-        logger.error("Failed to delete message:", error)
-        m._wasDeletedByAntiPlugin = true
-      }
-
-      // Handle instant kick (limit = 0)
-      if (warningLimit === 0) {
-        await sock.groupParticipantsUpdate(groupJid, [m.sender], "remove")
-        await sock.sendMessage(groupJid, {
-          text: `📷 Image detected - @${m.sender.split("@")[0]} removed (instant kick mode)`,
-          mentions: [m.sender]
-        })
-
-        await ViolationQueries.logViolation(
-          groupJid,
-          m.sender,
-          "antiimage",
-          "Image message",
-          { imageType: this.getImageType(m) },
-          "kick",
-          0,
-          m.key.id
-        )
+      if (!groupJid) {
+        logger.warn(`[Anti-Image] No group JID available, skipping`)
         return
       }
 
-      // Handle warnings
+      const isAdmin = await adminChecker.isGroupAdmin(sock, groupJid, m.sender)
+      if (isAdmin) {
+        logger.debug(`[Anti-Image] Admin ${m.sender} exempt from image restrictions`)
+        return
+      }
+
+      const botIsAdmin = await adminChecker.isBotAdmin(sock, groupJid)
+      if (!botIsAdmin) {
+        logger.warn(`[Anti-Image] Bot not admin in ${groupJid}, cannot delete messages`)
+        await sock.sendMessage(groupJid, {
+          text: "📷 Image detected but bot lacks admin permissions to remove it.\n\n" +
+            "Please make bot an admin to enable message deletion." + `
+
+> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+        }, {quoted: m})
+        return
+      }
+
+      try {
+        await sock.sendMessage(groupJid, { delete: m.key })
+        // CRITICAL FIX: Mark message as deleted by anti-plugin
+        m._wasDeletedByAntiPlugin = true
+        logger.info(`[Anti-Image] Deleted image message from ${m.sender} in ${groupJid}`)
+      } catch (deleteError) {
+        logger.error(`[Anti-Image] Failed to delete message: ${deleteError.message}`)
+        // Even if delete fails, still mark it to prevent command execution
+        m._wasDeletedByAntiPlugin = true
+      }
+
       const warnings = await WarningQueries.addWarning(
         groupJid,
         m.sender,
         "antiimage",
-        "Posted image in restricted group"
+        "Posted image in restricted group",
       )
 
-      let response = `📷 Image detected!\n\n👤 @${m.sender.split("@")[0]}\n⚠️ Warning: ${warnings}/${warningLimit}`
+      let response =
+        `📷 *Image Detected & Removed!*\n\n` +
+        `👤 @${m.sender.split("@")[0]}\n` +
+        `⚠️ Warning: ${warnings}/4`
 
-      if (warnings >= warningLimit) {
+      if (warnings >= 4) {
         try {
           await sock.groupParticipantsUpdate(groupJid, [m.sender], "remove")
+          response += `\n\n❌ *User removed* after reaching 4 warnings.`
           await WarningQueries.resetUserWarnings(groupJid, m.sender, "antiimage")
-        } catch (error) {
-          logger.error("Failed to remove user:", error)
+          logger.info(`[Anti-Image] Removed user ${m.sender} from ${groupJid} after 4 warnings`)
+        } catch (removeError) {
+          logger.error(`[Anti-Image] Failed to remove user: ${removeError.message}`)
+          response += `\n\n❌ Failed to remove user (insufficient permissions)`
         }
+      } else {
+        response += `\n\n📝 ${4 - warnings} warnings remaining before removal.`
       }
 
-      await sock.sendMessage(groupJid, {
-        text: response,
-        mentions: [m.sender]
-      })
+      response += `\n\n💡 *Tip:* Admins can send images freely.`
+
+      await sock.sendMessage(
+        groupJid,
+        {
+          text: response,
+          mentions: [m.sender],
+        },
+        { quoted: m },
+      )
 
       await ViolationQueries.logViolation(
         groupJid,
         m.sender,
         "antiimage",
         "Image message",
-        { imageType: this.getImageType(m) },
-        warnings >= warningLimit ? "kick" : "warning",
+        { messageType: this.getImageType(m) },
+        warnings >= 4 ? "kick" : "warning",
         warnings,
-        m.key.id
+        m.id,
       )
+
+      logger.info(`[Anti-Image] Warning issued: ${m.sender} in ${groupJid} (${warnings}/4)`)
     } catch (error) {
-      logger.error("Error handling image detection:", error)
+      logger.error("[Anti-Image] Error handling image detection:", error)
     }
   },
 
   detectImages(m) {
+    // Check if message contains image
     if (m.message?.imageMessage) return true
     if (m.message?.viewOnceMessage?.message?.imageMessage) return true
     if (m.message?.ephemeralMessage?.message?.imageMessage) return true
+    
+    // Check message type
     if (m.mtype === 'imageMessage') return true
     if (m.mtype === 'viewOnceMessage' && m.message?.viewOnceMessage?.message?.imageMessage) return true
+    
     return false
   },
 
@@ -235,5 +247,10 @@ export default {
     if (m.message?.viewOnceMessage?.message?.imageMessage) return "view-once-image"
     if (m.message?.ephemeralMessage?.message?.imageMessage) return "ephemeral-image"
     return "unknown-image"
-  }
+  },
+
+  extractLinks(text) {
+    // This method is no longer needed for image detection, but keeping for compatibility
+    return []
+  },
 }

@@ -1,5 +1,6 @@
 import { createComponentLogger } from "../../utils/logger.js"
 import { ActivityQueries } from "../../database/query.js"
+import AdminChecker from "../../whatsapp/utils/admin-checker.js"
 
 const logger = createComponentLogger("LISTACTIVE")
 
@@ -9,13 +10,25 @@ export default {
   category: "groupmenu",
   description: "Show active group members",
   usage: "listactive",
-        permissions: {
-  adminRequired: true,      // User must be group admin (only applies in groups)
-  botAdminRequired: true,   // Bot must be group admin (only applies in groups)
-  groupOnly: true,          // Can only be used in groups
-},
+  adminOnly: true,
 
   async execute(sock, sessionId, args, m) {
+    if (!m.isGroup) {
+      await sock.sendMessage(m.chat, {
+        text: "❌ This command can only be used in groups!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
+      }, { quoted: m })
+      return
+    }
+
+    const adminChecker = new AdminChecker()
+    const isAdmin = await adminChecker.isGroupAdmin(sock, m.chat, m.sender)
+    
+    if (!isAdmin) {
+      await sock.sendMessage(m.chat, {
+        text: "❌ Only group admins can use this command!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
+      }, { quoted: m })
+      return
+    }
 
     try {
       // Get active members (anyone who sent a message)

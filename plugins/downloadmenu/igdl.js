@@ -10,9 +10,6 @@ export default {
   description: "Download Instagram posts, reels, and stories",
   category: "download",
   usage: "• .ig <url> - Download Instagram content",
-  permissions: {
-  // All false = public command, no restrictions
-},
   
   async execute(sock, sessionId, args, m) {
     try {

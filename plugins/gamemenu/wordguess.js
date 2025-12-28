@@ -5,11 +5,8 @@ export default {
   name: "wordguess",
   commands: ["wordguess", "wordgame", "guessword"],
   description: "🔤 Start a word guessing game - Players guess letters or words based on clues!",
-  permissions: {
-  // All false = public command, no restrictions
-},
-category: "gamemenu",
-  usage: "• .wordguess [category] - Start word guessing game\n\n*Categories:*\n• animals\n• countries\n• food\n• movies\n• start - Random category\n\n*Example:*\n.wordguess animals\n.wordguess start rounds:3",
+  adminOnly: false,
+  groupOnly: true,
 
   async execute(sock, sessionId, args, m) {
     try {

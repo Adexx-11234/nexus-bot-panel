@@ -11,9 +11,6 @@ export default {
   category: "convertmenu",
   description: "Import Telegram sticker pack to WhatsApp",
   usage: ".telesticker <telegram sticker url>",
-  permissions: {
-  // All false = public command, no restrictions
-},
 
   async execute(sock, sessionId, args, m) {
     if (!args[0]) {

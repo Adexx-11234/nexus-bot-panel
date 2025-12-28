@@ -8,9 +8,7 @@ export default {
   description: "Universal downloader - auto-detects platform",
   category: "download",
   usage: "• .dl <url> - Download from any supported platform\n• .download <url> - Universal download",
-  permissions: {
-  // All false = public command, no restrictions
-},
+  
   async execute(sock, sessionId, args, m) {
     try {
       // Validate input

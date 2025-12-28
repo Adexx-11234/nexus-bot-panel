@@ -230,16 +230,17 @@ class QueryManager {
 const queryManager = new QueryManager()
 
 // ==========================================
-// GROUP QUERIES - Normalized with Separate Warning Settings Table
+// GROUP QUERIES - Enhanced with Circuit Breaker-Aware Caching
 // ==========================================
 
 export const GroupQueries = {
   async ensureGroupExists(groupJid, groupName = null) {
     if (!groupJid) return null
 
+    // Check circuit breaker - if open, return cached or default
     if (!checkCircuitBreaker()) {
       logger.warn(`[GroupQueries] Circuit open, skipping ensureGroupExists for ${groupJid}`)
-      return { id: null }
+      return { id: null } // Return minimal valid response
     }
 
     try {
@@ -254,7 +255,7 @@ export const GroupQueries = {
         [groupJid, groupName],
       )
       
-      // Trigger will auto-create warning settings
+      // Invalidate cache when group is created/updated
       queryManager.invalidateGroupSettings(groupJid)
       
       return result.rows[0]
@@ -266,9 +267,11 @@ export const GroupQueries = {
 
   async getSettings(groupJid) {
     try {
+      // Try cache first
       const cached = await queryManager.getGroupSettingsCached(groupJid)
       if (cached) return cached
 
+      // Circuit breaker check
       if (!checkCircuitBreaker()) {
         logger.warn(`[GroupQueries] Circuit open, returning default settings for ${groupJid}`)
         return null
@@ -277,6 +280,7 @@ export const GroupQueries = {
       const result = await queryManager.execute(`SELECT * FROM groups WHERE jid = $1`, [groupJid])
       const settings = result.rows[0] || null
       
+      // Cache the result
       if (settings) {
         queryManager.setGroupSettingsCache(groupJid, settings)
       }
@@ -289,13 +293,13 @@ export const GroupQueries = {
   },
 
   async deleteGroup(groupJid) {
+    // Skip if circuit is open
     if (!checkCircuitBreaker()) {
       logger.warn(`[GroupQueries] Circuit open, skipping deleteGroup for ${groupJid}`)
       return
     }
 
     try {
-      // Cascade will delete warning_settings too
       await queryManager.execute(`DELETE FROM groups WHERE jid = $1`, [groupJid])
       queryManager.invalidateGroupSettings(groupJid)
     } catch (error) {
@@ -305,6 +309,7 @@ export const GroupQueries = {
   },
 
   async updateGroupMeta(groupJid, metadata = {}) {
+    // Skip if circuit is open
     if (!checkCircuitBreaker()) {
       logger.warn(`[GroupQueries] Circuit open, skipping updateGroupMeta for ${groupJid}`)
       return
@@ -312,7 +317,6 @@ export const GroupQueries = {
 
     try {
       const { name, description, participantsCount, isBotAdmin } = metadata
-      
       await queryManager.execute(
         `UPDATE groups 
          SET name = COALESCE($2, name),
@@ -324,14 +328,7 @@ export const GroupQueries = {
         [groupJid, name, description, participantsCount, isBotAdmin],
       )
       
-      // Also update group name in warning settings
-      if (name) {
-        await queryManager.execute(
-          `UPDATE group_warning_settings SET group_name = $1 WHERE group_jid = $2`,
-          [name, groupJid]
-        )
-      }
-      
+      // Invalidate cache after update
       queryManager.invalidateGroupSettings(groupJid)
     } catch (error) {
       logger.error(`[GroupQueries] Error updating group meta: ${error.message}`)
@@ -340,9 +337,38 @@ export const GroupQueries = {
 
   async getGroupSettings(groupJid) {
     try {
+      // Try cache first
       const cached = await queryManager.getGroupSettingsCached(groupJid)
-      if (cached) return cached
+      if (cached) {
+        return {
+          grouponly_enabled: cached.grouponly_enabled || false,
+          public_mode: cached.public_mode !== false,
+          antilink_enabled: cached.antilink_enabled || false,
+          is_bot_admin: cached.is_bot_admin || false,
+          anticall_enabled: cached.anticall_enabled || false,
+          antiimage_enabled: cached.antiimage_enabled || false,
+          antivideo_enabled: cached.antivideo_enabled || false,
+          antiaudio_enabled: cached.antiaudio_enabled || false,
+          antidocument_enabled: cached.antidocument_enabled || false,
+          antisticker_enabled: cached.antisticker_enabled || false,
+          antigroupmention_enabled: cached.antigroupmention_enabled || false,
+          antidelete_enabled: cached.antidelete_enabled || false,
+          antiviewonce_enabled: cached.antiviewonce_enabled || false,
+          antibot_enabled: cached.antibot_enabled || false,
+          antispam_enabled: cached.antispam_enabled || false,
+          antiraid_enabled: cached.antiraid_enabled || false,
+          autowelcome_enabled: cached.autowelcome_enabled || false,
+          autokick_enabled: cached.autokick_enabled || false,
+          welcome_enabled: cached.welcome_enabled || false,
+          goodbye_enabled: cached.goodbye_enabled || false,
+          telegram_id: cached.telegram_id,
+          scheduled_close_time: cached.scheduled_close_time,
+          scheduled_open_time: cached.scheduled_open_time,
+          is_closed: cached.is_closed || false,
+        }
+      }
 
+      // Circuit breaker check - return defaults if open
       if (!checkCircuitBreaker()) {
         logger.warn(`[GroupQueries] Circuit open, returning default settings for ${groupJid}`)
         return {
@@ -354,13 +380,19 @@ export const GroupQueries = {
       }
 
       const result = await queryManager.execute(
-        `SELECT g.*, w.* FROM groups g
-         LEFT JOIN group_warning_settings w ON g.jid = w.group_jid
-         WHERE g.jid = $1`,
+        `SELECT grouponly_enabled, public_mode, antilink_enabled, is_bot_admin,
+                anticall_enabled, antiimage_enabled, antivideo_enabled,
+                antiaudio_enabled, antidocument_enabled, antisticker_enabled, 
+                antigroupmention_enabled, antidelete_enabled, antiviewonce_enabled,
+                antibot_enabled, antispam_enabled, antiraid_enabled,
+                autowelcome_enabled, autokick_enabled, welcome_enabled, goodbye_enabled,
+                telegram_id, scheduled_close_time, scheduled_open_time, is_closed
+         FROM groups WHERE jid = $1`,
         [groupJid],
       )
 
       if (result.rows.length === 0) {
+        // Create default settings and cache them (only if circuit is closed)
         await this.ensureGroupExists(groupJid)
         const defaultSettings = {
           grouponly_enabled: false,
@@ -372,10 +404,10 @@ export const GroupQueries = {
         return defaultSettings
       }
 
-      const settings = result.rows[0]
-      queryManager.setGroupSettingsCache(groupJid, settings)
+      // Cache the fetched settings
+      queryManager.setGroupSettingsCache(groupJid, result.rows[0])
       
-      return settings
+      return result.rows[0]
     } catch (error) {
       logger.error(`[GroupQueries] Error getting group settings: ${error.message}`)
       return {
@@ -387,191 +419,8 @@ export const GroupQueries = {
     }
   },
 
-  // ==========================================
-  // ANTI-COMMAND WARNING LIMIT FUNCTIONS
-  // ==========================================
-
-  /**
-   * Get warning limit for a specific anti-command
-   */
-  async getAntiCommandWarningLimit(groupJid, commandType) {
-    try {
-      const columnName = `${commandType}_warning_limit`
-      
-      const cached = await queryManager.getGroupSettingsCached(groupJid)
-      if (cached && cached[columnName] !== undefined) {
-        return cached[columnName]
-      }
-
-      if (!checkCircuitBreaker()) {
-        const defaults = {
-          antilink: 4, antispam: 0, antiremove: 2, antivirtex: 1,
-          antitag: 4, antitagadmin: 3, antigroupmention: 3,
-          antiimage: 5, antivideo: 5, antiaudio: 5, antidocument: 5,
-          antisticker: 6, antidelete: 3, antiviewonce: 3,
-          antiraid: 0, antibot: 0, antipromote: 2, antidemote: 2,
-          anticall: 2, antiadd: 2
-        }
-        return defaults[commandType] || 4
-      }
-
-      const result = await queryManager.execute(
-        `SELECT ${columnName} FROM group_warning_settings WHERE group_jid = $1`,
-        [groupJid]
-      )
-
-      if (result.rows.length === 0) {
-        // Ensure group exists (trigger will create warning settings)
-        await this.ensureGroupExists(groupJid)
-        const defaults = {
-          antilink: 4, antispam: 0, antiremove: 2, antivirtex: 1,
-          antitag: 4, antitagadmin: 3, antigroupmention: 3,
-          antiimage: 5, antivideo: 5, antiaudio: 5, antidocument: 5,
-          antisticker: 6, antidelete: 3, antiviewonce: 3,
-          antiraid: 0, antibot: 0, antipromote: 2, antidemote: 2,
-          anticall: 2, antiadd: 2
-        }
-        return defaults[commandType] || 4
-      }
-
-      return result.rows[0][columnName] || 4
-    } catch (error) {
-      logger.error(`[GroupQueries] Error getting ${commandType} warning limit: ${error.message}`)
-      return 4
-    }
-  },
-
-  /**
-   * Set warning limit for a specific anti-command
-   */
-  async setAntiCommandWarningLimit(groupJid, commandType, limit) {
-    if (!checkCircuitBreaker()) {
-      throw new Error('Database unavailable')
-    }
-
-    try {
-      if (typeof limit !== 'number' || limit < 0 || limit > 10) {
-        throw new Error('Limit must be between 0 and 10')
-      }
-
-      // Ensure group exists
-      await this.ensureGroupExists(groupJid)
-
-      const columnName = `${commandType}_warning_limit`
-      
-      const result = await queryManager.execute(
-        `INSERT INTO group_warning_settings (group_jid, ${columnName})
-         VALUES ($1, $2)
-         ON CONFLICT (group_jid)
-         DO UPDATE SET ${columnName} = $2, updated_at = CURRENT_TIMESTAMP
-         RETURNING ${columnName}`,
-        [groupJid, limit]
-      )
-
-      queryManager.invalidateGroupSettings(groupJid)
-
-      return result.rows[0]?.[columnName] === limit
-    } catch (error) {
-      logger.error(`[GroupQueries] Error setting ${commandType} warning limit: ${error.message}`)
-      throw error
-    }
-  },
-
-  /**
-   * Get all anti-command warning limits for a group
-   */
-  async getAllAntiCommandLimits(groupJid) {
-    try {
-      const cached = await queryManager.getGroupSettingsCached(groupJid)
-      if (cached) {
-        return {
-          antilink: cached.antilink_warning_limit || 4,
-          antispam: cached.antispam_warning_limit || 0,
-          antiremove: cached.antiremove_warning_limit || 2,
-          antivirtex: cached.antivirtex_warning_limit || 1,
-          antitag: cached.antitag_warning_limit || 4,
-          antitagadmin: cached.antitagadmin_warning_limit || 3,
-          antigroupmention: cached.antigroupmention_warning_limit || 3,
-          antiimage: cached.antiimage_warning_limit || 5,
-          antivideo: cached.antivideo_warning_limit || 5,
-          antiaudio: cached.antiaudio_warning_limit || 5,
-          antidocument: cached.antidocument_warning_limit || 5,
-          antisticker: cached.antisticker_warning_limit || 6,
-          antidelete: cached.antidelete_warning_limit || 3,
-          antiviewonce: cached.antiviewonce_warning_limit || 3,
-          antiraid: cached.antiraid_warning_limit || 0,
-          antibot: cached.antibot_warning_limit || 0,
-          antipromote: cached.antipromote_warning_limit || 2,
-          antidemote: cached.antidemote_warning_limit || 2,
-          anticall: cached.anticall_warning_limit || 2,
-          antiadd: cached.antiadd_warning_limit || 2
-        }
-      }
-
-      if (!checkCircuitBreaker()) {
-        return {
-          antilink: 4, antispam: 0, antiremove: 2, antivirtex: 1,
-          antitag: 4, antitagadmin: 3, antigroupmention: 3,
-          antiimage: 5, antivideo: 5, antiaudio: 5, antidocument: 5,
-          antisticker: 6, antidelete: 3, antiviewonce: 3,
-          antiraid: 0, antibot: 0, antipromote: 2, antidemote: 2,
-          anticall: 2, antiadd: 2
-        }
-      }
-
-      const result = await queryManager.execute(
-        `SELECT * FROM group_warning_settings WHERE group_jid = $1`,
-        [groupJid]
-      )
-
-      if (result.rows.length === 0) {
-        return {
-          antilink: 4, antispam: 0, antiremove: 2, antivirtex: 1,
-          antitag: 4, antitagadmin: 3, antigroupmention: 3,
-          antiimage: 5, antivideo: 5, antiaudio: 5, antidocument: 5,
-          antisticker: 6, antidelete: 3, antiviewonce: 3,
-          antiraid: 0, antibot: 0, antipromote: 2, antidemote: 2,
-          anticall: 2, antiadd: 2
-        }
-      }
-
-      const row = result.rows[0]
-      return {
-        antilink: row.antilink_warning_limit || 4,
-        antispam: row.antispam_warning_limit || 0,
-        antiremove: row.antiremove_warning_limit || 2,
-        antivirtex: row.antivirtex_warning_limit || 1,
-        antitag: row.antitag_warning_limit || 4,
-        antitagadmin: row.antitagadmin_warning_limit || 3,
-        antigroupmention: row.antigroupmention_warning_limit || 3,
-        antiimage: row.antiimage_warning_limit || 5,
-        antivideo: row.antivideo_warning_limit || 5,
-        antiaudio: row.antiaudio_warning_limit || 5,
-        antidocument: row.antidocument_warning_limit || 5,
-        antisticker: row.antisticker_warning_limit || 6,
-        antidelete: row.antidelete_warning_limit || 3,
-        antiviewonce: row.antiviewonce_warning_limit || 3,
-        antiraid: row.antiraid_warning_limit || 0,
-        antibot: row.antibot_warning_limit || 0,
-        antipromote: row.antipromote_warning_limit || 2,
-        antidemote: row.antidemote_warning_limit || 2,
-        anticall: row.anticall_warning_limit || 2,
-        antiadd: row.antiadd_warning_limit || 2
-      }
-    } catch (error) {
-      logger.error(`[GroupQueries] Error getting all warning limits: ${error.message}`)
-      return {
-        antilink: 4, antispam: 0, antiremove: 2, antivirtex: 1,
-        antitag: 4, antitagadmin: 3, antigroupmention: 3,
-        antiimage: 5, antivideo: 5, antiaudio: 5, antidocument: 5,
-        antisticker: 6, antidelete: 3, antiviewonce: 3,
-        antiraid: 0, antibot: 0, antipromote: 2, antidemote: 2,
-        anticall: 2, antiadd: 2
-      }
-    }
-  },
-
   async updateGroupSettings(groupJid, settings) {
+    // Skip if circuit is open
     if (!checkCircuitBreaker()) {
       logger.warn(`[GroupQueries] Circuit open, skipping updateGroupSettings for ${groupJid}`)
       throw new Error('Database unavailable, settings not updated')
@@ -581,14 +430,32 @@ export const GroupQueries = {
       await this.ensureGroupExists(groupJid)
 
       const allowedFields = [
-        "grouponly_enabled", "public_mode", "antilink_enabled", "is_bot_admin",
-        "name", "description", "anticall_enabled", "antiimage_enabled",
-        "antivideo_enabled", "antiaudio_enabled", "antidocument_enabled",
-        "antisticker_enabled", "antigroupmention_enabled", "antidelete_enabled",
-        "antiviewonce_enabled", "antibot_enabled", "antispam_enabled",
-        "antiraid_enabled", "autowelcome_enabled", "autokick_enabled",
-        "welcome_enabled", "goodbye_enabled", "telegram_id",
-        "scheduled_close_time", "scheduled_open_time", "is_closed",
+        "grouponly_enabled",
+        "public_mode",
+        "antilink_enabled",
+        "is_bot_admin",
+        "name",
+        "description",
+        "anticall_enabled",
+        "antiimage_enabled",
+        "antivideo_enabled",
+        "antiaudio_enabled",
+        "antidocument_enabled",
+        "antisticker_enabled",
+        "antigroupmention_enabled",
+        "antidelete_enabled",
+        "antiviewonce_enabled",
+        "antibot_enabled",
+        "antispam_enabled",
+        "antiraid_enabled",
+        "autowelcome_enabled",
+        "autokick_enabled",
+        "welcome_enabled",
+        "goodbye_enabled",
+        "telegram_id",
+        "scheduled_close_time",
+        "scheduled_open_time",
+        "is_closed",
       ]
 
       const updates = []
@@ -612,6 +479,7 @@ export const GroupQueries = {
       const query = `UPDATE groups SET ${updates.join(", ")} WHERE jid = $1 RETURNING *`
       const result = await queryManager.execute(query, values)
       
+      // Invalidate cache after update
       queryManager.invalidateGroupSettings(groupJid)
       
       return result.rows[0]
@@ -622,6 +490,7 @@ export const GroupQueries = {
   },
 
   async upsertSettings(groupJid, settings = {}) {
+    // Skip if circuit is open
     if (!checkCircuitBreaker()) {
       logger.warn(`[GroupQueries] Circuit open, skipping upsertSettings for ${groupJid}`)
       throw new Error('Database unavailable, settings not updated')
@@ -656,6 +525,7 @@ export const GroupQueries = {
 
       const result = await queryManager.execute(query, [groupJid, ...values])
       
+      // Invalidate cache after upsert
       queryManager.invalidateGroupSettings(groupJid)
       
       return result.rows[0]
@@ -667,6 +537,7 @@ export const GroupQueries = {
 
   async setScheduledCloseTime(groupJid, time) {
     if (!checkCircuitBreaker()) {
+      logger.warn(`[GroupQueries] Circuit open, skipping setScheduledCloseTime`)
       throw new Error('Database unavailable')
     }
 
@@ -689,6 +560,7 @@ export const GroupQueries = {
 
   async setScheduledOpenTime(groupJid, time) {
     if (!checkCircuitBreaker()) {
+      logger.warn(`[GroupQueries] Circuit open, skipping setScheduledOpenTime`)
       throw new Error('Database unavailable')
     }
 
@@ -711,6 +583,7 @@ export const GroupQueries = {
 
   async removeScheduledTimes(groupJid, type = "both") {
     if (!checkCircuitBreaker()) {
+      logger.warn(`[GroupQueries] Circuit open, skipping removeScheduledTimes`)
       return false
     }
 
@@ -735,6 +608,7 @@ export const GroupQueries = {
 
   async getGroupsWithScheduledTimes() {
     if (!checkCircuitBreaker()) {
+      logger.warn(`[GroupQueries] Circuit open, returning empty scheduled times list`)
       return []
     }
 
@@ -754,6 +628,7 @@ export const GroupQueries = {
 
   async getGroupSchedule(groupJid) {
     try {
+      // Try to use cache first
       const cached = await queryManager.getGroupSettingsCached(groupJid)
       if (cached) {
         return {
@@ -783,6 +658,7 @@ export const GroupQueries = {
 
   async setGroupOnly(groupJid, enabled) {
     if (!checkCircuitBreaker()) {
+      logger.warn(`[GroupQueries] Circuit open, skipping setGroupOnly`)
       throw new Error('Database unavailable')
     }
 
@@ -808,6 +684,7 @@ export const GroupQueries = {
     if (!groupJid) return false
 
     try {
+      // Use cached settings
       const settings = await this.getGroupSettings(groupJid)
       return settings.grouponly_enabled === true
     } catch (error) {
@@ -828,6 +705,7 @@ export const GroupQueries = {
 
   async setAntiCommand(groupJid, commandType, enabled) {
     if (!checkCircuitBreaker()) {
+      logger.warn(`[GroupQueries] Circuit open, skipping setAntiCommand`)
       throw new Error('Database unavailable')
     }
 
@@ -855,6 +733,7 @@ export const GroupQueries = {
 
     const columnName = `${commandType}_enabled`
     try {
+      // Use cached settings
       const settings = await this.getGroupSettings(groupJid)
       return settings[columnName] === true
     } catch (error) {
@@ -865,6 +744,7 @@ export const GroupQueries = {
 
   async getEnabledAntiCommands(groupJid) {
     try {
+      // Use cached settings
       const settings = await this.getGroupSettings(groupJid)
       
       if (!settings) return {}
@@ -886,6 +766,7 @@ export const GroupQueries = {
 
   async logAdminPromotion(groupJid, userJid, promotedBy) {
     if (!checkCircuitBreaker()) {
+      logger.debug(`[GroupQueries] Circuit open, skipping logAdminPromotion`)
       return
     }
 
@@ -923,6 +804,7 @@ export const GroupQueries = {
 
   async logMemberAddition(groupJid, addedUserJid, addedByJid) {
     if (!checkCircuitBreaker()) {
+      logger.debug(`[GroupQueries] Circuit open, skipping logMemberAddition`)
       return
     }
 

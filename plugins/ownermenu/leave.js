@@ -5,10 +5,7 @@ export default {
   description: "Leave the current group",
   usage: "leave",
   cooldown: 10,
-    permissions: {
-  ownerOnly: true,          // Only bot owner can use (overrides everything)
-  privateOnly: true         // Can only be used in private chats
-},
+  permissions: ["owner"],
 
   async execute(sock, m, { isCreator }) {
     if (!isCreator) {

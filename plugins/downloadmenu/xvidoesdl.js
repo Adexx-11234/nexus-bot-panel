@@ -10,9 +10,6 @@ export default {
   description: "Download XVideos (18+)",
   category: "download",
   usage: "• .xvdl <url or query> - Download XVideos video",
-  permissions: {
-  // All false = public command, no restrictions
-},
   
   async execute(sock, sessionId, args, m) {
     try {

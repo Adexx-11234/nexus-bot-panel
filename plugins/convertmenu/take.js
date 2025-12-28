@@ -10,9 +10,6 @@ export default {
   category: "convertmenu",
   description: "Take sticker and change packname/author",
   usage: "Reply to sticker with .steal packname|author",
-  permissions: {
-  // All false = public command, no restrictions
-},
 
   async execute(sock, sessionId, args, m) {
     if (!args.join(" ")) {

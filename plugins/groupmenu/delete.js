@@ -4,14 +4,16 @@ export default {
   category: "groupmenu",
   description: "Delete a message by replying to it",
   usage: "Reply to a message with .del",
-    permissions: {
-  adminRequired: true,      // User must be group admin (only applies in groups)
-  botAdminRequired: true,   // Bot must be group admin (only applies in groups)
-  groupOnly: true,          // Can only be used in groups
-},
+  permissions: ["admin"],
 
   async execute(sock, m, { quoted, isAdmin, isBotAdmin }) {
+    if (!m.isGroup) {
+      return m.reply(`❌ This command can only be used in groups!` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`)
+    }
 
+    if (!isAdmin) {
+      return m.reply(`❌ Only group admins can use this command!` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`)
+    }
 
     if (!quoted) {
       return m.reply(`❌ Please reply to the message you want to delete!\n\nExample: Reply to a message and type .del` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`)

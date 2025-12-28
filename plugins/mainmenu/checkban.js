@@ -8,9 +8,7 @@ export default {
   commands: ["checkban", "isbanned"],
   category: "mainmenu",
   usage: "• `.checkban <phone>` - Check if account is banned",
-permissions: {
 
-},
   async execute(sock, sessionId, args, m) {
     try {
       // Check if phone number provided

@@ -5,11 +5,8 @@ export default {
   name: "reaction",
   commands: ["reaction", "speed", "reflex"],
   description: "⚡ Start a reaction speed game - Test your lightning reflexes!",
-  permissions: {
-  // All false = public command, no restrictions
-},
-category: "gamemenu",
-  usage: "• .reaction [option] - Start reaction speed game\n\n*Options:*\n• quick - 3 rounds\n• marathon - 10 rounds\n• custom rounds:N - Custom rounds\n\n*Example:*\n.reaction quick",
+  adminOnly: false,
+  groupOnly: true,
 
   async execute(sock, sessionId, args, m) {
     try {

@@ -8,10 +8,7 @@ export default {
   description: "Send a message that tags everyone without showing the tags",
   commands: ["hidetag", "h", "ht", "hiddentag", "tag"],
   category: "group",
-      permissions: {
-        ownerOnly: true, // Only bot owner can use this command
-  groupOnly: true,          // Can only be used in groups
-},
+  adminOnly: true,
   usage:
     "• `.hidetag [message]` - Send hidden tag message\n" +
     "• `.hidetag` (reply to message) - Forward message with hidden tags\n" +
@@ -24,6 +21,23 @@ export default {
       return { response: "❌ This command can only be used in groups!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }
     }
 
+    // Normalize JIDs for comparison
+    const normalizeJid = (jid) => {
+      if (!jid) return ''
+      return jid.split('@')[0].split(':')[0] + '@s.whatsapp.net'
+    }
+
+    // Check if user is admin or bot owner
+    const adminChecker = new AdminChecker()
+    const isAdmin = await adminChecker.isGroupAdmin(sock, groupJid, m.sender)
+    
+    const botJid = normalizeJid(sock.user.id)
+    const senderJid = normalizeJid(m.sender)
+    const isBotOwner = botJid === senderJid
+    
+    if (!isAdmin && !isBotOwner) {
+      return { response: "❌ Only group admins or bot owner can use this command!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }
+    }
 
     try {
       // Get group metadata

@@ -7,9 +7,6 @@ export default {
   commands: ["screenshot", "ss", "webss", "sitess"],
   description: "Take screenshot of any website",
   category: "toolmenu",
-  permissions: {
-
-},
   usage: "• .screenshot <url> - Take website screenshot\n• .ss <url> - Short command",
   
   async execute(sock, sessionId, args, m) {

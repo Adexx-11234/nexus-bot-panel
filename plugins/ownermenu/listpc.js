@@ -5,10 +5,7 @@ export default {
   description: "List all private chats the bot is in",
   usage: "listpc",
   cooldown: 5,
-    permissions: {
-  ownerOnly: true,          // Only bot owner can use (overrides everything)
-  privateOnly: true         // Can only be used in private chats
-},
+  permissions: ["owner"],
 
   async execute(sock, m, { store, isCreator }) {
     if (!isCreator) {

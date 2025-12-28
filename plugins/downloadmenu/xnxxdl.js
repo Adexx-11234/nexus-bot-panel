@@ -10,9 +10,6 @@ export default {
   description: "Download XNXX videos (18+)",
   category: "download",
   usage: "• .xnxxdl <url or query> - Download XNXX video",
-  permissions: {
-  // All false = public command, no restrictions
-},
   
   async execute(sock, sessionId, args, m) {
     try {

@@ -16,8 +16,7 @@ export default {
   description: "Display all available commands organized by category",
   commands: ["allcommands", "commands", "help", "allmenu", "mainmenu"],
   category: "mainmenu",
-  permissions: {
-},
+  adminOnly: false,
   usage:
     "• `.allcommands` - Show all available commands\n• `.commands` - Alias for allcommands\n• `.help` - Alias for allcommands",
 

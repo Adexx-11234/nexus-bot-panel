@@ -10,10 +10,7 @@ export default {
   description: "Get profile picture of user or group",
   commands: ["getpp", "pp", "profilepic"],
   category: "ownermenu",
-    permissions: {
-  ownerOnly: true,          // Only bot owner can use (overrides everything)
-  privateOnly: true         // Can only be used in private chats
-},
+  ownerOnly: true,
   usage: "• `.getpp` - Show help menu\n• `.getpp @user` - Get profile pic by mentioning user\n• `.getpp <number>` - Get profile pic by phone number\n• Reply to a message with `.getpp` - Get sender's profile pic\n• `.getpp me` - Get your own profile pic\n• `.getpp group` - Get current group profile pic",
 
   async execute(sock, sessionId, args, m) {

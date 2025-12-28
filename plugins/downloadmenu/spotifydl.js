@@ -10,9 +10,6 @@ export default {
   description: "Download Spotify tracks",
   category: "download",
   usage: "• .spotify <url> - Download Spotify track\n• .spot <url> - Short command",
-  permissions: {
-  // All false = public command, no restrictions
-},
   
   async execute(sock, sessionId, args, m) {
     try {

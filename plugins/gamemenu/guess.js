@@ -5,11 +5,8 @@ export default {
   name: "numguess",
   commands: ["numguess", "numberguess", "guessnum"],
   description: "🔢 Start a number guessing game - Guess the secret number!",
-  permissions: {
-  // All false = public command, no restrictions
-},
-category: "gamemenu",
-  usage: "• .numguess [option] - Start number guessing game\n\n*Options:*\n• easy - Range 1-50\n• medium - Range 1-100\n• hard - Range 1-200\n• custom MIN:MAX - Custom range\n\n*Example:*\n.numguess easy",
+  adminOnly: false,
+  groupOnly: true,
 
   async execute(sock, sessionId, args, m) {
     try {

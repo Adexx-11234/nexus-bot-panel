@@ -1,40 +1,7 @@
-# Dependencies
-node_modules/
+node_modules
 package-lock.json
-
-# Environment files
-.env
-.env.local
-.env.*.local
-env/
-
-# Test files
 test.json
-
-# Cookies
 youtube_cookies.txt
-sessions/
-sessions
-socket-inspections
-IMPLEMENTATION_DETAILS.md
-MULTI_SOCKET_FIX.md
-SOCKET_FIX_QUICK_REFERENCE.md
-SOCKET_FIX_SUMMARY.md
-session.db
-FIXED_XNXX.js
-
-# Build/temp files
-makeinstore/
-*.log
-dist/
-build/
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# IDE files
-.vscode/
-.idea/
-*.swp
-*.swo
+.env
+env
+makeinstore

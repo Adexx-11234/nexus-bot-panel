@@ -10,9 +10,6 @@ export default {
   category: "convertmenu",
   description: "Upload media and get URL",
   usage: "Reply to image/video/document with .tourl",
-  permissions: {
-  // All false = public command, no restrictions
-},
 
   async execute(sock, sessionId, args, m) {
     if (!m.quoted) {

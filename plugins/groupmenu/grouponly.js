@@ -1,5 +1,6 @@
 import { createComponentLogger } from "../../utils/logger.js"
 import { GroupQueries } from "../../database/query.js"
+import AdminChecker from "../../whatsapp/utils/admin-checker.js"
 
 const logger = createComponentLogger("GROUPONLY")
 
@@ -7,18 +8,54 @@ export default {
   name: "GroupOnly",
   description: "Control bot responses in groups - enable/disable group commands",
   commands: ["grouponly", "go"],
-  category: "groupmenu",
-      permissions: {
-  adminRequired: true,      // User must be group admin (only applies in groups)
-  botAdminRequired: true,   // Bot must be group admin (only applies in groups)
-  groupOnly: true,          // Can only be used in groups
-},
+  category: "group",
+  adminOnly: true,
   usage:
     "• `.grouponly on` - Enable bot responses in group\n• `.grouponly off` - Disable bot responses in group\n• `.grouponly status` - Check current status",
 
   async execute(sock, sessionId, args, m) {
     const action = args[0]?.toLowerCase()
     const groupJid = m.chat
+
+    if (!m.isGroup) {
+      return { response: "❌ This command can only be used in groups!" + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙` }
+    }
+
+    // Check if user is admin or bot owner
+    const adminChecker = new AdminChecker()
+    const isAdmin = await adminChecker.isGroupAdmin(sock, groupJid, m.sender)
+    
+    // Check bot owner
+    let isBotOwner = false
+    try {
+      if (sock?.user?.id && m.sender) {
+        let botUserId = sock.user.id
+        if (botUserId.includes(':')) {
+          botUserId = botUserId.split(':')[0]
+        }
+        if (botUserId.includes('@')) {
+          botUserId = botUserId.split('@')[0]
+        }
+
+        let userNumber = m.sender
+        if (userNumber.includes(':')) {
+          userNumber = userNumber.split(':')[0]
+        }
+        if (userNumber.includes('@')) {
+          userNumber = userNumber.split('@')[0]
+        }
+
+        isBotOwner = botUserId === userNumber
+      }
+    } catch (error) {
+      logger.error("Error checking bot owner:", error)
+    }
+    
+    logger.info(`[GroupOnly] User: ${m.sender}, isAdmin: ${isAdmin}, isBotOwner: ${isBotOwner}`)
+    
+    if (!isAdmin && !isBotOwner) {
+      return { response: "❌ Only group admins or bot owner can use this command!" }
+    }
 
     try {
       switch (action) {

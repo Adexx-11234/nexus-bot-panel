@@ -11,12 +11,29 @@ export default {
   name: "vipmenu",
   commands: ["vipmenu"],
   description: "Display VIP commands menu",
-  permissions: {
-  ownerAndVip: true,
-  privateOnly: true
-},
+  adminOnly: false,
   async execute(sock, sessionId, args, m) {
     try {
+      const userTelegramId = VIPHelper.fromSessionId(sessionId)
+      if (!userTelegramId) {
+        await sock.sendMessage(m.chat, { text: "❌ Could not identify your session\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
+        return
+      }
+
+      // Check VIP status
+      const vipStatus = await VIPQueries.isVIP(userTelegramId)
+      
+      if (!vipStatus.isVIP) {
+        await sock.sendMessage(m.chat, { 
+          text: "❌ *VIP Access Required*\n\n" +
+            "You don't have VIP privileges.\n\n" +
+            "Contact the bot owner for VIP access." + `
+
+> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
+        }, { quoted: m })
+        return
+      }
+
       // Get user info
       const userInfo = {
         name: m.pushName || m.name || m.notify || "VIP User",

@@ -9,10 +9,7 @@ export default {
   description: "Automatically show typing indicator when receiving messages",
   commands: ["autotyping", "at"],
   category: "ownermenu",
-    permissions: {
-  ownerOnly: true,          // Only bot owner can use (overrides everything)
-  privateOnly: true         // Can only be used in private chats
-},
+  ownerOnly: true,
   usage: "• .autotyping on/off - Enable/disable\n• .autotyping status - Check status\n• .autotyping - Show interactive menu",
 
   async execute(sock, sessionId, args, m) {

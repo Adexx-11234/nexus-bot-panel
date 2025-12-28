@@ -9,9 +9,6 @@ export default {
   description: "Download Twitter/X videos",
   category: "download",
   usage: "• .twitter <url> - Download Twitter video\n• .x <url> - Download from X",
-  permissions: {
-  // All false = public command, no restrictions
-},
   
   async execute(sock, sessionId, args, m) {
     try {

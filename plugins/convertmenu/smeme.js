@@ -11,11 +11,10 @@ aliases: ["stickermeme"],
 category: "convertmenu",
 description: "Create meme sticker with text",
 usage: "Reply to image with .smeme top text|bottom text",
-permissions: {
-  // All false = public command, no restrictions
-},
-
 async execute(sock, sessionId, args, m) {
+if (!m.quoted) {
+return m.reply(❌ Reply to an image with text\nUsage: .smeme top|bottom + \n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙)
+}
 const mime = m.quoted.mimetype || ""
 
 if (!/image/.test(mime)) {

@@ -9,9 +9,6 @@ export default {
   description: "Search and play YouTube videos",
   category: "download",
   usage: "• .play <song name> - Search and download audio",
-  permissions: {
-  // All false = public command, no restrictions
-},
   
   async execute(sock, sessionId, args, m) {
     let tempFile = null;
