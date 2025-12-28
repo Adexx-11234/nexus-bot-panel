@@ -1008,6 +1008,310 @@ sock.sendMessage = async (jid, content, options = {}) => {
   }
 };
 
+  // ==================== INTERACTIVE MESSAGE (BUTTONS/CAROUSEL) ====================
+  
+  /**
+   * Send a button message (iOS and Android compatible)
+   * @param {string} jid - Target JID
+   * @param {string} text - Main message text
+   * @param {Array} buttons - Array of button objects {text, id, type?}
+   * @param {object} options - Additional options {quoted, footer, header?}
+   */
+  sock.sendButtonMessage = async function (jid, text, buttons, options = {}) {
+    try {
+      const { footer = 'NexusBot', header = null } = options
+      
+      // ✅ CRITICAL: Convert buttons array to proper structure for both iOS & Android
+      const formattedButtons = buttons.map((btn, index) => ({
+        buttonId: btn.id || `btn_${index}`,
+        buttonText: { displayText: btn.text || btn },
+        type: btn.type || 1  // 1 = RESPONSE, 2 = URL, 3 = CALL (IMPORTANT for iOS compatibility)
+      }))
+      
+      const messageContent = {
+        buttonsMessage: {
+          contentText: text,
+          footerText: footer,
+          headerType: header ? 1 : 0,  // 1 = TEXT header (works on both iOS & Android)
+          buttons: formattedButtons,
+          replies: formattedButtons,  // ✅ CRITICAL: Some versions need 'replies' for iOS
+          useNativeFlow: false  // ✅ Disable native flow for better compatibility
+        }
+      }
+      
+      // Add header if provided
+      if (header) {
+        messageContent.buttonsMessage.contentText = `${header}\n\n${text}`
+      }
+      
+      logger.debug(`[sendButtonMessage] Sending ${buttons.length} buttons to ${jid}`)
+      
+      return await this.sendMessage(jid, messageContent, { quoted: options.quoted })
+      
+    } catch (error) {
+      logger.error("sendButtonMessage error:", error.message)
+      throw error
+    }
+  }
+
+  /**
+   * Send an interactive message (carousel/sections - newer format)
+   * Works better on modern iOS and Android
+   * @param {string} jid - Target JID
+   * @param {object} interactive - {body, footer?, header?, sections} or {body, footer?, carousel}
+   * @param {object} options - Additional options {quoted}
+   */
+  sock.sendInteractiveMessage = async function (jid, interactive, options = {}) {
+    try {
+      // ✅ ENHANCED: Support both sections (list) and carousel formats
+      const interactiveMessage = {
+        interactiveMessage: {
+          body: {
+            text: interactive.body || interactive.text || ''
+          },
+          footer: interactive.footer ? { text: interactive.footer } : undefined,
+          header: interactive.header ? {
+            title: interactive.header,
+            hasMediaAttachment: false
+          } : undefined,
+          ...interactive  // Spread remaining interactive properties (sections, carousel, etc)
+        }
+      }
+      
+      // Remove undefined properties
+      Object.keys(interactiveMessage.interactiveMessage).forEach(key => {
+        if (interactiveMessage.interactiveMessage[key] === undefined) {
+          delete interactiveMessage.interactiveMessage[key]
+        }
+      })
+      
+      logger.debug(`[sendInteractiveMessage] Sending interactive message to ${jid}`)
+      
+      return await this.sendMessage(jid, interactiveMessage, { quoted: options.quoted })
+      
+    } catch (error) {
+      logger.error("sendInteractiveMessage error:", error.message)
+      throw error
+    }
+  }
+
+  /**
+   * Send a carousel (product carousel - latest format)
+   * @param {string} jid - Target JID
+   * @param {Array} items - Array of carousel items {title, description, image?, id?}
+   * @param {object} options - {quoted, footer}
+   */
+  sock.sendCarouselMessage = async function (jid, items, options = {}) {
+    try {
+      const { footer = 'NexusBot' } = options
+      
+      // ✅ Format items for carousel
+      const carouselCards = items.map((item, index) => ({
+        body: {
+          text: item.title || `Item ${index + 1}`
+        },
+        footer: {
+          text: item.description || ''
+        },
+        ...(item.image && {
+          header: {
+            hasMediaAttachment: true,
+            imageMessage: typeof item.image === 'string' ? 
+              { imageUrl: item.image } : 
+              { jpegThumbnail: item.image }
+          }
+        })
+      }))
+      
+      const messageContent = {
+        interactiveMessage: {
+          body: { text: 'Select an item:' },
+          footer: { text: footer },
+          nativeFlowMessage: {
+            buttons: [{
+              name: 'review_and_pay',
+              buttonParamsJson: JSON.stringify({
+                action: 'review_and_pay',
+                product_id: items[0]?.id || '0',
+                flow_token: 'AQAAAAAA...'  // Optional flow token
+              })
+            }]
+          },
+          carouselMessage: {
+            cards: carouselCards
+          }
+        }
+      }
+      
+      logger.debug(`[sendCarouselMessage] Sending carousel with ${items.length} items to ${jid}`)
+      
+      return await this.sendMessage(jid, messageContent, { quoted: options.quoted })
+      
+    } catch (error) {
+      logger.error("sendCarouselMessage error:", error.message)
+      throw error
+    }
+  }
+
+  /**
+   * Send list message (sections with selectable items)
+   * @param {string} jid - Target JID
+   * @param {object} config - {title, body, footer, sections}
+   *   sections: [{title, rows: [{title, id, description?}]}]
+   * @param {object} options - {quoted}
+   */
+  sock.sendListMessage = async function (jid, config, options = {}) {
+    try {
+      const { title = '', body = '', footer = 'NexusBot', sections = [] } = config
+      
+      // ✅ Format sections for list message
+      const formattedSections = sections.map(section => ({
+        title: section.title || '',
+        rows: (section.rows || []).map((row, idx) => ({
+          title: row.title || `Option ${idx + 1}`,
+          rowId: row.id || `row_${idx}`,
+          description: row.description || ''
+        }))
+      }))
+      
+      const messageContent = {
+        interactiveMessage: {
+          body: { text: body },
+          footer: { text: footer },
+          header: title ? { title } : undefined,
+          nativeFlowMessage: {
+            buttons: [{
+              name: 'single_select',
+              buttonParamsJson: JSON.stringify({
+                title: title || 'Select an option',
+                sections: formattedSections
+              })
+            }]
+          }
+        }
+      }
+      
+      // Remove undefined
+      if (!title) delete messageContent.interactiveMessage.header
+      
+      logger.debug(`[sendListMessage] Sending list message to ${jid}`)
+      
+      return await this.sendMessage(jid, messageContent, { quoted: options.quoted })
+      
+    } catch (error) {
+      logger.error("sendListMessage error:", error.message)
+      throw error
+    }
+  }
+
+  /**
+   * Send a sticker pack as multiple stickers with controlled delay
+   * Enhanced version with better grouping
+   * @param {string} jid - Target JID
+   * @param {Array} sources - Array of sticker sources
+   * @param {object} options - {batchSize, batchDelay, itemDelay, quoted, groupName?}
+   */
+  sock.sendStickerPackEnhanced = async function (jid, sources, options = {}) {
+    const {
+      batchSize = 5,
+      batchDelay = 1500,
+      itemDelay = 400,
+      quoted = null,
+      groupName = 'Sticker Pack',
+      onProgress = null
+    } = options
+
+    const results = []
+    const tempFiles = []
+    let sentCount = 0
+
+    try {
+      // Send group notification
+      if (groupName) {
+        await this.sendMessage(jid, { text: `📦 *${groupName}* (${sources.length} stickers)` })
+        await sleep(500)
+      }
+
+      for (let i = 0; i < sources.length; i++) {
+        let tempFilePath = null
+        
+        try {
+          const source = sources[i]
+          let buffer = source.buffer || source
+
+          if (source.url) {
+            const response = await axios.get(source.url, { responseType: "arraybuffer" })
+            buffer = Buffer.from(response.data)
+          } else if (typeof buffer === "string" && /^https?:\/\//.test(buffer)) {
+            const response = await axios.get(buffer, { responseType: "arraybuffer" })
+            buffer = Buffer.from(response.data)
+          }
+
+          const fileType = await fileTypeFromBuffer(buffer)
+          const mime = fileType?.mime || ""
+          const isVideo = source.isVideo || mime.startsWith("video/") || mime === "image/gif"
+
+          let stickerBuffer
+          if (isVideo) {
+            stickerBuffer = await video2webp(buffer)
+          } else {
+            stickerBuffer = await image2webp(buffer)
+          }
+
+          tempFilePath = getTempFilePath('stickerPack', '.webp')
+          fs.writeFileSync(tempFilePath, stickerBuffer)
+          tempFiles.push(tempFilePath)
+
+          // Send sticker
+          const result = await this.sendMessage(
+            jid,
+            { sticker: fs.readFileSync(tempFilePath) },
+            { quoted: i === 0 && quoted ? quoted : null }  // Only quote first sticker
+          )
+
+          results.push({ success: true, index: i, result })
+          sentCount++
+
+          if (onProgress) {
+            onProgress(sentCount, sources.length)
+          }
+
+          // Intelligent delay
+          if ((i + 1) % batchSize === 0 && i < sources.length - 1) {
+            // Batch finished, longer delay
+            logger.debug(`[sendStickerPackEnhanced] Batch ${Math.ceil((i + 1) / batchSize)} complete, waiting ${batchDelay}ms`)
+            await sleep(batchDelay)
+          } else if (i < sources.length - 1) {
+            // Within batch, shorter delay
+            await sleep(itemDelay)
+          }
+        } catch (error) {
+          logger.error(`[sendStickerPackEnhanced] Error at sticker ${i + 1}:`, error.message)
+          results.push({ success: false, index: i, error: error.message })
+          
+          if (tempFilePath) {
+            cleanupTempFile(tempFilePath)
+          }
+        }
+      }
+
+      // Send completion message
+      if (groupName) {
+        await sleep(500)
+        await this.sendMessage(jid, { text: `✅ *${groupName}* complete! (${sentCount}/${sources.length} sent)` })
+      }
+
+      logger.info(`[sendStickerPackEnhanced] Completed: ${sentCount}/${sources.length} stickers`)
+      return results
+
+    } finally {
+      // Cleanup
+      for (const tempFile of tempFiles) {
+        cleanupTempFile(tempFile)
+      }
+    }
+  }
+
   // Mark socket as extended
   sock._extended = true
 
