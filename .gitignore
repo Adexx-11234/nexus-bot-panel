@@ -16,6 +16,11 @@ youtube_cookies.txt
 sessions/
 sessions
 socket-inspections
+IMPLEMENTATION_DETAILS.md
+MULTI_SOCKET_FIX.md
+SOCKET_FIX_QUICK_REFERENCE.md
+SOCKET_FIX_SUMMARY.md
+session.db
 
 # Build/temp files
 makeinstore/

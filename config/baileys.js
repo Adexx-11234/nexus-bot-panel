@@ -1,8 +1,16 @@
 import NodeCache from "node-cache"
-import { makeWASocket, Browsers, makeCacheableSignalKeyStore, fetchLatestBaileysVersion } from "@whiskeysockets/baileys"
+import { Browsers, makeCacheableSignalKeyStore, fetchLatestBaileysVersion } from "@whiskeysockets/baileys"
 import { createFileStore, deleteFileStore, getFileStore } from "../whatsapp/index.js"
 import { logger } from "../utils/logger.js"
 import pino from "pino"
+
+// ✅ CRITICAL FIX: Will be injected by socket-manager patch at startup
+let makeWASocket = null
+
+export function setMakeWASocket(patchedFn) {
+  makeWASocket = patchedFn
+  logger.info('✅ Patched makeWASocket injected into baileys config')
+}
 
 // ==================== LOGGER CONFIGURATION ====================
 const baileysLogger = pino({
@@ -40,7 +48,6 @@ export const baileysConfig = {
   msgRetryCounterMap: {},
   markOnlineOnConnect: false,
   getMessage: defaultGetMessage,
-  browser: ['Ubuntu', 'Chrome', '20.0.0'],
   //version: [2, 3000, 1025190524], // remove comments if connection open but didn't connect on WhatsApp
   shouldIgnoreJid: (jid) => false,
   // Remove mentionedJid to avoid issues
@@ -390,11 +397,17 @@ const normalizeMetadata = (metadata) => {
  */
 export function createBaileysSocket(authState, sessionId, getMessage = null) {
   try {
+    // ✅ CRITICAL: Use patched makeWASocket if available, otherwise fall back
+    if (!makeWASocket) {
+      throw new Error('makeWASocket not initialized - socket-manager patch must be applied at startup!')
+    }
+
     const sock = makeWASocket({
       ...baileysConfig,
       auth: authState,
       getMessage: getMessage || defaultGetMessage,
       msgRetryCounterCache,
+      sessionId  // ✅ Pass sessionId for socket tracking
     })
 
     setupSocketDefaults(sock)
