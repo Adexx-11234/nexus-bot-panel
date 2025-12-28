@@ -39,24 +39,6 @@ export class GroupAdminChecker {
   }
 
   /**
-   * Extract phone number from any JID format
-   * @private
-   */
-  _extractPhoneNumber(jid) {
-    if (!jid) return ''
-    
-    // Remove everything after @
-    let phone = jid.split('@')[0]
-    
-    // Remove everything after : (for formats like "1234:16")
-    if (phone.includes(':')) {
-      phone = phone.split(':')[0]
-    }
-    
-    return phone
-  }
-
-  /**
    * Check if user is group admin
    */
   async isGroupAdmin(sock, groupJid, userJid) {
@@ -72,8 +54,6 @@ export class GroupAdminChecker {
       }
 
       const normalizedUserJid = this._normalizeJid(resolvedJid)
-      const userPhone = this._extractPhoneNumber(resolvedJid)
-      
       const participants = await this.metadataManager.getParticipants(sock, groupJid)
 
       const isAdmin = participants.some(p => {
@@ -82,14 +62,12 @@ export class GroupAdminChecker {
         
         const normalizedParticipantId = this._normalizeJid(participantId)
         const normalizedParticipantJid = this._normalizeJid(participantJid)
-        const participantPhone = this._extractPhoneNumber(participantId)
         
         const hasAdminRole = p.admin === 'admin' || p.admin === 'superadmin'
         
         const isMatch = (
           normalizedParticipantId === normalizedUserJid ||
           normalizedParticipantJid === normalizedUserJid ||
-          participantPhone === userPhone ||
           participantId === userJid ||
           participantJid === userJid
         )
@@ -107,69 +85,22 @@ export class GroupAdminChecker {
   }
 
   /**
-   * ✅ FIXED: Check if bot is group admin - DIRECT CHECK
+   * Check if bot is group admin
    */
   async isBotAdmin(sock, groupJid) {
     try {
       if (!groupJid.endsWith('@g.us')) {
-        logger.debug(`Not a group JID: ${groupJid}`)
         return false
       }
 
       const rawBotId = sock.user?.id || ''
-      if (!rawBotId) {
-        logger.warn('Bot user ID not available')
-        return false
-      }
+      if (!rawBotId) return false
 
-      // Extract bot phone number from various formats
-      // sock.user.id can be: "1234567890:16@s.whatsapp.net" or "1234567890@s.whatsapp.net"
-      const botPhone = this._extractPhoneNumber(rawBotId)
-      const botJid = this._normalizeJid(botPhone)
+      const botNumber = this._normalizeJid(rawBotId.split(':')[0])
       
-      logger.debug(`Bot ID check - Raw: ${rawBotId}, Phone: ${botPhone}, Normalized: ${botJid}`)
+      logger.debug(`Checking bot admin status - Bot JID: ${botNumber}`)
       
-      // Get participants directly
-      const participants = await this.metadataManager.getParticipants(sock, groupJid)
-      
-      if (!participants || participants.length === 0) {
-        logger.warn(`No participants found for group ${groupJid}`)
-        return false
-      }
-      
-      logger.debug(`Checking ${participants.length} participants for bot admin status`)
-      
-      // Check if bot is in participants with admin role
-      const botParticipant = participants.find(p => {
-        const participantId = p.id || p.jid
-        const participantPhone = this._extractPhoneNumber(participantId)
-        const participantJid = this._normalizeJid(participantId)
-        
-        const isMatch = (
-          participantPhone === botPhone ||
-          participantJid === botJid ||
-          participantId === rawBotId ||
-          participantId.includes(botPhone)
-        )
-        
-        if (isMatch) {
-          logger.debug(`Found bot participant - ID: ${participantId}, Admin: ${p.admin}`)
-        }
-        
-        return isMatch
-      })
-
-      if (!botParticipant) {
-        logger.warn(`Bot not found in group participants for ${groupJid}`)
-        logger.debug(`Bot phone: ${botPhone}, Participant phones: ${participants.map(p => this._extractPhoneNumber(p.id || p.jid)).join(', ')}`)
-        return false
-      }
-
-      const isAdmin = botParticipant.admin === 'admin' || botParticipant.admin === 'superadmin'
-      
-      logger.debug(`Bot admin status in ${groupJid}: ${isAdmin} (role: ${botParticipant.admin})`)
-      
-      return isAdmin
+      return await this.isGroupAdmin(sock, groupJid, botNumber)
 
     } catch (error) {
       logger.error(`Error checking bot admin status in ${groupJid}:`, error)
@@ -197,14 +128,8 @@ export class GroupAdminChecker {
 
       const normalizedUserJid = this._normalizeJid(resolvedJid)
       const normalizedOwner = this._normalizeJid(owner)
-      const userPhone = this._extractPhoneNumber(resolvedJid)
-      const ownerPhone = this._extractPhoneNumber(owner)
 
-      const isOwner = (
-        normalizedOwner === normalizedUserJid || 
-        owner === userJid ||
-        ownerPhone === userPhone
-      )
+      const isOwner = normalizedOwner === normalizedUserJid || owner === userJid
 
       logger.debug(`Owner check for ${userJid} in ${groupJid}: ${isOwner}`)
       return isOwner
