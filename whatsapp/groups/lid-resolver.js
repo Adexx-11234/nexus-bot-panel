@@ -44,7 +44,11 @@ export async function getPnForLid(sock, lid) {
     // Baileys v7+ method
     if (sock.signalRepository?.lidMapping?.getPNForLID) {
       const pn = await sock.signalRepository.lidMapping.getPNForLID(lid)
-      if (pn) return pn
+      if (pn) {
+        // Ensure it's in proper JID format (@s.whatsapp.net)
+        const phoneNumber = String(pn).replace(/[^0-9]/g, '')
+        return `${phoneNumber}@s.whatsapp.net`
+      }
     }
     
     // Fallback: return LID as-is
@@ -89,9 +93,10 @@ export async function resolveLidToJid(sock, groupJid, lidJid) {
     )
 
     if (participant) {
-      // v7: phoneNumber field exists when id is a LID
+      // v7: phoneNumber field exists when id is a LID - ensure proper format
       if (participant.phoneNumber) {
-        return participant.phoneNumber
+        const phoneNumber = String(participant.phoneNumber).replace(/[^0-9]/g, '')
+        return `${phoneNumber}@s.whatsapp.net`
       }
       // v6: jid field
       if (participant.jid) {
@@ -119,8 +124,17 @@ export async function resolveLidsToJids(sock, groupJid, lids) {
   const lidsToResolve = lids.filter(lid => isLid(lid))
   const nonLids = lids.filter(lid => !isLid(lid))
 
-  // Add non-LIDs as-is (no processing needed)
-  resolved.push(...nonLids)
+  // Normalize non-LIDs to proper JID format
+  const normalizedNonLids = nonLids.map(jid => {
+    if (!jid) return jid
+    // If it's just a phone number, add @s.whatsapp.net
+    if (/^\d+$/.test(String(jid).trim())) {
+      return `${jid}@s.whatsapp.net`
+    }
+    // Already has a domain
+    return jid
+  })
+  resolved.push(...normalizedNonLids)
 
   // Try Baileys v7 batch method first
   if (lidsToResolve.length > 0 && sock.signalRepository?.lidMapping?.getPNForLID) {
@@ -143,9 +157,10 @@ export async function resolveLidsToJids(sock, groupJid, lids) {
         )
 
         if (participant) {
-          // v7: phoneNumber field
+          // v7: phoneNumber field - ensure proper JID format
           if (participant.phoneNumber) {
-            resolved.push(participant.phoneNumber)
+            const phoneNumber = String(participant.phoneNumber).replace(/[^0-9]/g, '')
+            resolved.push(`${phoneNumber}@s.whatsapp.net`)
             continue
           }
           // v6: jid field
