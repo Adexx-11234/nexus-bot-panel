@@ -63,7 +63,7 @@ export class EventDispatcher {
     }
   }
 
- /**
+  /**
    * Setup message event listeners with optimized filtering
    */
   _setupMessageEvents(sock, sessionId) {
@@ -72,7 +72,7 @@ export class EventDispatcher {
       try {
         recordSessionActivity(sessionId)
 
-        // Pre-fetch Signal keys for individual messages with CIPHERTEXT errors
+                // Pre-fetch Signal keys for individual messages with CIPHERTEXT errors
         // This prevents "Message absent from node" errors on first message from a user
         if (messageUpdate.messages && messageUpdate.messages.length > 0) {
           for (const msg of messageUpdate.messages) {
@@ -101,6 +101,76 @@ export class EventDispatcher {
       }
     })
 
+    // ============= MESSAGES_UPDATE =============
+    sock.ev.on(EventTypes.MESSAGES_UPDATE, async (updates) => {
+      try {
+        // Fast filter: Remove useless updates
+        if (updates && updates.length > 0) {
+          updates = updates.filter((update) => {
+            // Skip empty updates
+            if (!update.update) {
+              return false
+            }
+
+            // Skip status-only updates (read receipts)
+            const updateKeys = Object.keys(update.update)
+            if (updateKeys.length === 1 && updateKeys[0] === "status") {
+              return false
+            }
+
+            // Skip edited message placeholders with null content
+            if (update.update.message?.editedMessage?.message === null) {
+              return false
+            }
+
+            return true
+          })
+
+          // Skip if no updates left
+          if (updates.length === 0) {
+            return
+          }
+        }
+
+       // recordSessionActivity(sessionId)
+
+        // Fire and forget
+        this.messageHandler
+          .handleMessagesUpdate(sock, sessionId, updates)
+          .catch((err) => logger.error(`Error processing message update for ${sessionId}:`, err))
+      } catch (error) {
+        logger.error(`Error in MESSAGES_UPDATE handler for ${sessionId}:`, error)
+      }
+    })
+
+    // ============= MESSAGES_DELETE =============
+    sock.ev.on(EventTypes.MESSAGES_DELETE, async (deletions) => {
+      try {
+      //  recordSessionActivity(sessionId)
+
+        // Fire and forget
+        this.messageHandler
+          .handleMessagesDelete(sock, sessionId, deletions)
+          .catch((err) => logger.error(`Error processing message delete for ${sessionId}:`, err))
+      } catch (error) {
+        logger.error(`Error in MESSAGES_DELETE handler for ${sessionId}:`, error)
+      }
+    })
+
+    // ============= MESSAGES_REACTION =============
+    sock.ev.on(EventTypes.MESSAGES_REACTION, async (reactions) => {
+      try {
+      //  recordSessionActivity(sessionId)
+
+        // Fire and forget
+        this.messageHandler
+          .handleMessagesReaction(sock, sessionId, reactions)
+          .catch((err) => logger.error(`Error processing message reaction for ${sessionId}:`, err))
+      } catch (error) {
+        logger.error(`Error in MESSAGES_REACTION handler for ${sessionId}:`, error)
+      }
+    })
+  }
 
  /**
    * Setup group event listeners
