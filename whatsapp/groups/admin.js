@@ -77,8 +77,8 @@ export class GroupAdminChecker {
       const participants = await this.metadataManager.getParticipants(sock, groupJid)
 
       const isAdmin = participants.some(p => {
-        const participantId = p.id || p.jid
-        const participantJid = p.jid || p.id
+        const participantId = p.jid || p.id  // ✅ Try jid first
+        const participantJid = p.jid || p.id  // ✅ Try jid first
         
         const normalizedParticipantId = this._normalizeJid(participantId)
         const normalizedParticipantJid = this._normalizeJid(participantJid)
@@ -148,7 +148,7 @@ export class GroupAdminChecker {
       
       // Find bot in participants
       const botParticipant = participants.find(p => {
-        const participantId = p.id || p.jid
+        const participantId = p.jid || p.id  // ✅ Try jid first, then id
         
         // Skip LID format as we can't match it
         if (participantId && participantId.endsWith('@lid')) {
@@ -179,11 +179,11 @@ export class GroupAdminChecker {
         logger.warn(`❌ Bot not found in group participants for ${groupJid}`)
         
         // Check if participants are in LID format
-        const lidCount = participants.filter(p => (p.id || p.jid)?.endsWith('@lid')).length
+        const lidCount = participants.filter(p => (p.jid || p.id)?.endsWith('@lid')).length
         logger.info(`LID participants: ${lidCount}/${participants.length}`)
         
         // Show first 5 participant IDs for debugging
-        logger.info(`Sample participant IDs: ${participants.slice(0, 5).map(p => p.id || p.jid).join(', ')}`)
+        logger.info(`Sample participant IDs: ${participants.slice(0, 5).map(p => p.jid || p.id).join(', ')}`)
         logger.info(`Looking for bot phone: ${botPhone}`)
         
         return false
