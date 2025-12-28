@@ -314,6 +314,12 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
         return message
       }
 
+      // ✅ NORMALIZE remoteJid: Use remoteJidAlt if remoteJid is LID format
+      if (message.key.remoteJid?.endsWith('@lid') && message.key.remoteJidAlt?.endsWith('@s.whatsapp.net')) {
+        message.key.remoteJid = message.key.remoteJidAlt
+        logger.debug(`Converted remoteJid from LID to PN: ${message.key.remoteJidAlt}`)
+      }
+
       const isGroup = message.key.remoteJid?.endsWith('@g.us')
       
       // ONLY resolve participant LID if it actually ends with @lid

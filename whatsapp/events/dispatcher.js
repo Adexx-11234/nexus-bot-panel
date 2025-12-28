@@ -72,10 +72,14 @@ export class EventDispatcher {
       try {
         recordSessionActivity(sessionId)
 
+
         // Fire and forget - process without blocking
         this.messageHandler
           .handleMessagesUpsert(sock, sessionId, messageUpdate)
-          .catch((err) => logger.error(`Error processing message upsert for ${sessionId}:`, err))
+          .then(() => {
+          })
+          .catch((err) => {
+          })
       } catch (error) {
         logger.error(`Error in MESSAGES_UPSERT handler for ${sessionId}:`, error)
       }

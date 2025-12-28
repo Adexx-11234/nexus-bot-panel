@@ -149,62 +149,54 @@ export default {
         }
       }
 
-      // Create interactive message with PROPER STRING FORMAT
+      // Create interactive message with PROPER FORMAT (No viewOnceMessage wrapper needed)
       const msg = generateWAMessageFromContent(m.chat, {
-        viewOnceMessage: {
-          message: {
-            messageContextInfo: {
-              deviceListMetadata: {},
-              deviceListMetadataVersion: 2
-            },
-            interactiveMessage: proto.Message.InteractiveMessage.create({
-              body: proto.Message.InteractiveMessage.Body.create({
-                text: captionText
-              }),
-              footer: proto.Message.InteractiveMessage.Footer.create({
-                text: "© 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Select a category"
-              }),
-              header: proto.Message.InteractiveMessage.Header.create(headerConfig),
-              nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
-                buttons: [
-                  {
-                    name: "single_select",
-                    buttonParamsJson: JSON.stringify({
-                      title: "📋 Select Menu",
-                      sections: [{
-                        title: "Menu Categories",
-                        highlight_label: "Popular",
-                        rows: menuRows
-                      }]
-                    })
-                  },
-                  {
-                    name: "quick_reply",
-                    buttonParamsJson: JSON.stringify({
-                      display_text: "📶 All Commands",
-                      id: `${m.prefix}allmenu`
-                    })
-                  },
-                  {
-                    name: "quick_reply",
-                    buttonParamsJson: JSON.stringify({
-                      display_text: "ℹ️ Bot Info",
-                      id: `${m.prefix}botinfo`
-                    })
-                  },
-                  {
-                    name: "cta_url",
-                    buttonParamsJson: JSON.stringify({
-                      display_text: "💬 Support Channel",
-                      url: "https://whatsapp.com/channel/0029VbBK53XBvvslYeZlBe0V",
-                      merchant_url: "https://whatsapp.com/channel/0029VbBK53XBvvslYeZlBe0V"
-                    })
-                  }
-                ]
-              })
-            })
-          }
-        }
+        interactiveMessage: proto.Message.InteractiveMessage.create({
+          body: proto.Message.InteractiveMessage.Body.create({
+            text: captionText
+          }),
+          footer: proto.Message.InteractiveMessage.Footer.create({
+            text: "© 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Select a category"
+          }),
+          header: proto.Message.InteractiveMessage.Header.create(headerConfig),
+          nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
+            buttons: [
+              {
+                name: "single_select",
+                buttonParamsJson: JSON.stringify({
+                  title: "📋 Select Menu",
+                  sections: [{
+                    title: "Menu Categories",
+                    highlight_label: "Popular",
+                    rows: menuRows
+                  }]
+                })
+              },
+              {
+                name: "quick_reply",
+                buttonParamsJson: JSON.stringify({
+                  display_text: "📶 All Commands",
+                  id: `${m.prefix}allmenu`
+                })
+              },
+              {
+                name: "quick_reply",
+                buttonParamsJson: JSON.stringify({
+                  display_text: "ℹ️ Bot Info",
+                  id: `${m.prefix}botinfo`
+                })
+              },
+              {
+                name: "cta_url",
+                buttonParamsJson: JSON.stringify({
+                  display_text: "💬 Support Channel",
+                  url: "https://whatsapp.com/channel/0029VbBK53XBvvslYeZlBe0V",
+                  merchant_url: "https://whatsapp.com/channel/0029VbBK53XBvvslYeZlBe0V"
+                })
+              }
+            ]
+          })
+        })
       }, {});
 
       // Send the message

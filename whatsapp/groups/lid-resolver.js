@@ -170,13 +170,32 @@ export async function resolveLidsToJids(sock, groupJid, lids) {
 /**
  * Resolve participant information with LID support (v6 & v7 compatible)
  * Returns enriched participant data for welcome/goodbye messages
+ * Now supports remoteJidAlt, participantAlt from message keys (Baileys v7)
  */
-export async function resolveParticipants(sock, groupJid, participants, action) {
+export async function resolveParticipants(sock, groupJid, participants, action, messageKey = null) {
   const resolved = []
   
   try {
+    // Safely handle participants - extract strings from objects or arrays
+    const participantList = participants
+      .map(p => {
+        if (typeof p === 'string') return p
+        if (typeof p === 'object' && p.id) return p.id
+        if (typeof p === 'object' && p.jid) return p.jid
+        if (typeof p === 'object' && p.phoneNumber) return p.phoneNumber
+        if (Array.isArray(p)) return p[0] // In case it's an array
+        logger.warn(`[resolveParticipants] Invalid participant format:`, p)
+        return null
+      })
+      .filter(Boolean)
+
+    if (participantList.length === 0) {
+      logger.warn(`No valid participants to resolve for ${groupJid}`)
+      return []
+    }
+
     // Check if we have any LIDs to resolve
-    const hasLids = participants.some(p => isLid(p))
+    const hasLids = participantList.some(p => typeof p === 'string' && isLid(p))
 
     // Only fetch metadata if we have LIDs to resolve
     let metadata = null
@@ -186,8 +205,14 @@ export async function resolveParticipants(sock, groupJid, participants, action) 
     }
 
     // Process all participants
-    for (const participant of participants) {
+    for (const participant of participantList) {
       try {
+        // Type safety check
+        if (typeof participant !== 'string') {
+          logger.warn(`Skipping non-string participant:`, participant)
+          continue
+        }
+
         let actualJid = participant
         let phoneNumber = null
         let displayName = participant.split('@')[0]
@@ -205,9 +230,9 @@ export async function resolveParticipants(sock, groupJid, participants, action) 
           continue
         }
 
-        // Try Baileys v7 signal repository first
+        // TRY: Baileys v7 signal repository first
         const pn = await getPnForLid(sock, participant)
-        if (pn && pn !== participant) {
+        if (pn && pn !== participant && isPn(pn)) {
           actualJid = pn
           phoneNumber = pn
         }
@@ -215,20 +240,23 @@ export async function resolveParticipants(sock, groupJid, participants, action) 
         // Resolve using metadata
         if (metadata?.participants) {
           const participantInfo = metadata.participants.find(p => 
-            p.id === participant || p.lid === participant
+            p.id === participant || p.lid === participant || p.jid === participant
           )
 
           if (participantInfo) {
-            // v7: Use 'id' as the preferred identifier
-            if (participantInfo.id) {
+            // v7: phoneNumber field is ALWAYS preferred (this is the PN format @s.whatsapp.net)
+            if (participantInfo.phoneNumber && isPn(participantInfo.phoneNumber)) {
+              phoneNumber = participantInfo.phoneNumber
+              actualJid = participantInfo.phoneNumber  // Always use PN format for compatibility
+            }
+            // v7: If id is LID and no phoneNumber, try signal repo
+            else if (participantInfo.id && isLid(participantInfo.id)) {
               actualJid = participantInfo.id
             }
-            
-            // v7: phoneNumber field when id is LID
-            if (participantInfo.phoneNumber) {
-              phoneNumber = participantInfo.phoneNumber
-              // Use phone number as actual JID if available
-              actualJid = participantInfo.phoneNumber
+            // v6 fallback: Use 'id' or 'jid'
+            else if (participantInfo.id && isPn(participantInfo.id)) {
+              actualJid = participantInfo.id
+              phoneNumber = participantInfo.id
             }
             
             // v6 fallback: jid field

@@ -798,3 +798,232 @@ export async function bindStoreToSocket(sock, sessionId) {
     return null
   }
 }
+
+// ==================== NEWSLETTER HELPERS (Baileys v7) ====================
+/**
+ * Follow a WhatsApp newsletter/channel (Baileys v7+)
+ */
+export async function followNewsletter(sock, newsletterJid) {
+  try {
+    if (!sock.newsletterFollow) {
+      logger.warn(`[Newsletter] Socket doesn't have newsletterFollow method (old Baileys version?)`)
+      return false
+    }
+
+    const result = await sock.newsletterFollow(newsletterJid)
+    logger.info(`[Newsletter] Successfully followed: ${newsletterJid}`)
+    return result
+  } catch (error) {
+    logger.error(`[Newsletter] Error following ${newsletterJid}:`, error.message)
+    return null
+  }
+}
+
+/**
+ * Check if already following a newsletter
+ */
+export async function isFollowingNewsletter(sock, newsletterJid) {
+  try {
+    if (!sock.newsletterMetadata) {
+      logger.warn(`[Newsletter] Socket doesn't have newsletterMetadata method`)
+      return false
+    }
+
+    const metadata = await sock.newsletterMetadata('jid', newsletterJid)
+    return metadata !== null
+  } catch (error) {
+    logger.error(`[Newsletter] Error checking follow status for ${newsletterJid}:`, error.message)
+    return false
+  }
+}
+
+/**
+ * Get newsletter metadata
+ */
+export async function getNewsletterMetadata(sock, newsletterJid) {
+  try {
+    if (!sock.newsletterMetadata) {
+      logger.warn(`[Newsletter] Socket doesn't have newsletterMetadata method`)
+      return null
+    }
+
+    const metadata = await sock.newsletterMetadata('jid', newsletterJid)
+    return metadata
+  } catch (error) {
+    logger.error(`[Newsletter] Error getting metadata for ${newsletterJid}:`, error.message)
+    return null
+  }
+}
+
+/**
+ * List all newsletters user is following
+ */
+export async function getFollowedNewsletters(sock) {
+  try {
+    if (!sock.ev) {
+      logger.warn(`[Newsletter] Socket doesn't have event emitter`)
+      return []
+    }
+
+    // Note: Baileys v7 doesn't have a direct method to list all newsletters
+    // You need to track them manually or use the newsletter-related events
+    logger.info(`[Newsletter] Use newsletter events to track followed newsletters`)
+    return []
+  } catch (error) {
+    logger.error(`[Newsletter] Error getting newsletters:`, error.message)
+    return []
+  }
+}
+
+// ==================== LID MAPPING SUPPORT (Baileys v7) ====================
+/**
+ * Get LID for a phone number using Baileys v7 signal repository
+ */
+export async function getLIDForPN(sock, phoneNumber) {
+  try {
+    if (!phoneNumber || !phoneNumber.includes("@")) {
+      logger.warn(`[LID] Invalid phone number format: ${phoneNumber}`)
+      return null
+    }
+
+    // Baileys v7: Use signal repository
+    if (sock.signalRepository?.lidMapping?.getLIDForPN) {
+      const lid = await sock.signalRepository.lidMapping.getLIDForPN(phoneNumber)
+      if (lid) {
+        logger.debug(`[LID] Resolved PN to LID: ${phoneNumber} -> ${lid}`)
+        return lid
+      }
+    }
+
+    logger.debug(`[LID] Could not resolve LID for ${phoneNumber}`)
+    return null
+  } catch (error) {
+    logger.debug(`[LID] Error getting LID for PN:`, error.message)
+    return null
+  }
+}
+
+/**
+ * Get PN (phone number) for a LID using Baileys v7 signal repository
+ */
+export async function getPNForLID(sock, lid) {
+  try {
+    if (!lid || !lid.includes("@")) {
+      logger.warn(`[LID] Invalid LID format: ${lid}`)
+      return null
+    }
+
+    // Baileys v7: Use signal repository
+    if (sock.signalRepository?.lidMapping?.getPNForLID) {
+      const pn = await sock.signalRepository.lidMapping.getPNForLID(lid)
+      if (pn && pn.includes("@s.whatsapp.net")) {
+        logger.debug(`[LID] Resolved LID to PN: ${lid} -> ${pn}`)
+        return pn
+      }
+    }
+
+    logger.debug(`[LID] Could not resolve PN for ${lid}`)
+    return null
+  } catch (error) {
+    logger.debug(`[LID] Error getting PN for LID:`, error.message)
+    return null
+  }
+}
+
+/**
+ * Batch resolve multiple phone numbers to LIDs (Baileys v7)
+ */
+export async function getLIDsForPNs(sock, phoneNumbers) {
+  try {
+    if (!Array.isArray(phoneNumbers) || phoneNumbers.length === 0) {
+      return []
+    }
+
+    // Baileys v7: Use batch method if available
+    if (sock.signalRepository?.lidMapping?.getLIDsForPNs) {
+      const result = await sock.signalRepository.lidMapping.getLIDsForPNs(phoneNumbers)
+      if (result && result.length > 0) {
+        logger.debug(`[LID] Batch resolved ${result.length} PNs to LIDs`)
+        return result
+      }
+    }
+
+    // Fallback: resolve one by one
+    const results = []
+    for (const pn of phoneNumbers) {
+      const lid = await getLIDForPN(sock, pn)
+      if (lid) results.push(lid)
+    }
+    return results
+  } catch (error) {
+    logger.debug(`[LID] Error batch resolving PNs:`, error.message)
+    return []
+  }
+}
+
+/**
+ * Check if a JID is in LID format (@lid)
+ */
+export function isLIDFormat(jid) {
+  return jid && typeof jid === "string" && jid.endsWith("@lid")
+}
+
+/**
+ * Check if a JID is in PN format (@s.whatsapp.net)
+ */
+export function isPNFormat(jid) {
+  return jid && typeof jid === "string" && jid.endsWith("@s.whatsapp.net")
+}
+
+/**
+ * Extract phone number from JID (works for both PN and LID via metadata)
+ * Note: LIDs cannot be directly converted - need signal repository or metadata
+ */
+export function extractPhoneFromJID(jid) {
+  try {
+    if (!jid || typeof jid !== "string") return null
+    
+    const parts = jid.split("@")
+    if (parts.length !== 2) return null
+    
+    const number = parts[0]
+    
+    // If it's a PN, extract and format
+    if (jid.endsWith("@s.whatsapp.net")) {
+      return `+${number}` // Return with + prefix
+    }
+    
+    // If it's a LID, we can't extract phone number directly
+    if (jid.endsWith("@lid")) {
+      logger.debug(`[LID] Cannot extract phone from LID ${jid} - use signal repository`)
+      return null
+    }
+    
+    return null
+  } catch (error) {
+    logger.debug(`[LID] Error extracting phone from JID:`, error.message)
+    return null
+  }
+}
+
+/**
+ * Clean JID format - remove device ID suffix (:0, :1, etc)
+ * WhatsApp v7 adds device identifiers like "123@s.whatsapp.net:0"
+ * This removes them for consistent formatting
+ */
+export function cleanJID(jid) {
+  try {
+    if (!jid || typeof jid !== "string") return jid
+    
+    // Remove device identifier suffix (e.g., :0, :1 from PN format)
+    if (jid.includes(":") && jid.includes("@")) {
+      const [baseJid] = jid.split(":") // Split by : and take first part
+      return baseJid
+    }
+    
+    return jid
+  } catch (error) {
+    logger.debug(`[JID] Error cleaning JID:`, error.message)
+    return jid
+  }
+}

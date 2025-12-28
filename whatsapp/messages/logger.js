@@ -1,4 +1,6 @@
 import { createComponentLogger } from '../../utils/logger.js'
+import { cleanJID } from '../../config/baileys.js'
+import { resolveLidsToJids } from '../groups/lid-resolver.js'
 
 const logger = createComponentLogger('MESSAGE_LOGGER')
 
@@ -34,11 +36,28 @@ export class MessageLogger {
     try {
       // Get basic info
       const telegramId = m.sessionContext?.telegram_id || 'Unknown'
-      const sender = m.sender || 'Unknown'
+      let sender = m.sender || 'Unknown'
       const pushName = m.pushName || 'Unknown'
       const messageType = m.mtype || 'text'
       const content = m.body || m.text || '[Media/No text]'
       const truncatedContent = content.substring(0, 80)
+
+      // Normalize sender JID
+      try {
+        // Try to resolve LIDs to PNs if sender is LID format
+        if (sender.includes('@lid')) {
+          const resolved = await resolveLidsToJids(sock, [sender])
+          if (resolved && resolved[0]) {
+            sender = cleanJID(resolved[0]) // Clean any device ID suffixes
+          }
+        } else if (sender.includes('@s.whatsapp.net')) {
+          // Clean PN format (remove device ID suffix like :0)
+          sender = cleanJID(sender)
+        }
+      } catch (error) {
+        logger.debug(`Failed to normalize sender JID:`, error.message)
+        sender = cleanJID(sender) // At least clean the format
+      }
 
       // Build status badges
       const adminBadge = m.isAdmin ? `${colors.bgBlue} ADMIN ${colors.reset}` : ''
@@ -76,6 +95,14 @@ export class MessageLogger {
       const pushName = m.pushName || 'Unknown'
       const truncatedContent = content.substring(0, 80)
       const telegramId = m.sessionContext?.telegram_id || 'Unknown'
+      let sender = m.sender || 'Unknown'
+
+      // Still try to clean sender in fallback
+      try {
+        sender = cleanJID(sender)
+      } catch (e) {
+        // Ignore cleanup errors in fallback
+      }
 
       const adminBadge = m.isAdmin ? `${colors.bgBlue} ADMIN ${colors.reset}` : ''
       const ownerBadge = m.isCreator ? `${colors.bgRed} OWNER ${colors.reset}` : ''
@@ -86,7 +113,7 @@ export class MessageLogger {
           `${colors.bright}[MESSAGE]${colors.reset} ` +
           `${colors.cyan}TG:${telegramId}${colors.reset} | ` +
           `${colors.magenta}Group:${m.chat}${colors.reset} | ` +
-          `${colors.green}${pushName}${colors.reset} ${colors.dim}(${m.sender})${colors.reset} ` +
+          `${colors.green}${pushName}${colors.reset} ${colors.dim}(${sender})${colors.reset} ` +
           `${adminBadge}${ownerBadge}${commandBadge} | ` +
           `${colors.yellow}Type:${m.mtype}${colors.reset} | ` +
           `${colors.white}${truncatedContent}${colors.reset}${content.length > 80 ? '...' : ''}`
@@ -95,7 +122,7 @@ export class MessageLogger {
         logger.info(
           `${colors.bright}[MESSAGE]${colors.reset} ` +
           `${colors.cyan}TG:${telegramId}${colors.reset} | ` +
-          `${colors.blue}Private:${pushName}${colors.reset} ${colors.dim}(${m.sender})${colors.reset} ` +
+          `${colors.blue}Private:${pushName}${colors.reset} ${colors.dim}(${sender})${colors.reset} ` +
           `${ownerBadge}${commandBadge} | ` +
           `${colors.yellow}Type:${m.mtype}${colors.reset} | ` +
           `${colors.white}${truncatedContent}${colors.reset}${content.length > 80 ? '...' : ''}`

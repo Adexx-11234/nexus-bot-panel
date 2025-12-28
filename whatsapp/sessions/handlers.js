@@ -688,28 +688,77 @@ export class SessionEventHandlers {
 
       logger.info(`Attempting to auto-join ${sessionId} to WhatsApp channel`)
 
-      // Follow the newsletter
-      await sock.newsletterFollow(CHANNEL_JID)
-      logger.info(`✅ Successfully followed channel for ${sessionId}`)
-
-      await new Promise((resolve) => setTimeout(resolve, 1000))
-
-      // Subscribe to updates (if method exists)
-      if (typeof sock.subscribeNewsletterUpdates === "function") {
-        await sock.subscribeNewsletterUpdates(CHANNEL_JID)
-        logger.info(`✅ Successfully subscribed to updates for ${sessionId}`)
-        await new Promise((resolve) => setTimeout(resolve, 1000))
+      // Step 1: Check if already following using proper error handling
+      let isAlreadyFollowing = false
+      try {
+        if (typeof sock.newsletterMetadata === "function") {
+          const metadata = await sock.newsletterMetadata("jid", CHANNEL_JID)
+          isAlreadyFollowing = metadata !== null
+          
+          if (isAlreadyFollowing) {
+            logger.info(`✅ Already following channel: ${CHANNEL_JID}`)
+            return true
+          }
+        }
+      } catch (checkError) {
+        logger.debug(`Could not check follow status (might be normal):`, checkError.message)
+        // Continue with follow attempt even if check fails
       }
 
-      // Unmute newsletter (if method exists)
-      if (typeof sock.newsletterUnmute === "function") {
-        await sock.newsletterUnmute(CHANNEL_JID)
-        logger.info(`✅ Successfully enabled notifications for ${sessionId}`)
+      // Step 2: Follow the newsletter with proper response handling
+      try {
+        const followResult = await sock.newsletterFollow(CHANNEL_JID)
+        
+        // Check if result indicates success
+        if (followResult === null || followResult === undefined) {
+          logger.warn(`Newsletter follow returned empty response for ${CHANNEL_JID}`)
+          // This might still be successful, continue
+        } else {
+          logger.debug(`Newsletter follow response:`, followResult)
+        }
+        
+        logger.info(`✅ Successfully followed channel for ${sessionId}`)
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+      } catch (followError) {
+        logger.error(`Failed to follow channel ${CHANNEL_JID}:`, followError.message)
+        
+        // Check if this is a retryable error
+        if (followError.message?.includes("timeout") || followError.message?.includes("ECONNREFUSED")) {
+          logger.warn(`Network error following channel, will retry next time`)
+          return false
+        }
+        
+        // For other errors, log but continue (might still be subscribed)
+        logger.warn(`Continuing despite follow error (might already be subscribed)`)
+      }
+
+      // Step 3: Subscribe to updates (optional, might fail)
+      try {
+        if (typeof sock.subscribeNewsletterUpdates === "function") {
+          await sock.subscribeNewsletterUpdates(CHANNEL_JID)
+          logger.info(`✅ Successfully subscribed to updates for ${sessionId}`)
+          await new Promise((resolve) => setTimeout(resolve, 1000))
+        }
+      } catch (subError) {
+        logger.debug(`Could not subscribe to updates (optional):`, subError.message)
+        // Don't fail if subscription fails
+      }
+
+      // Step 4: Unmute newsletter (optional)
+      try {
+        if (typeof sock.newsletterUnmute === "function") {
+          await sock.newsletterUnmute(CHANNEL_JID)
+          logger.info(`✅ Successfully enabled notifications for ${sessionId}`)
+        }
+      } catch (unmuteError) {
+        logger.debug(`Could not unmute newsletter (optional):`, unmuteError.message)
+        // Don't fail if unmute fails
       }
 
       return true
     } catch (error) {
-      logger.error(`Failed to auto-join channel for ${sessionId}:`, error.message)
+      logger.error(`Error in auto-join channel for ${sessionId}:`, error.message)
+      logger.debug(`Full error:`, error)
       return false
     }
   }

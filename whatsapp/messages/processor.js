@@ -4,6 +4,8 @@ import { MessagePersistence } from "./persistence.js"
 import { MessageExtractor } from "./extractor.js"
 import { analyzeMessage } from "../utils/index.js"
 import { ActivityQueries } from "../../database/query.js"
+import { cleanJID } from "../../config/baileys.js"
+import { resolveLidsToJids } from "../groups/index.js"
 const logger = createComponentLogger("MessageProcessor")
 
 /**
@@ -241,9 +243,27 @@ export class MessageProcessor {
         }
       }
 
-      if (m.sender?.includes("@lid") && m.originalSelfAuthorUserJidString) {
-        m.sender = m.originalSelfAuthorUserJidString
-        logger.debug(`Corrected @lid sender to: ${m.sender}`)
+      // ✅ Normalize sender JID (resolve LID to PN, remove device suffix)
+      if (m.sender?.includes("@lid")) {
+        // Try to resolve LID to PN first
+        try {
+          const resolved = await resolveLidsToJids(sock, [m.sender])
+          if (resolved && resolved[0]) {
+            m.sender = cleanJID(resolved[0])
+            logger.debug(`Resolved @lid sender to PN: ${m.sender}`)
+          } else if (m.originalSelfAuthorUserJidString) {
+            m.sender = cleanJID(m.originalSelfAuthorUserJidString)
+            logger.debug(`Used originalSelfAuthorUserJidString: ${m.sender}`)
+          }
+        } catch (error) {
+          logger.debug(`Failed to resolve LID, using fallback:`, error.message)
+          if (m.originalSelfAuthorUserJidString) {
+            m.sender = cleanJID(m.originalSelfAuthorUserJidString)
+          }
+        }
+      } else if (m.sender?.includes("@s.whatsapp.net")) {
+        // Clean PN format (remove device suffix like :0)
+        m.sender = cleanJID(m.sender)
       }
 
       // Validate critical fields

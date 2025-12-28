@@ -4,4 +4,8 @@ test.json
 youtube_cookies.txt
 .env
 env
+node_modules/
 makeinstore
+sessions/
+logs/
+socket-inspections/
