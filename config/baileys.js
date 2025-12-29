@@ -57,7 +57,7 @@ export const baileysConfig = {
   syncFullHistory: false,
   defaultQueryTimeoutMs: 60000,
   // Don't send ACKs to avoid potential bans
-  sendAcks: false,
+  sendAcks: true,
 }
 
 export function getBaileysConfig() {
