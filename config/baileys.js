@@ -56,8 +56,17 @@ export const baileysConfig = {
   generateHighQualityLinkPreview: true,
   syncFullHistory: false,
   defaultQueryTimeoutMs: 60000,
-  // Don't send ACKs to avoid potential bans
-  sendAcks: false,
+  /**
+   * IMPORTANT:
+   * - Baileys/WhatsApp expect this client to ACK messages it receives.
+   * - With `sendAcks: false`, the device never acknowledges normal inbound messages.
+   * - Over time WhatsApp can stop delivering new chat messages to this device
+   *   while still delivering some system/group events, which matches the
+   *   “can send, but `messages.upsert` stops firing” behaviour.
+   *
+   * Keep this TRUE so Baileys manages ACKs correctly for v7.
+   */
+  sendAcks: true,
 }
 
 export function getBaileysConfig() {
