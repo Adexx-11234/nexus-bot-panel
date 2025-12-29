@@ -27,14 +27,18 @@ export class MessageEventHandler {
   /**
  * Handle new messages (messages.upsert)
  * Main entry point for message processing - WITH DEDUPLICATION
+ * ✅ FIXED: Better error handling for decryption failures
  */
 async handleMessagesUpsert(sock, sessionId, messageUpdate) {
   try {
     const { messages, type } = messageUpdate
 
     if (!messages || messages.length === 0) {
+      logger.debug(`[${sessionId}] Empty messages.upsert (length: 0)`)
       return
     }
+
+    logger.info(`[${sessionId}] Received messages.upsert: ${messages.length} messages (type: ${type})`)
 
     // **HANDLE PRESENCE ON MESSAGE RECEIVED**
     try {
@@ -48,6 +52,7 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
         }
       }
     } catch (presenceError) {
+      logger.debug('[MessageHandler] Presence handler error:', presenceError.message)
       // Silent fail - don't break message processing
     }
 
@@ -67,42 +72,92 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
       // Silent fail - don't break message processing
     }
 
-
     const { getMessageDeduplicator } = await import('../utils/index.js')
     const deduplicator = getMessageDeduplicator()
     
-    // Filter out invalid messages
-    const validMessages = messages.filter(msg => {
+    // ✅ ENHANCED: Track filtered messages with reasons
+    const ciphertextMessages = []
+    const filteredReasons = {
+      duplicates: 0,
+      statusBroadcast: 0,
+      broadcasts: 0,
+      noMessage: 0
+    }
+    
+    // Filter out invalid messages with detailed logging
+    const validMessages = messages.filter((msg, index) => {
       // ✅ Check if THIS session already processed this message
       if (deduplicator.isDuplicate(msg.key?.remoteJid, msg.key?.id, sessionId)) {
-        logger.debug(`[${sessionId}] Skipping duplicate message ${msg.key?.id} (already processed by this session)`)
+        logger.debug(`[${sessionId}] Skipping duplicate message ${msg.key?.id}`)
+        filteredReasons.duplicates++
         return false
       }
       
       // Skip status messages (already handled above)
       if (msg.key?.remoteJid === 'status@broadcast') {
+        logger.debug(`[${sessionId}] Skipping status@broadcast message`)
+        filteredReasons.statusBroadcast++
         return false
       }
 
       // Skip broadcast list messages by default
       if (msg.key?.remoteJid?.endsWith('@broadcast') && msg.key?.remoteJid !== 'status@broadcast') {
-        logger.debug(`Skipping broadcast message from ${msg.key?.remoteJid}`)
+        logger.debug(`[${sessionId}] Skipping broadcast message from ${msg.key?.remoteJid}`)
+        filteredReasons.broadcasts++
         return false
       }
       
-      // Skip messages without content
+      // ✅ ENHANCED: Handle CIPHERTEXT messages (messageStubType = 2)
       if (!msg.message) {
+        const stubType = msg.messageStubType
+        filteredReasons.noMessage++
+        
+        // Log with helpful context
+        if (stubType === 2) {
+          logger.debug(`[${sessionId}] Message ${index} is CIPHERTEXT (stub type 2) - will retry`)
+          ciphertextMessages.push(msg)
+        } else {
+          logger.debug(`[${sessionId}] Message ${index} has no content (messageStubType: ${stubType})`)
+        }
+        
         return false
       }
 
       return true
     })
 
+    // ✅ ENHANCED: Request retry for CIPHERTEXT messages after short delay
+    if (ciphertextMessages.length > 0) {
+      logger.info(`[${sessionId}] Found ${ciphertextMessages.length} CIPHERTEXT messages - requesting retry after 2s`)
+      
+      // Wait a bit for Signal keys to be established
+      setTimeout(() => {
+        for (const cipherMsg of ciphertextMessages) {
+          if (cipherMsg.key && cipherMsg.key.id && sock?.requestPlaceholderResend) {
+            sock.requestPlaceholderResend(cipherMsg.key)
+              .then(requestId => logger.debug(`[${sessionId}] Requested placeholder resend for ${cipherMsg.key.id}, requestId: ${requestId}`))
+              .catch(err => logger.debug(`[${sessionId}] Placeholder resend for ${cipherMsg.key.id} failed: ${err.message}`))
+          } else {
+            logger.debug(`[${sessionId}] Skipping retry for message without valid key: ${JSON.stringify(cipherMsg.key)}`)
+          }
+        }
+      }, 2000)
+    }
+
     if (validMessages.length === 0) {
+      const filterSummary = [
+        ciphertextMessages.length > 0 && `${ciphertextMessages.length} CIPHERTEXT`,
+        filteredReasons.statusBroadcast > 0 && `${filteredReasons.statusBroadcast} status@broadcast`,
+        filteredReasons.broadcasts > 0 && `${filteredReasons.broadcasts} broadcasts`,
+        filteredReasons.duplicates > 0 && `${filteredReasons.duplicates} duplicates`,
+        (filteredReasons.noMessage - ciphertextMessages.length) > 0 && `${filteredReasons.noMessage - ciphertextMessages.length} other-empty`
+      ].filter(Boolean).join(', ')
+      
+      logger.debug(`[${sessionId}] All ${messages.length} messages were filtered out (${filterSummary})`)
       return
     }
 
-    logger.debug(`[${sessionId}] Processing ${validMessages.length} messages`)
+    logger.debug(`[${sessionId}] Processing ${validMessages.length}/${messages.length} messages`)
 
     // ✅ Get SINGLETON MessageProcessor instance
     const processor = await getMessageProcessor()
@@ -113,7 +168,7 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
         // ✅ LOCK MESSAGE FOR THIS SESSION
         // Other sessions can still process the same message
         if (!deduplicator.tryLock(message.key?.remoteJid, message.key?.id, sessionId)) {
-          logger.debug(`[${sessionId}] Message ${message.key?.id} already processed by this session`)
+          logger.debug(`[${sessionId}] Message ${message.key?.id} already locked`)
           continue
         }
 
@@ -121,6 +176,7 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
         const processed = await this._processMessageWithLidResolution(sock, message)
         
         if (!processed) {
+          logger.debug(`[${sessionId}] Message ${message.key?.id} failed LID resolution`)
           continue
         }
 
@@ -184,26 +240,27 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
         }
 
         // ✅ PROCESS MESSAGE DIRECTLY - NO DOUBLE HANDLING
+        logger.debug(`[${sessionId}] Processing message from ${processed.sender} in ${processed.chat}`)
         await processor.processMessage(sock, sessionId, processed)
 
       } catch (error) {
-        // Log the error and continue
-        logger.error(`Failed to process message ${message.key?.id}:`, error.message)
+        // Log the error and continue processing other messages
+        logger.error(`[${sessionId}] Failed to process message ${message.key?.id}: ${error.message}`)
         
         // ✅ Optional: Request retry for failed messages
         if (message.key && sock.sendRetryRequest) {
           try {
             await sock.sendRetryRequest(message.key)
-            logger.debug(`Requested retry for message ${message.key?.id}`)
+            logger.info(`[${sessionId}] Requested retry for message ${message.key?.id}`)
           } catch (retryError) {
-            logger.debug(`Retry request failed: ${retryError.message}`)
+            logger.debug(`[${sessionId}] Retry request failed: ${retryError.message}`)
           }
         }
       }
     }
 
   } catch (error) {
-    logger.error(`Messages upsert error for ${sessionId}:`, error)
+    logger.error(`[${sessionId}] Messages upsert handler error:`, error)
   }
 }
 

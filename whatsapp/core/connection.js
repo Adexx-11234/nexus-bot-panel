@@ -271,31 +271,77 @@ async createConnection(sessionId, phoneNumber = null, callbacks = {}, allowPairi
     
     const store = createSessionStore(sessionId)
 
-    // ✅ CRITICAL: Create getMessage with proper fallback BEFORE socket creation
+    // ✅ CRITICAL FIX: Create fast getMessage with in-memory cache
+    // This prevents slow store lookups from causing 408 timeouts
+    const messageCache = new Map()  // Fast in-memory cache
+    const maxCacheSize = 1000
+    let cacheHits = 0
+    let cacheMisses = 0
+    
     const getMessage = async (key) => {
       if (!key || !key.remoteJid || !key.id) {
-        logger.debug(`Invalid key in getMessage`)
         return proto.Message.fromObject({})
       }
       
+      const cacheKey = `${key.remoteJid}:${key.id}`
+      
+      // ✅ FAST PATH: Check in-memory cache first (< 1ms)
+      if (messageCache.has(cacheKey)) {
+        cacheHits++
+        return messageCache.get(cacheKey)
+      }
+      
+      cacheMisses++
+      
+      // ✅ SLOW PATH: Try store lookup (50-200ms)
       if (store) {
         try {
-          const msg = await store.loadMessage(key.remoteJid, key.id)
+          const msg = await Promise.race([
+            store.loadMessage(key.remoteJid, key.id),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('getMessage timeout')), 5000)
+            )
+          ])
+          
           if (msg?.message) {
+            // ✅ Cache for next time
+            if (messageCache.size >= maxCacheSize) {
+              const firstKey = messageCache.keys().next().value
+              messageCache.delete(firstKey)
+            }
+            messageCache.set(cacheKey, msg.message)
             return msg.message
           }
         } catch (error) {
-          logger.debug(`getMessage failed for ${key.id}:`, error.message)
+          // Store lookup failed or timed out
+          logger.debug(`getMessage store lookup failed for ${key.id}: ${error.message}`)
         }
       }
       
+      // ✅ FALLBACK: Return empty message to continue processing
+      // This prevents blocking the entire message pipeline
       return proto.Message.fromObject({})
     }
+    
+    // Store cache stats for monitoring
+    getMessage._cacheHits = () => cacheHits
+    getMessage._cacheMisses = () => cacheMisses
+    getMessage._cacheSize = () => messageCache.size
         
 
     // ✅ Create socket WITH getMessage function
     let sock = createBaileysSocket(authState.state, sessionId, getMessage)
     extendSocket(sock)
+    
+    // ✅ NEW: Install session error recovery handler
+    // Automatically requests pre-keys when "No matching sessions found" error occurs
+    try {
+      const { integratSessionErrorRecovery } = await import('./session-error-handler.js')
+      integratSessionErrorRecovery(sock, sessionId)
+      logger.info(`[${sessionId}] ✅ Session error recovery handler installed`)
+    } catch (handlerError) {
+      logger.warn(`[${sessionId}] Failed to install session error handler: ${handlerError.message}`)
+    }
     
     // ✅ INSPECTION: Wrap socket with proxy if enabled
     if (this.enableSocketInspection) {
@@ -325,25 +371,11 @@ async createConnection(sessionId, phoneNumber = null, callbacks = {}, allowPairi
       if (authState.cleanup) authState.cleanup()
     }
 
-    // ✅ CRITICAL: Use ev.process() to capture buffered messages
-    // This handles messages that arrive BEFORE event handlers are fully registered
-    sock.ev.process(async (events) => {
-      // This is called for ALL events, including buffered ones
-      // Check if this is a messages.upsert event
-      if (events['messages.upsert']) {
-        // Store for later processing once handlers are set up
-        if (!sock._deferredEvents) {
-          sock._deferredEvents = []
-        }
-        sock._deferredEvents.push({
-          type: 'messages.upsert',
-          data: events['messages.upsert'],
-          timestamp: Date.now()
-        })
-        logger.debug(`[${sessionId}] Captured upsert event via ev.process()`)
-      }
-    })
-
+    // ⚠️ REMOVED: ev.process() was causing message duplication
+    // The dispatcher.js already has sock.ev.on(MESSAGES_UPSERT) handler
+    // that captures ALL messages (including buffered ones from Baileys).
+    // Using BOTH ev.process() AND sock.ev.on() causes messages to be processed twice.
+    
     // Track active socket
     this.activeSockets.set(sessionId, sock)
 

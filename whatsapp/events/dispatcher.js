@@ -5,6 +5,7 @@ import { GroupEventHandler } from "./group.js"
 import { ConnectionEventHandler } from "./connection.js"
 import { UtilityEventHandler } from "./utility.js"
 import { recordSessionActivity } from "../utils/index.js"
+import { enhanceTransactionHandling, monitorKeyStoreHealth } from "../core/index.js"
 
 const logger = createComponentLogger("EVENT_DISPATCHER")
 
@@ -24,6 +25,10 @@ export class EventDispatcher {
     this.groupHandler = new GroupEventHandler()
     this.connectionHandler = new ConnectionEventHandler(sessionManager)
     this.utilityHandler = new UtilityEventHandler()
+
+    // ✅ HEALTH CHECK: Track last message receipt per session
+    this.lastMessageTime = new Map()
+    this.healthCheckIntervals = new Map()
 
     logger.info("Event dispatcher initialized")
   }
@@ -57,12 +62,68 @@ export class EventDispatcher {
 
       // ✅ CRITICAL FIX: Process any deferred events that were captured before handlers were ready
       this._processDeferredEvents(sock, sessionId)
+      
+      // ✅ FIX: Enhanced transaction error handling for Signal keys
+      enhanceTransactionHandling(sock, sessionId)
+      
+      // ✅ FIX: Monitor key store health to detect storage issues early
+      // Store monitor reference for cleanup on disconnect
+      sock._keyStoreMonitor = monitorKeyStoreHealth(this.sessionManager.authState, sessionId)
+      
+      // ✅ HEALTH CHECK: Start monitoring message receipt for this session
+      this._startHealthCheck(sock, sessionId)
 
       logger.info(`Event handlers setup complete for ${sessionId}`)
       return true
     } catch (error) {
       logger.error(`Failed to setup event handlers for ${sessionId}:`, error)
       return false
+    }
+  }
+
+  /**
+   * Start health monitoring for a session
+   * Detects if messages.upsert stops arriving and triggers reconnection
+   * @private
+   */
+  _startHealthCheck(sock, sessionId) {
+    try {
+      // Clear any existing health check
+      if (this.healthCheckIntervals.has(sessionId)) {
+        clearInterval(this.healthCheckIntervals.get(sessionId))
+      }
+
+      this.lastMessageTime.set(sessionId, Date.now())
+
+      // Check every 5 minutes if we've received a message in the last 10 minutes
+      const healthCheckInterval = setInterval(() => {
+        try {
+          const lastMsg = this.lastMessageTime.get(sessionId)
+          const timeSinceLastMsg = Date.now() - lastMsg
+
+          // ⚠️ ALERT: No messages in 10 minutes
+          if (timeSinceLastMsg > 10 * 60 * 1000) {
+            logger.error(
+              `[HEALTH_CHECK_ALERT] ${sessionId}: No messages.upsert received in ${Math.round(timeSinceLastMsg / 1000 / 60)} minutes!`
+            )
+
+            // Attempt to trigger a reconnection
+            if (sock && typeof sock.end === 'function') {
+              logger.warn(`[HEALTH_CHECK] ${sessionId}: Triggering socket reconnection`)
+              sock.end(new Error('Health check: No messages received'))
+                .catch(err => logger.debug(`Reconnect failed: ${err.message}`))
+            }
+          }
+        } catch (error) {
+          logger.debug(`Health check error for ${sessionId}:`, error.message)
+        }
+      }, 5 * 60 * 1000) // Check every 5 minutes
+
+      this.healthCheckIntervals.set(sessionId, healthCheckInterval)
+      logger.debug(`[HEALTH_CHECK] Started health monitoring for ${sessionId}`)
+
+    } catch (error) {
+      logger.error(`Failed to start health check for ${sessionId}:`, error)
     }
   }
 
@@ -116,7 +177,9 @@ export class EventDispatcher {
     sock.ev.on(EventTypes.MESSAGES_UPSERT, async (messageUpdate) => {
       try {
         recordSessionActivity(sessionId)
-
+        
+        // ✅ HEALTH CHECK: Update last message time when we receive messages.upsert
+        this.lastMessageTime.set(sessionId, Date.now())
 
         // Fire and forget - process without blocking
         this.messageHandler
@@ -124,6 +187,7 @@ export class EventDispatcher {
           .then(() => {
           })
           .catch((err) => {
+            logger.error(`Error processing messages.upsert for ${sessionId}:`, err.message)
           })
       } catch (error) {
         logger.error(`Error in MESSAGES_UPSERT handler for ${sessionId}:`, error)
@@ -319,6 +383,14 @@ export class EventDispatcher {
       if (handlers) {
         this.handlers.delete(sessionId)
       }
+
+      // ✅ HEALTH CHECK: Stop health monitoring
+      if (this.healthCheckIntervals.has(sessionId)) {
+        clearInterval(this.healthCheckIntervals.get(sessionId))
+        this.healthCheckIntervals.delete(sessionId)
+      }
+
+      this.lastMessageTime.delete(sessionId)
 
       logger.info(`Event handlers cleaned up for ${sessionId}`)
       return true

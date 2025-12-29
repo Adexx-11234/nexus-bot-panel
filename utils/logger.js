@@ -1,7 +1,7 @@
 // WhatsApp Bot Logger Utility
 const logger = {
   info: (message, ...args) => {
-   // console.log(`[INFO] ${message}`, ...args)
+   console.log(`[INFO] ${message}`, ...args)
   },
   error: (message, ...args) => {
     console.error(`[ERROR] ${message}`, ...args)
@@ -10,7 +10,7 @@ const logger = {
     console.warn(`[WARN] ${message}`, ...args)
   },
   debug: (message, ...args) => {
-   //console.debug(`[DEBUG] ${message}`, ...args)
+ //  console.debug(`[DEBUG] ${message}`, ...args)
   },
   child: (options) => {
     const component = options.component || 'UNKNOWN'
@@ -30,7 +30,7 @@ function createComponentLogger(component) {
      console.warn(`[WARN] [${component}] ${message}`, ...args)
     },
     debug: (message, ...args) => {
-    // console.debug(`[DEBUG] [${component}] ${message}`, ...args)
+   // console.debug(`[DEBUG] [${component}] ${message}`, ...args)
     },
     child: (options) => {
       const childComponent = options.component || 'CHILD'
