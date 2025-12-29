@@ -57,16 +57,18 @@ export const baileysConfig = {
   syncFullHistory: false,
   defaultQueryTimeoutMs: 60000,
   /**
-   * IMPORTANT:
-   * - Baileys/WhatsApp expect this client to ACK messages it receives.
-   * - With `sendAcks: false`, the device never acknowledges normal inbound messages.
-   * - Over time WhatsApp can stop delivering new chat messages to this device
-   *   while still delivering some system/group events, which matches the
-   *   “can send, but `messages.upsert` stops firing” behaviour.
-   *
-   * Keep this TRUE so Baileys manages ACKs correctly for v7.
+   * NOTE: Baileys v7 automatically sends ACKs for all received messages.
+   * There is NO `sendAcks` config option - ACKs are handled internally.
+   * 
+   * If you're getting error 428 (connectionClosed), it's likely due to:
+   * - Network issues
+   * - WhatsApp server closing the connection
+   * - Session/auth state issues
+   * - Rate limiting
+   * 
+   * NOT related to ACK configuration.
    */
-  sendAcks: true,
+  // sendAcks option removed - not a valid Baileys v7 config option
 }
 
 export function getBaileysConfig() {
