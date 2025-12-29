@@ -16,6 +16,11 @@ export function serializeMessage(sock, m) {
     m.id = m.key.id
     m.isGroup = m.chat.endsWith('@g.us')
     m.sender = m.isGroup ? m.key.participant : m.chat
+    
+    // ✅ Ensure private message sender has proper JID format
+    if (!m.isGroup && m.sender && !m.sender.includes('@')) {
+      m.sender = `${m.sender}@s.whatsapp.net`
+    }
 
     // Extract message type
     m.mtype = getMessageType(m.message)

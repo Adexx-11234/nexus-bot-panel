@@ -135,10 +135,20 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
         if (!processed.chat && processed.key?.remoteJid) {
           processed.chat = processed.key.remoteJid
         }
-        if (!processed.sender && processed.key?.participant) {
-          processed.sender = processed.key.participant
-        } else if (!processed.sender && processed.key?.remoteJid && !processed.key.remoteJid.includes('@g.us')) {
-          processed.sender = processed.key.remoteJid
+        
+        // ✅ Set sender with proper JID format
+        if (!processed.sender) {
+          if (processed.key?.participant) {
+            processed.sender = processed.key.participant
+          } else if (processed.key?.remoteJid && !processed.key.remoteJid.includes('@g.us')) {
+            // Private message - ensure proper JID format
+            let sender = processed.key.remoteJid
+            // Only add @s.whatsapp.net if not already a proper JID
+            if (!sender.includes('@')) {
+              sender = `${sender}@s.whatsapp.net`
+            }
+            processed.sender = sender
+          }
         }
 
         // Validate chat
@@ -316,8 +326,8 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
 
       const isGroup = message.key.remoteJid?.endsWith('@g.us')
       
-      // ONLY resolve participant LID if it actually ends with @lid
-      if (isGroup && message.key.participant?.endsWith('@lid')) {
+      // ✅ RESOLVE PARTICIPANT LID FOR BOTH GROUPS AND PRIVATE MESSAGES
+      if (message.key.participant?.endsWith('@lid')) {
         const { resolveLidToJid } = await import('../groups/index.js')
         
         const actualJid = await resolveLidToJid(
@@ -329,9 +339,25 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
         message.key.participant = actualJid
         message.participant = actualJid
         
-        logger.debug(`Resolved LID ${message.key.participant} to ${actualJid}`)
+        logger.debug(`Resolved participant LID ${message.key.participant} to ${actualJid}`)
       } else {
         message.participant = message.key.participant
+      }
+      
+      // ✅ RESOLVE PRIVATE MESSAGE SENDER IF IT'S LID FORMAT
+      if (!isGroup && message.key.remoteJid?.endsWith('@lid')) {
+        const { resolveLidToJid } = await import('../groups/index.js')
+        
+        const actualJid = await resolveLidToJid(
+          sock,
+          'temp-group',
+          message.key.remoteJid
+        )
+        
+        message.key.remoteJid = actualJid
+        message.chat = actualJid
+        
+        logger.debug(`Resolved private message LID ${message.key.remoteJid} to ${actualJid}`)
       }
 
       // ONLY resolve quoted message participant LID if it actually ends with @lid

@@ -400,37 +400,50 @@ _endReconnection(sessionId, success = false) {
   // ==========================================
 
   /**
-   * Clean socket properly before reconnection attempt
-   * Includes buffer flushing and proper event cleanup
-   */
-  async _cleanupSocketBeforeReconnect(sock, sessionId) {
-    try {
-      logger.info(`🧹 Cleaning socket before reconnect for ${sessionId}`)
+ * ✅ FIXED: Clean socket properly before reconnection attempt
+ * WITHOUT destroying Baileys' internal event listeners
+ */
+async _cleanupSocketBeforeReconnect(sock, sessionId) {
+  try {
+    logger.info(`🧹 Cleaning socket before reconnect for ${sessionId}`)
 
-      // ✅ Flush event buffer FIRST
-      if (sock?.ev?.isBuffering?.()) {
-        try {
-          sock.ev.flush()
-          logger.debug(`📤 Event buffer flushed for ${sessionId}`)
-        } catch (flushError) {
-          logger.warn(`Failed to flush buffer for ${sessionId}:`, flushError.message)
-        }
+    // ✅ CRITICAL: Flush event buffer FIRST
+    if (sock?.ev?.isBuffering?.()) {
+      try {
+        sock.ev.flush()
+        logger.debug(`📤 Event buffer flushed for ${sessionId}`)
+      } catch (flushError) {
+        logger.warn(`Failed to flush buffer for ${sessionId}:`, flushError.message)
       }
-
-      // Call session manager's cleanup socket
-      if (this.sessionManager._cleanupSocket) {
-        await this.sessionManager._cleanupSocket(sessionId, sock)
-      }
-
-      // Remove from active sockets
-      this.sessionManager.activeSockets?.delete(sessionId)
-      this.sessionManager.sessionState?.delete(sessionId)
-
-      logger.debug(`✅ Socket cleaned for ${sessionId}`)
-    } catch (error) {
-      logger.error(`Socket cleanup error for ${sessionId}:`, error)
     }
+
+    // ✅ Close WebSocket connection cleanly
+    if (sock.ws?.socket) {
+      const readyState = sock.ws.socket._readyState
+      if (readyState === 1) { // OPEN
+        sock.ws.close(1000, "Reconnecting")
+        logger.debug(`🔌 WebSocket closed for ${sessionId}`)
+      }
+    }
+
+    // ❌ REMOVED: Call to sessionManager._cleanupSocket()
+    // That method was destroying Baileys' internal listeners with removeAllListeners()
+    
+    // ✅ Instead, just clear application-specific properties
+    sock.user = null
+    sock.eventHandlersSetup = false
+    sock.connectionCallbacks = null
+    sock._sessionStore = null
+
+    // Remove from active sockets
+    this.sessionManager.activeSockets?.delete(sessionId)
+    this.sessionManager.sessionState?.delete(sessionId)
+
+    logger.debug(`✅ Socket cleaned for ${sessionId} (Baileys listeners preserved)`)
+  } catch (error) {
+    logger.error(`Socket cleanup error for ${sessionId}:`, error)
   }
+}
 
   // ==========================================
   // SPECIFIC DISCONNECT HANDLERS

@@ -214,10 +214,10 @@ export class ConnectionHealthMonitor {
   }
 
   /**
-   * ✅ OPTIMIZED: Reinitialize session with longer wait time
-   */
-  async _reinitializeSession(sessionId) {
-  // ✅ CRITICAL: Check if already reinitializing
+ * ✅ FIXED: Reinitialize session WITHOUT destroying event listeners
+ */
+async _reinitializeSession(sessionId) {
+  // ✅ Check if already reinitializing
   if (this.reinitializingNow.has(sessionId)) {
     logger.info(`⏭️ Already reinitializing ${sessionId} - skipping duplicate`)
     return false
@@ -230,7 +230,7 @@ export class ConnectionHealthMonitor {
     return false
   }
 
-  // ✅ CRITICAL: Check if reconnection handler is already working
+  // ✅ Check if reconnection handler is already working
   const eventDispatcher = this.sessionManager.getEventDispatcher()
   const connectionHandler = eventDispatcher?.connectionEventHandler
   
@@ -251,21 +251,40 @@ export class ConnectionHealthMonitor {
       return false
     }
 
-    // Cleanup socket first
     const sock = this.sessionManager.activeSockets.get(sessionId)
+    
+    // ✅ CRITICAL FIX: Only close WebSocket, DON'T destroy event listeners
     if (sock) {
-      logger.info(`🧹 Cleaning socket before reinitialization for ${sessionId}`)
-      await this.sessionManager._cleanupSocket(sessionId, sock)
+      logger.info(`🔌 Closing WebSocket for ${sessionId} (preserving event listeners)`)
+      
+      // Flush buffer before closing
+      if (sock?.ev?.isBuffering?.()) {
+        try {
+          sock.ev.flush()
+        } catch (e) {
+          logger.debug(`Buffer flush failed: ${e.message}`)
+        }
+      }
+      
+      // ✅ ONLY close the WebSocket - leave sock.ev alone!
+      if (sock.ws?.socket && sock.ws.socket._readyState === 1) {
+        sock.ws.close(1000, "Reinitialization")
+      }
+      
+      // ❌ REMOVED: await this.sessionManager._cleanupSocket(sessionId, sock)
+      // That method was destroying Baileys' internal listeners!
     }
 
+    // ✅ Remove from tracking but DON'T destroy the socket object
     this.sessionManager.activeSockets.delete(sessionId)
     this.sessionManager.sessionState.delete(sessionId)
 
-    // Wait for cleanup
+    // ✅ Wait for WebSocket to close properly
     await new Promise(resolve => setTimeout(resolve, 2000))
 
     logger.info(`🔄 Starting reinitialization for ${sessionId}`)
 
+    // ✅ Create new session - Baileys will create fresh socket with all listeners
     const newSock = await this.sessionManager.createSession(
       session.userId,
       session.phoneNumber,
@@ -289,7 +308,7 @@ export class ConnectionHealthMonitor {
     // ✅ Always remove from reinitializing set
     setTimeout(() => {
       this.reinitializingNow.delete(sessionId)
-    }, 5000) // Keep flag for 5 seconds to prevent rapid retries
+    }, 5000)
   }
 }
 
