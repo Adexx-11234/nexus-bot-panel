@@ -926,6 +926,18 @@ async executePluginWithFallback(sock, sessionId, args, m, plugin) {
         }
         if (!shouldProcess) continue
 
+        // ✅ CHECK BOT ADMIN STATUS: If plugin is adminOnly, only admin bots can acquire locks
+        if (plugin.adminOnly && m.isGroup) {
+          const isBotAdmin = await isBotAdmin(sock, m.chat)
+          const botJid = sock.user?.id
+          const isOwner = this.checkIsBotOwner(sock, botJid)
+          
+          if (!isBotAdmin && !isOwner) {
+            log.debug(`Skipping ${plugin.name} - this bot is not admin (cannot acquire lock)`)
+            continue // Non-admin bot cannot acquire lock for admin-only anti-plugin
+          }
+        }
+
         // DEDUPLICATION: Try to acquire lock BEFORE processing
         const actionKey = `anti-${plugin.name || "unknown"}` // e.g., 'anti-Anti-Link'
 
