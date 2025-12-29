@@ -56,19 +56,8 @@ export const baileysConfig = {
   generateHighQualityLinkPreview: true,
   syncFullHistory: false,
   defaultQueryTimeoutMs: 60000,
-  /**
-   * NOTE: Baileys v7 automatically sends ACKs for all received messages.
-   * There is NO `sendAcks` config option - ACKs are handled internally.
-   * 
-   * If you're getting error 428 (connectionClosed), it's likely due to:
-   * - Network issues
-   * - WhatsApp server closing the connection
-   * - Session/auth state issues
-   * - Rate limiting
-   * 
-   * NOT related to ACK configuration.
-   */
-  // sendAcks option removed - not a valid Baileys v7 config option
+  // Don't send ACKs to avoid potential bans
+  sendAcks: false,
 }
 
 export function getBaileysConfig() {
