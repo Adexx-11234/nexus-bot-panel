@@ -5,7 +5,7 @@ import path from "path"
 import { fileURLToPath } from "url"
 import chalk from "chalk"
 import { isGroupAdmin } from "../whatsapp/groups/index.js"
-
+import { isSameJid, normalizeJid, extractPhoneNumber, isGroupJid, getDisplayId } from '../whatsapp/utils/jid.js'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
@@ -166,23 +166,20 @@ class PluginLoader {
   }
 
   normalizeJid(jid) {
-    if (!jid) return null
-    return jid.split("@")[0].split(":")[0] + "@s.whatsapp.net"
-  }
+  return normalizeJid(jid)
+}
 
   compareJids(jid1, jid2) {
-    return this.normalizeJid(jid1) === this.normalizeJid(jid2)
-  }
+  return isSameJid(jid1, jid2)
+}
 
   validatePlugin(plugin) {
     return !!(plugin?.name && typeof plugin.execute === "function")
   }
 
   generateFallbackName(jid) {
-    if (!jid) return "Unknown"
-    const phoneNumber = jid.split("@")[0]
-    return phoneNumber?.length > 4 ? `User ${phoneNumber.slice(-4)}` : "Unknown User"
-  }
+  return getDisplayId(jid)
+}
 
   clearTempData() {
     this.tempContactStore.clear()
@@ -477,7 +474,7 @@ class PluginLoader {
       sender: m.sender || m.key?.participant || m.from,
       isCreator,
       isOwner: isCreator,
-      isGroup: m.isGroup || (m.chat && m.chat.endsWith("@g.us")),
+      isGroup: m.isGroup || isGroupJid(m.chat), // ✅ FIXED: Use isGroupJid
       sessionContext: m.sessionContext || { telegram_id: "Unknown", session_id: sessionId },
       sessionId,
       reply: m.reply,
@@ -704,38 +701,35 @@ async _checkBotCapabilities(sock, plugin, m) {
 
   // ✅ FIX 4: IMPROVED BOT MODE CHECK WITH OWNER VALIDATION
   async _checkBotMode(sock, m) {
-    // Always allow bot owner
-    if (m.isCreator) {
-      log.debug("Command allowed: sender is bot owner")
+  if (m.isCreator) {
+    log.debug("Command allowed: sender is bot owner")
+    return true
+  }
+  
+  try {
+    const { UserQueries } = await import("../database/query.js")
+    const modeSettings = await UserQueries.getBotMode(m.sessionContext.telegram_id)
+    
+    if (modeSettings.mode !== "self") {
+      log.debug("Bot in public mode, allowing command")
       return true
     }
     
-    try {
-      const { UserQueries } = await import("../database/query.js")
-      const modeSettings = await UserQueries.getBotMode(m.sessionContext.telegram_id)
-      
-      // If in public mode, allow everyone
-      if (modeSettings.mode !== "self") {
-        log.debug("Bot in public mode, allowing command")
-        return true
-      }
-      
-      // If in self mode, ONLY allow if sender === bot owner
-      const botJid = this.normalizeJid(sock.user?.id)
-      const senderJid = this.normalizeJid(m.sender)
-      
-      const isSenderBotOwner = botJid === senderJid
-      
-      if (!isSenderBotOwner) {
-        log.debug(`Bot in self-mode: Blocking non-owner ${senderJid} (bot: ${botJid})`)
-      }
-      
-      return isSenderBotOwner
-    } catch (error) {
-      log.error("Error checking bot mode:", error)
-      return true // Allow on error
+    // ✅ FIXED: Use isSameJid for robust comparison
+    const isSenderBotOwner = isSameJid(sock.user?.id, m.sender)
+    
+    if (!isSenderBotOwner) {
+      const botPhone = extractPhoneNumber(sock.user?.id)
+      const senderPhone = extractPhoneNumber(m.sender)
+      log.debug(`Bot in self-mode: Blocking non-owner ${senderPhone} (bot: ${botPhone})`)
     }
+    
+    return isSenderBotOwner
+  } catch (error) {
+    log.error("Error checking bot mode:", error)
+    return true
   }
+}
 
   async _checkGroupOnly(sock, m, commandName) {
     try {
@@ -940,19 +934,18 @@ async _checkBotCapabilities(sock, plugin, m) {
   }
 
   checkIsBotOwner(sock, userJid, fromMe = false) {
-    if (fromMe === true) return true
+  if (fromMe === true) return true
 
-    try {
-      if (!sock?.user?.id || !userJid) return false
+  try {
+    if (!sock?.user?.id || !userJid) return false
 
-      const botPhone = sock.user.id.split("@")[0].split(":")[0]
-      const userPhone = userJid.split("@")[0].split(":")[0]
-
-      return botPhone === userPhone
-    } catch (error) {
-      return false
-    }
+    // Use robust JID comparison
+    return isSameJid(sock.user.id, userJid)
+  } catch (error) {
+    log.error("Error checking bot owner:", error)
+    return false
   }
+}
 
   determineRequiredPermission(plugin) {
     if (!plugin) return "user"

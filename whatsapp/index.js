@@ -106,12 +106,13 @@ export {
 // ============================================================================
 export {
   // JID utilities
+  extractPhoneNumber,
   normalizeJid,
+  isSameJid,
   formatJid,
   isGroupJid,
   isUserJid,
-  extractPhoneNumber,
-  isSameJid,
+  isLid,
   createJidFromPhone,
   parseJid,
   getDisplayId,

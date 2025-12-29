@@ -56,11 +56,18 @@ export default {
 export { getMessageDeduplicator } from './message-duplicator.js'
 // Re-export commonly used functions
 export {
+  extractPhoneNumber,
   normalizeJid,
+  isSameJid,
   formatJid,
   isGroupJid,
   isUserJid,
-  extractPhoneNumber
+  isLid,
+  createJidFromPhone,
+  parseJid,
+  getDisplayId,
+  normalizeJids,
+  createRateLimitKey
 } from './jid.js'
 
 export {
