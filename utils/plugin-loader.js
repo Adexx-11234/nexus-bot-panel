@@ -910,6 +910,19 @@ async executePluginWithFallback(sock, sessionId, args, m, plugin) {
       return
     }
 
+    // ✅ CHECK IF BOT IS IN SELF MODE - For admin-only anti-plugins
+    let isSelfMode = false
+    if (m.sessionContext?.telegram_id) {
+      try {
+        const { UserQueries } = await import("../database/query.js")
+        const modeSettings = await UserQueries.getBotMode(m.sessionContext.telegram_id)
+        isSelfMode = modeSettings.mode === "self"
+      } catch (error) {
+        log.debug("Error checking self-mode for anti-plugins:", error.message)
+        isSelfMode = false
+      }
+    }
+
     for (const plugin of this.antiPlugins.values()) {
       try {
         if (!sock || !sessionId || !m || !plugin) continue
@@ -926,34 +939,61 @@ async executePluginWithFallback(sock, sessionId, args, m, plugin) {
         }
         if (!shouldProcess) continue
 
-        // ✅ CHECK BOT ADMIN STATUS: If plugin is adminOnly, only admin bots can acquire locks
+        // ✅ SELF-MODE CHECK FOR ADMIN-ONLY PLUGINS
+        // If bot is admin-only plugin handler AND in self mode, skip to let another bot handle it
+        if (plugin.adminOnly && m.isGroup && isSelfMode) {
+          log.debug(`${plugin.name}: Skipping (admin bot in self-mode, another bot should handle)`)
+          continue
+        }
+
+        // ✅ CHECK BOT ADMIN STATUS: For admin-only plugins
+        let isBotAdmin = false
+        let isOwner = false
+        let canFullyProcess = false
+
         if (plugin.adminOnly && m.isGroup) {
-          const { isBotAdmin: checkBotAdmin } = await import("../whatsapp/index.js")
-          const isBotAdminResult = await checkBotAdmin(sock, m.chat)
+          const { isBotAdmin: checkBotAdmin } = await import("../whatsapp/groups/index.js")
+          isBotAdmin = await checkBotAdmin(sock, m.chat)
           const botJid = sock.user?.id
-          const isOwner = this.checkIsBotOwner(sock, botJid)
-          
-          if (!isBotAdminResult && !isOwner) {
-            log.debug(`Skipping ${plugin.name} - this bot is not admin (cannot acquire lock)`)
-            continue // Non-admin bot cannot acquire lock for admin-only anti-plugin
+          isOwner = this.checkIsBotOwner(sock, botJid)
+          canFullyProcess = isBotAdmin || isOwner
+        } else {
+          // Non-admin plugins can always fully process
+          canFullyProcess = true
+        }
+
+        // DEDUPLICATION: Lock strategy depends on bot admin status
+        const actionKey = `anti-${plugin.name || "unknown"}`
+        let shouldAcquireLock = true
+        let shouldMarkAsProcessed = true
+
+        if (plugin.adminOnly && m.isGroup && !canFullyProcess) {
+          // ✅ NON-ADMIN BOT FOR ADMIN-ONLY PLUGIN:
+          // - Still process (detect and log)
+          // - BUT don't acquire lock (don't block other bots)
+          // - Don't mark as processed (let admin bot do it)
+          shouldAcquireLock = false
+          shouldMarkAsProcessed = false
+          log.debug(`${plugin.name}: Non-admin bot will process but not lock`)
+        } else if (canFullyProcess || !plugin.adminOnly) {
+          // ✅ ADMIN BOT or NON-ADMIN PLUGIN:
+          // - Acquire lock to prevent duplicate work
+          // - Mark as processed when done
+          if (!this.deduplicator.tryLockForProcessing(messageKey, sessionId, actionKey)) {
+            log.debug(`Skipping ${plugin.name} - already being processed by another session`)
+            continue // Another session is processing, SKIP
           }
         }
 
-        // DEDUPLICATION: Try to acquire lock BEFORE processing
-        const actionKey = `anti-${plugin.name || "unknown"}` // e.g., 'anti-Anti-Link'
-
-        if (!this.deduplicator.tryLockForProcessing(messageKey, sessionId, actionKey)) {
-          log.debug(`Skipping ${plugin.name} - already being processed by another session`)
-          continue // Another session is processing, SKIP
-        }
-
-        // Got lock - process the message
+        // ✅ PROCESS MESSAGE (all bots can reach here)
         if (typeof plugin.processMessage === "function") {
           await plugin.processMessage(sock, sessionId, m)
         }
 
-        // DEDUPLICATION: Mark as processed AFTER completion
-        this.deduplicator.markAsProcessed(messageKey, sessionId, actionKey)
+        // ✅ MARK AS PROCESSED (only if we acquired a lock)
+        if (shouldMarkAsProcessed) {
+          this.deduplicator.markAsProcessed(messageKey, sessionId, actionKey)
+        }
       } catch (pluginErr) {
         log.warn(`Anti-plugin error in ${plugin?.name || "unknown"}: ${pluginErr.message}`)
       }
