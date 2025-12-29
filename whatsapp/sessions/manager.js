@@ -771,10 +771,10 @@ async _cleanupSocketInMemoryOnly(sessionId) {
       }
 
       // Remove event listeners
-   /*   if (sock.ev && typeof sock.ev.removeAllListeners === "function") {
+      if (sock.ev && typeof sock.ev.removeAllListeners === "function") {
         sock.ev.removeAllListeners()
         logger.debug(`🔇 Event listeners removed for ${sessionId}`)
-      }*/
+      }
 
       // Close WebSocket connection
       if (sock.ws?.socket && sock.ws.socket._readyState === 1) {
@@ -926,10 +926,10 @@ async disconnectSession(sessionId, forceCleanup = false) {
     // ✅ REMOVED: deleteSessionStore() call - don't delete message store on normal cleanup
     // Only delete on explicit logout via performCompleteUserCleanup()
 
- /*   // Remove event listeners
+    // Remove event listeners
     if (sock.ev && typeof sock.ev.removeAllListeners === "function") {
       sock.ev.removeAllListeners()
-    }*/
+    }
 
     // Close WebSocket
     if (sock.ws?.socket && sock.ws.socket._readyState === 1) {

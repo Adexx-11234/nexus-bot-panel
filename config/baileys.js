@@ -1,5 +1,5 @@
 import NodeCache from "node-cache"
-import { makeWASocket, Browsers, makeCacheableSignalKeyStore } from "@whiskeysockets/baileys"
+import { makeWASocket, Browsers, makeCacheableSignalKeyStore, DEFAULT_CONNECTION_CONFIG } from "@whiskeysockets/baileys"
 import { createFileStore, deleteFileStore, getFileStore } from "../whatsapp/index.js"
 import { logger } from "../utils/logger.js"
 import pino from "pino"
@@ -32,33 +32,7 @@ const KEEPALIVE_INTERVAL = 5000                   // 5 seconds
 const HEALTH_CHECK_TIMEOUT = 30 * 60 * 1000      // 30 minutes
 
 // ==================== BAILEYS DEFAULT CONFIGURATION ====================
-const defaultGetMessage = async (key) => {
-  return undefined
-}
-
-export const baileysConfig = {
-  logger: pino({ level: "silent" }),
-  printQRInTerminal: false,
-  msgRetryCounterMap: {},
-  retryRequestDelayMs: 350,
-  markOnlineOnConnect: false,
-  getMessage: defaultGetMessage,
-  // version: [2, 3000, 1025190524], // remove comments if connection open but didn't connect on WhatsApp
-  emitOwnEvents: true,
-  fireInitQueries: true,
-  shouldIgnoreJid: (jid) => false,
-  // Remove mentionedJid to avoid issues
-  patchMessageBeforeSending: (msg) => {
-    if (msg.contextInfo) delete msg.contextInfo.mentionedJid;
-    return msg;
-  },
-  appStateSyncInitialTimeoutMs: 10000,
-  generateHighQualityLinkPreview: true,
-  syncFullHistory: false,
-  defaultQueryTimeoutMs: 60000,
-  // Don't send ACKs to avoid potential bans
-  sendAcks: true,
-}
+export const baileysConfig = { ...DEFAULT_CONNECTION_CONFIG }
 
 export function getBaileysConfig() {
   return { ...baileysConfig }
