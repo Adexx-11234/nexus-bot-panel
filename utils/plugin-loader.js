@@ -4,7 +4,7 @@ import fsr from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
 import chalk from "chalk"
-import { isGroupAdmin } from "../whatsapp/groups/index.js"
+import { isGroupAdmin, isBotAdmin } from "../whatsapp/groups/index.js"
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
