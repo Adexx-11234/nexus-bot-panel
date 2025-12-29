@@ -43,10 +43,12 @@ export async function getPnForLid(sock, lid) {
   try {
     // Baileys v7+ method
     if (sock.signalRepository?.lidMapping?.getPNForLID) {
-      const pn = await sock.signalRepository.lidMapping.getPNForLID(lid)
+      let pn = await sock.signalRepository.lidMapping.getPNForLID(lid)
       if (pn) {
         // Ensure it's in proper JID format (@s.whatsapp.net)
-        const phoneNumber = String(pn).replace(/[^0-9]/g, '')
+        // First remove device suffix (:0, :1, etc) then extract digits
+        pn = String(pn).split(':')[0] // Remove :0 suffix first
+        const phoneNumber = pn.replace(/[^0-9]/g, '')
         return `${phoneNumber}@s.whatsapp.net`
       }
     }
@@ -95,7 +97,9 @@ export async function resolveLidToJid(sock, groupJid, lidJid) {
     if (participant) {
       // v7: phoneNumber field exists when id is a LID - ensure proper format
       if (participant.phoneNumber) {
-        const phoneNumber = String(participant.phoneNumber).replace(/[^0-9]/g, '')
+        // First remove device suffix (:0, :1, etc) then extract digits
+        let pn = String(participant.phoneNumber).split(':')[0]
+        const phoneNumber = pn.replace(/[^0-9]/g, '')
         return `${phoneNumber}@s.whatsapp.net`
       }
       // v6: jid field
@@ -159,7 +163,9 @@ export async function resolveLidsToJids(sock, groupJid, lids) {
         if (participant) {
           // v7: phoneNumber field - ensure proper JID format
           if (participant.phoneNumber) {
-            const phoneNumber = String(participant.phoneNumber).replace(/[^0-9]/g, '')
+            // First remove device suffix (:0, :1, etc) then extract digits
+            let pn = String(participant.phoneNumber).split(':')[0]
+            const phoneNumber = pn.replace(/[^0-9]/g, '')
             resolved.push(`${phoneNumber}@s.whatsapp.net`)
             continue
           }
