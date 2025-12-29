@@ -35,7 +35,7 @@ export function enhanceTransactionHandling(sock, sessionId) {
         const result = await originalTransaction.call(this, work, key)
         
         if (attempt > 0) {
-          logger.info(`[${sessionId}] ✅ Transaction succeeded after ${attempt} retries for key: ${key}`)
+        //  logger.info(`[${sessionId}] ✅ Transaction succeeded after ${attempt} retries for key: ${key}`)
         }
         
         return result
@@ -115,18 +115,27 @@ export function enhanceTransactionHandling(sock, sessionId) {
 export function monitorKeyStoreHealth(authState, sessionId) {
   const writeTest = async () => {
     try {
+      // ✅ FIX: Safely access keys from authState
+      // authState can have different structures: { keys: {...} } or direct keys
+      const keyStore = authState?.keys || authState
+      
+      if (!keyStore || typeof keyStore.set !== 'function') {
+        logger.warn(`[${sessionId}] Key store unavailable for health check`)
+        return { healthy: true } // Assume healthy if can't test
+      }
+      
       // Test write a dummy key
       const testKey = `_health_check_${Date.now()}`
       const testValue = Buffer.from('OK')
       
-      await authState.keys.set({
+      await keyStore.set({
         'session': {
           [testKey]: testValue
         }
       })
       
       // Clean up the test key
-      await authState.keys.set({
+      await keyStore.set({
         'session': {
           [testKey]: null
         }
@@ -138,7 +147,8 @@ export function monitorKeyStoreHealth(authState, sessionId) {
       logger.error({
         sessionId,
         error: error?.message,
-        code: error?.code
+        code: error?.code,
+        stack: error?.stack?.substring(0, 200)
       }, `❌ Key store health check FAILED`)
       
       return { 

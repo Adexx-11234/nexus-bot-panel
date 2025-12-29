@@ -1,10 +1,11 @@
-// Optimized Plugin System with Full Directory Watching
+// Optimized Plugin System with Fixed Permission & Lock Logic
 import fs from "fs/promises"
 import fsr from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
 import chalk from "chalk"
 import { isGroupAdmin } from "../whatsapp/groups/index.js"
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
@@ -16,22 +17,15 @@ const log = {
 }
 
 // ==================== MESSAGE DEDUPLICATION SYSTEM ====================
-/**
- * MessageDeduplicator - Prevents multiple bot sessions from processing same message
- *
- * Fire and forget - reduced TTL to 10s, cleanup every 10s for fast RAM release
- */
 class MessageDeduplicator {
-constructor() {
-  this.processedMessages = new Map()
-  this.cleanupInterval = 10000 // 10 seconds
-  this.maxAge = 30000 // 30 seconds TTL (increased for slow commands)
-  this.lockTimeout = 15000 // 15 seconds for active locks
-
-  this.startCleanup()
-
-  log.info("MessageDeduplicator initialized (cleanup: 10s, TTL: 30s, Lock: 15s)")
-}
+  constructor() {
+    this.processedMessages = new Map()
+    this.cleanupInterval = 10000
+    this.maxAge = 30000
+    this.lockTimeout = 15000
+    this.startCleanup()
+    log.info("MessageDeduplicator initialized (cleanup: 10s, TTL: 30s, Lock: 15s)")
+  }
 
   generateKey(groupJid, messageId) {
     if (!groupJid || !messageId) return null
@@ -39,40 +33,35 @@ constructor() {
   }
 
   tryLockForProcessing(messageKey, sessionId, action) {
-  if (!messageKey) return false
+    if (!messageKey) return false
 
-  const existing = this.processedMessages.get(messageKey)
-  
-  // Check if action already processed
-  if (existing?.actions.has(action)) {
-    return false
-  }
-
-  // Check if locked by another session AND lock is still valid
-  if (existing?.lockedBy && existing.lockedBy !== sessionId) {
-    // If lock is expired (older than 15s), allow new session to lock
-    const lockAge = Date.now() - existing.timestamp
-    if (lockAge < this.lockTimeout) {
-      return false // Lock still valid, deny
+    const existing = this.processedMessages.get(messageKey)
+    
+    if (existing?.actions.has(action)) {
+      return false
     }
-    // Lock expired, allow this session to take over
-    log.debug(`Lock expired for ${action}, allowing new session`)
-  }
 
-  // Create or update entry atomically
-  if (!this.processedMessages.has(messageKey)) {
-    this.processedMessages.set(messageKey, {
-      actions: new Set(),
-      timestamp: Date.now(),
-      lockedBy: sessionId,
-    })
-  } else {
-    existing.lockedBy = sessionId
-    existing.timestamp = Date.now()
-  }
+    if (existing?.lockedBy && existing.lockedBy !== sessionId) {
+      const lockAge = Date.now() - existing.timestamp
+      if (lockAge < this.lockTimeout) {
+        return false
+      }
+      log.debug(`Lock expired for ${action}, allowing new session`)
+    }
 
-  return true
-}
+    if (!this.processedMessages.has(messageKey)) {
+      this.processedMessages.set(messageKey, {
+        actions: new Set(),
+        timestamp: Date.now(),
+        lockedBy: sessionId,
+      })
+    } else {
+      existing.lockedBy = sessionId
+      existing.timestamp = Date.now()
+    }
+
+    return true
+  }
 
   markAsProcessed(messageKey, sessionId, action) {
     if (!messageKey) return
@@ -101,41 +90,38 @@ constructor() {
   }
 
   cleanup() {
-  const now = Date.now()
-  let cleanedCount = 0
+    const now = Date.now()
+    let cleanedCount = 0
 
-  // Remove expired entries
-  for (const [key, entry] of this.processedMessages.entries()) {
-    if (now - entry.timestamp > this.maxAge) {
-      this.processedMessages.delete(key)
-      cleanedCount++
-    }
-  }
-
-  // Aggressive memory management: Keep max 300 entries
-  if (this.processedMessages.size > 300) {
-    const entries = Array.from(this.processedMessages.entries())
-      .sort((a, b) => a[1].timestamp - b[1].timestamp)
-    
-    const toRemove = entries.slice(0, this.processedMessages.size - 150)
-    toRemove.forEach(([key]) => this.processedMessages.delete(key))
-    cleanedCount += toRemove.length
-  }
-
-  // Release stale locks (locked but not processed for >15s)
-  for (const [key, entry] of this.processedMessages.entries()) {
-    if (entry.lockedBy && entry.actions.size === 0) {
-      const lockAge = now - entry.timestamp
-      if (lockAge > this.lockTimeout) {
-        entry.lockedBy = null // Release stale lock
+    for (const [key, entry] of this.processedMessages.entries()) {
+      if (now - entry.timestamp > this.maxAge) {
+        this.processedMessages.delete(key)
+        cleanedCount++
       }
     }
-  }
 
-  if (cleanedCount > 0) {
-    log.info(`Cleaned ${cleanedCount} entries (remaining: ${this.processedMessages.size})`)
+    if (this.processedMessages.size > 300) {
+      const entries = Array.from(this.processedMessages.entries())
+        .sort((a, b) => a[1].timestamp - b[1].timestamp)
+      
+      const toRemove = entries.slice(0, this.processedMessages.size - 150)
+      toRemove.forEach(([key]) => this.processedMessages.delete(key))
+      cleanedCount += toRemove.length
+    }
+
+    for (const [key, entry] of this.processedMessages.entries()) {
+      if (entry.lockedBy && entry.actions.size === 0) {
+        const lockAge = now - entry.timestamp
+        if (lockAge > this.lockTimeout) {
+          entry.lockedBy = null
+        }
+      }
+    }
+
+    if (cleanedCount > 0) {
+      log.info(`Cleaned ${cleanedCount} entries (remaining: ${this.processedMessages.size})`)
+    }
   }
-}
 
   startCleanup() {
     setInterval(() => this.cleanup(), this.cleanupInterval)
@@ -148,7 +134,7 @@ constructor() {
   }
 }
 
-const commandIndexCache = new Map() // command -> pluginId (prebuilt index)
+const commandIndexCache = new Map()
 let commandIndexBuilt = false
 
 class PluginLoader {
@@ -165,8 +151,8 @@ class PluginLoader {
     this.reloadDebounceMs = 1000
     this.tempContactStore = new Map()
     this.deduplicator = new MessageDeduplicator()
-    this.permissionCache = new Map() // "pluginId_userId" -> { allowed, timestamp }
-    this.PERMISSION_CACHE_TTL = 30000 // 30 seconds
+    this.permissionCache = new Map()
+    this.PERMISSION_CACHE_TTL = 30000
 
     this._startTempCleanup()
 
@@ -176,7 +162,7 @@ class PluginLoader {
   _startTempCleanup() {
     setInterval(() => {
       this.cleanupTempData()
-    }, 30000) // Every 30 seconds
+    }, 30000)
   }
 
   normalizeJid(jid) {
@@ -207,7 +193,6 @@ class PluginLoader {
     let removed = 0
     for (const [jid, data] of this.tempContactStore.entries()) {
       if (now - data.timestamp > 30000) {
-        // 30 seconds
         this.tempContactStore.delete(jid)
         removed++
       }
@@ -348,7 +333,6 @@ class PluginLoader {
     try {
       const dirName = path.basename(dirPath)
 
-      // Skip certain directories
       if (["node_modules", ".git", ".env", "dist", "build", "sessions", "logs"].includes(dirName)) {
         return
       }
@@ -359,14 +343,11 @@ class PluginLoader {
         const fullPath = path.join(dirPath, filename)
 
         if (filename.endsWith(".js")) {
-          // Check if it's a plugin file
           if (fullPath.includes(this.pluginDir)) {
-            // Hot-reload PLUGIN file
             const relativePath = path.relative(this.pluginDir, dirPath)
             const pluginCategory = relativePath ? relativePath.split(path.sep)[0] : category
             this.handleFileChange(dirPath, filename, pluginCategory)
           } else {
-            // Hot-reload ANY other JavaScript file (utilities, helpers, etc.)
             this.handleAnyFileChange(fullPath)
           }
         }
@@ -374,7 +355,6 @@ class PluginLoader {
 
       this.watchers.set(dirPath, watcher)
 
-      // Recursively watch subdirectories
       const items = await fs.readdir(dirPath, { withFileTypes: true })
       for (const item of items) {
         if (item.isDirectory()) {
@@ -421,12 +401,10 @@ class PluginLoader {
       try {
         const relativePath = path.relative(this.projectRoot, fullPath)
 
-        // Clear Node's require cache (if using CommonJS)
         if (require.cache[fullPath]) {
           delete require.cache[fullPath]
         }
 
-        // Hot-reload with cache busting
         const moduleUrl = `file://${fullPath}?t=${Date.now()}`
         await import(moduleUrl)
 
@@ -441,6 +419,7 @@ class PluginLoader {
 
     this.reloadTimeouts.set(reloadKey, timeout)
   }
+
   async clearWatchers() {
     this.watchers.forEach((watcher) => {
       try {
@@ -468,129 +447,144 @@ class PluginLoader {
     if (!commandName || typeof commandName !== "string") return null
     const normalizedCommand = commandName.toLowerCase().trim()
 
-    // Use cached index for O(1) lookup
     if (commandIndexBuilt && commandIndexCache.has(normalizedCommand)) {
       const pluginId = commandIndexCache.get(normalizedCommand)
       return this.plugins.get(pluginId)
     }
 
-    // Fallback to original lookup
     const pluginId = this.commands.get(normalizedCommand)
     return pluginId ? this.plugins.get(pluginId) : null
   }
 
   async executeCommand(sock, sessionId, commandName, args, m) {
-  try {
-    const plugin = this.findCommand(commandName)
-    if (!plugin) return { success: false, silent: true }
+    try {
+      const plugin = this.findCommand(commandName)
+      if (!plugin) return { success: false, silent: true }
 
-    if (!m.pushName) {
-      this.extractPushName(sock, m)
-        .then((name) => {
-          m.pushName = name
-        })
-        .catch(() => {})
-    }
-
-    const isCreator = this.checkIsBotOwner(sock, m.sender, m.key?.fromMe)
-
-    const enhancedM = {
-      ...m,
-      chat: m.chat || m.key?.remoteJid || m.from,
-      sender: m.sender || m.key?.participant || m.from,
-      isCreator,
-      isOwner: isCreator,
-      isGroup: m.isGroup || (m.chat && m.chat.endsWith("@g.us")),
-      sessionContext: m.sessionContext || { telegram_id: "Unknown", session_id: sessionId },
-      sessionId,
-      reply: m.reply,
-      prefix: m.prefix || ".",
-      pluginCategory: plugin.category,
-      commandName: commandName.toLowerCase()
-    }
-
-    // ✅ FIX 1: CHECK PERMISSIONS FIRST (before any locking)
-    const [modeAllowed, permissionCheck] = await Promise.all([
-      this._checkBotMode(enhancedM),
-      this._checkPermissionsCached(sock, plugin, enhancedM),
-    ])
-
-    // Early exit if no permission - don't acquire any locks
-    if (!permissionCheck.allowed) {
-      this.clearTempData()
-      
-      // Silent fail for unauthorized bots (don't send error messages)
-      if (permissionCheck.silent) {
-        return { success: false, silent: true }
+      if (!m.pushName) {
+        this.extractPushName(sock, m)
+          .then((name) => {
+            m.pushName = name
+          })
+          .catch(() => {})
       }
-      
-      // Send error message for explicit permission denials
-      try {
-        await sock.sendMessage(enhancedM.chat, { text: permissionCheck.message }, { quoted: m })
-      } catch (sendError) {
-        log.error("Failed to send permission error:", sendError)
+
+      const isCreator = this.checkIsBotOwner(sock, m.sender, m.key?.fromMe)
+
+      const enhancedM = {
+        ...m,
+        chat: m.chat || m.key?.remoteJid || m.from,
+        sender: m.sender || m.key?.participant || m.from,
+        isCreator,
+        isOwner: isCreator,
+        isGroup: m.isGroup || (m.chat && m.chat.endsWith("@g.us")),
+        sessionContext: m.sessionContext || { telegram_id: "Unknown", session_id: sessionId },
+        sessionId,
+        reply: m.reply,
+        prefix: m.prefix || ".",
+        pluginCategory: plugin.category,
+        commandName: commandName.toLowerCase()
       }
-      
-      return { success: false, error: permissionCheck.message }
-    }
 
-    // ✅ FIX 2: ACQUIRE DEDUPLICATION LOCK ONLY AFTER PERMISSION CHECK PASSES
-    const needsDeduplication = plugin.category === 'groupmenu' || plugin.category === 'gamemenu'
-    const messageKey = needsDeduplication ? this.deduplicator.generateKey(enhancedM.chat, m.key?.id) : null
-    const executionActionKey = needsDeduplication ? `cmd-execute-${commandName}` : null
-
-    // Check if another AUTHORIZED bot already executed this command
-    if (messageKey && this.deduplicator.isActionProcessed(messageKey, executionActionKey)) {
-      log.debug(`Command ${commandName} already executed by another authorized bot`)
-      this.clearTempData()
-      return { success: false, silent: true }
-    }
-
-    // Try to acquire lock ONLY for authorized bots
-    if (messageKey && !this.deduplicator.tryLockForProcessing(messageKey, sessionId, executionActionKey)) {
-      log.debug(`Command ${commandName} is being executed by another authorized bot`)
-      this.clearTempData()
-      return { success: false, silent: true }
-    }
-
-    // Check bot mode
-    if (!modeAllowed) {
-      this.clearTempData()
-      return { success: false, silent: true }
-    }
-
-    // Check group-only setting
-    if (enhancedM.isGroup) {
-      const groupOnlyAllowed = await this._checkGroupOnly(sock, enhancedM, commandName)
-      if (!groupOnlyAllowed) {
+      // ✅ CRITICAL FIX 1: CHECK BOT MODE FIRST (before ANY permission checks)
+      const botModeAllowed = await this._checkBotMode(sock, enhancedM)
+      if (!botModeAllowed) {
+        log.debug(`Bot in self-mode, skipping command from ${enhancedM.sender}`)
         this.clearTempData()
         return { success: false, silent: true }
       }
+
+      // ✅ CRITICAL FIX 2: CHECK PERMISSIONS EARLY (before lock acquisition)
+      const permissionCheck = await this._checkPermissionsCached(sock, plugin, enhancedM)
+      
+      if (!permissionCheck.allowed) {
+        this.clearTempData()
+        
+        if (permissionCheck.silent) {
+          log.debug(`Permission denied silently for ${enhancedM.sender}: ${permissionCheck.reason || 'unknown'}`)
+          return { success: false, silent: true }
+        }
+        
+        try {
+          await sock.sendMessage(enhancedM.chat, { text: permissionCheck.message }, { quoted: m })
+        } catch (sendError) {
+          log.error("Failed to send permission error:", sendError)
+        }
+        
+        return { success: false, error: permissionCheck.message }
+      }
+
+      // ✅ FIX 3: ACQUIRE LOCK ONLY AFTER ALL CHECKS PASS
+      const needsDeduplication = plugin.category === 'groupmenu' || plugin.category === 'gamemenu'
+      const messageKey = needsDeduplication ? this.deduplicator.generateKey(enhancedM.chat, m.key?.id) : null
+      const executionActionKey = needsDeduplication ? `cmd-execute-${commandName}` : null
+
+      if (messageKey && this.deduplicator.isActionProcessed(messageKey, executionActionKey)) {
+        log.debug(`Command ${commandName} already executed by another authorized bot`)
+        this.clearTempData()
+        return { success: false, silent: true }
+      }
+
+      if (messageKey && !this.deduplicator.tryLockForProcessing(messageKey, sessionId, executionActionKey)) {
+        log.debug(`Command ${commandName} locked by another authorized bot`)
+        this.clearTempData()
+        return { success: false, silent: true }
+      }
+
+      // Check group-only setting
+      if (enhancedM.isGroup) {
+        const groupOnlyAllowed = await this._checkGroupOnly(sock, enhancedM, commandName)
+        if (!groupOnlyAllowed) {
+          this.clearTempData()
+          return { success: false, silent: true }
+        }
+      }
+
+      // Execute plugin
+      const result = await this.executePluginWithFallback(sock, sessionId, args, enhancedM, plugin)
+
+      if (messageKey && executionActionKey) {
+        this.deduplicator.markAsProcessed(messageKey, sessionId, executionActionKey)
+      }
+
+      this.clearTempData()
+      return { success: true, result }
+    } catch (error) {
+      log.error(`Error executing command ${commandName}:`, error)
+      this.clearTempData()
+      return { success: false, error: error.message }
     }
-
-    // Execute plugin
-    const result = await this.executePluginWithFallback(sock, sessionId, args, enhancedM, plugin)
-
-    // ✅ Mark as processed after successful execution
-    if (messageKey && executionActionKey) {
-      this.deduplicator.markAsProcessed(messageKey, sessionId, executionActionKey)
-    }
-
-    this.clearTempData()
-    return { success: true, result }
-  } catch (error) {
-    log.error(`Error executing command ${commandName}:`, error)
-    this.clearTempData()
-    return { success: false, error: error.message }
   }
-}
 
-  async _checkBotMode(m) {
-    if (m.isCreator) return true
+  // ✅ FIX 4: IMPROVED BOT MODE CHECK WITH OWNER VALIDATION
+  async _checkBotMode(sock, m) {
+    // Always allow bot owner
+    if (m.isCreator) {
+      log.debug("Command allowed: sender is bot owner")
+      return true
+    }
+    
     try {
       const { UserQueries } = await import("../database/query.js")
       const modeSettings = await UserQueries.getBotMode(m.sessionContext.telegram_id)
-      return modeSettings.mode !== "self"
+      
+      // If in public mode, allow everyone
+      if (modeSettings.mode !== "self") {
+        log.debug("Bot in public mode, allowing command")
+        return true
+      }
+      
+      // If in self mode, ONLY allow if sender === bot owner
+      const botJid = this.normalizeJid(sock.user?.id)
+      const senderJid = this.normalizeJid(m.sender)
+      
+      const isSenderBotOwner = botJid === senderJid
+      
+      if (!isSenderBotOwner) {
+        log.debug(`Bot in self-mode: Blocking non-owner ${senderJid} (bot: ${botJid})`)
+      }
+      
+      return isSenderBotOwner
     } catch (error) {
       log.error("Error checking bot mode:", error)
       return true // Allow on error
@@ -631,13 +625,11 @@ class PluginLoader {
 
     const result = await this.checkPluginPermissions(sock, plugin, m)
 
-    // Cache the result
     this.permissionCache.set(cacheKey, {
       result,
       timestamp: Date.now(),
     })
 
-    // Cleanup old cache entries
     if (this.permissionCache.size > 500) {
       const entries = Array.from(this.permissionCache.entries())
       const toRemove = entries.slice(0, 200)
@@ -650,171 +642,160 @@ class PluginLoader {
   // ==================== PERMISSION CHECKS ====================
 
   async checkPluginPermissions(sock, plugin, m) {
-  try {
-    if (!plugin) {
-      return { allowed: false, message: "❌ Plugin not found.", silent: false }
-    }
-
-    const commandName = plugin.commands?.[0]?.toLowerCase() || ""
-
-    // Menu commands - everyone can view (except vipmenu)
-    const publicMenus = ["aimenu", "convertmenu", "downloadmenu", "gamemenu", "groupmenu", "mainmenu", "ownermenu", "toolmenu", "searchmenu", "bugmenu"]
-    if (publicMenus.includes(commandName)) {
-      return { allowed: true }
-    }
-
-    // VIP menu - VIP and owner only
-    if (commandName === "vipmenu") {
-      const { VIPQueries } = await import("../database/query.js")
-      const { VIPHelper } = await import("../whatsapp/index.js")
-
-      const userTelegramId = VIPHelper.fromSessionId(m.sessionId)
-      if (!userTelegramId) {
-        return { allowed: false, message: "❌ Could not verify VIP status.", silent: false }
-      }
-
-      const vipStatus = await VIPQueries.isVIP(userTelegramId)
-      if (!vipStatus.isVIP && !m.isCreator) {
-        return {
-          allowed: false,
-          message: "❌ VIP menu requires VIP access.\n\nContact bot owner for privileges.",
-          silent: false,
-        }
-      }
-      return { allowed: true }
-    }
-
-    // Game menu - everyone can use (but still check group permissions)
-    if (plugin.category === "gamemenu") {
-      // In groups, still need to be admin unless it's a public game command
-      if (m.isGroup) {
-        const isAdmin = await isGroupAdmin(sock, m.chat, m.sender)
-        if (!m.isCreator && !isAdmin) {
-          return { allowed: false, silent: true }
-        }
-      }
-      return { allowed: true }
-    }
-
-    // ✅ FIX 3: CRITICAL GROUP PERMISSION LOGIC FOR GROUPMENU
-    // In groups: ONLY bot owner (m.isCreator) OR group admins can execute groupmenu commands
-    if (m.isGroup && plugin.category === "groupmenu") {
-      // Always do fresh admin check for group commands
-      const isAdmin = await isGroupAdmin(sock, m.chat, m.sender)
-
-      // Deny silently if not admin or creator
-      if (!m.isCreator && !isAdmin) {
-        log.debug(`Permission denied for ${m.sender} in ${m.chat}: Not admin or creator`)
-        return { allowed: false, silent: true }
-      }
-    }
-
-    // Check specific command permissions
-    const requiredPermission = this.determineRequiredPermission(plugin)
-
-    // Owner-only commands
-    if (requiredPermission === "owner" && !m.isCreator) {
-      return { allowed: false, message: "❌ Bot owner only.", silent: false }
-    }
-
-    // VIP commands
-    if (requiredPermission === "vip") {
-      const { VIPQueries } = await import("../database/query.js")
-      const { VIPHelper } = await import("../whatsapp/index.js")
-
-      const userTelegramId = VIPHelper.fromSessionId(m.sessionId)
-      if (!userTelegramId) {
-        return { allowed: false, message: "❌ Could not verify VIP status.", silent: false }
-      }
-
-      const vipStatus = await VIPQueries.isVIP(userTelegramId)
-      if (!vipStatus.isVIP && !m.isCreator) {
-        return {
-          allowed: false,
-          message: "❌ VIP access required.\n\nContact bot owner.",
-          silent: false,
-        }
-      }
-    }
-
-    // Group admin commands
-    if ((requiredPermission === "admin" || requiredPermission === "group_admin") && m.isGroup) {
-      const isAdmin = await isGroupAdmin(sock, m.chat, m.sender)
-
-      if (!isAdmin && !m.isCreator) {
-        return { allowed: false, message: "❌ Admin privileges required.", silent: false }
-      }
-    }
-
-    // Owner menu category
-    if (plugin.category === "ownermenu" && !m.isCreator) {
-      return { allowed: false, message: "❌ Bot owner only.", silent: false }
-    }
-
-    return { allowed: true }
-  } catch (error) {
-    log.error("Error checking permissions:", error)
-    return { allowed: false, message: "❌ Permission check failed.", silent: false }
-  }
-}
-async executePluginWithFallback(sock, sessionId, args, m, plugin) {
-  // Retry logic for database conflicts (groupmenu only)
-  const maxRetries = plugin.category === 'groupmenu' ? 2 : 0
-  let lastError = null
-  
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      if (attempt > 0) {
-        log.debug(`Retry attempt ${attempt} for ${plugin.name}`)
-        await new Promise(resolve => setTimeout(resolve, 100 * attempt)) // Backoff
-      }
-      
-      if (m.isGroup && (!m.hasOwnProperty('isAdmin') || !m.hasOwnProperty('isBotAdmin'))) {
-        m.isAdmin = await isGroupAdmin(sock, m.chat, m.sender)
-        m.isBotAdmin = await isBotAdmin(sock, m.chat)
+      if (!plugin) {
+        return { allowed: false, message: "❌ Plugin not found.", silent: false }
       }
 
-      if (plugin.execute.length === 4) {
-        return await plugin.execute(sock, sessionId, args, m)
+      const commandName = plugin.commands?.[0]?.toLowerCase() || ""
+
+      // Menu commands - everyone can view (except vipmenu)
+      const publicMenus = ["aimenu", "convertmenu", "downloadmenu", "gamemenu", "groupmenu", "mainmenu", "ownermenu", "toolmenu", "searchmenu", "bugmenu"]
+      if (publicMenus.includes(commandName)) {
+        return { allowed: true }
       }
-      
-      if (plugin.execute.length === 3) {
-        const context = {
-          args: args || [],
-          quoted: m.quoted || null,
-          isAdmin: m.isAdmin || false,
-          isBotAdmin: m.isBotAdmin || false,
-          isCreator: m.isCreator || false,
-          store: null
+
+      // VIP menu - VIP and owner only
+      if (commandName === "vipmenu") {
+        const { VIPQueries } = await import("../database/query.js")
+        const { VIPHelper } = await import("../whatsapp/index.js")
+
+        const userTelegramId = VIPHelper.fromSessionId(m.sessionId)
+        if (!userTelegramId) {
+          return { allowed: false, message: "❌ Could not verify VIP status.", silent: false }
         }
-        return await plugin.execute(sock, m, context)
+
+        const vipStatus = await VIPQueries.isVIP(userTelegramId)
+        if (!vipStatus.isVIP && !m.isCreator) {
+          return {
+            allowed: false,
+            message: "❌ VIP menu requires VIP access.\n\nContact bot owner for privileges.",
+            silent: false,
+          }
+        }
+        return { allowed: true }
       }
 
-      return await plugin.execute(sock, sessionId, args, m)
-} catch (error) {
-      lastError = error
-      
-      // If it's a database error and we have retries left, continue
-      if (attempt < maxRetries && error.message?.includes('database')) {
-        log.warn(`Database error on attempt ${attempt + 1}, retrying...`)
-        continue
+      // Game menu - everyone can use (but still check group permissions)
+      if (plugin.category === "gamemenu") {
+        if (m.isGroup) {
+          const isAdmin = await isGroupAdmin(sock, m.chat, m.sender)
+          if (!m.isCreator && !isAdmin) {
+            return { allowed: false, silent: true, reason: 'gamemenu requires group admin' }
+          }
+        }
+        return { allowed: true }
       }
-      
-      // No more retries or non-database error
-      log.error(`Plugin execution failed for ${plugin.name}:`, error)
-      throw error
+
+      // ✅ CRITICAL FIX 5: GROUP PERMISSION CHECK FOR GROUPMENU
+      // In groups, groupmenu commands require SENDER to be admin or bot owner
+      if (m.isGroup && plugin.category === "groupmenu") {
+        const senderIsAdmin = await isGroupAdmin(sock, m.chat, m.sender)
+
+        if (!m.isCreator && !senderIsAdmin) {
+          log.debug(`Permission denied: sender ${m.sender} is not admin in ${m.chat}`)
+          return { allowed: false, silent: true, reason: 'sender not group admin' }
+        }
+      }
+
+      // Check specific command permissions
+      const requiredPermission = this.determineRequiredPermission(plugin)
+
+      if (requiredPermission === "owner" && !m.isCreator) {
+        return { allowed: false, message: "❌ Bot owner only.", silent: false }
+      }
+
+      if (requiredPermission === "vip") {
+        const { VIPQueries } = await import("../database/query.js")
+        const { VIPHelper } = await import("../whatsapp/index.js")
+
+        const userTelegramId = VIPHelper.fromSessionId(m.sessionId)
+        if (!userTelegramId) {
+          return { allowed: false, message: "❌ Could not verify VIP status.", silent: false }
+        }
+
+        const vipStatus = await VIPQueries.isVIP(userTelegramId)
+        if (!vipStatus.isVIP && !m.isCreator) {
+          return {
+            allowed: false,
+            message: "❌ VIP access required.\n\nContact bot owner.",
+            silent: false,
+          }
+        }
+      }
+
+      if ((requiredPermission === "admin" || requiredPermission === "group_admin") && m.isGroup) {
+        const isAdmin = await isGroupAdmin(sock, m.chat, m.sender)
+
+        if (!isAdmin && !m.isCreator) {
+          return { allowed: false, message: "❌ Admin privileges required.", silent: false }
+        }
+      }
+
+      if (plugin.category === "ownermenu" && !m.isCreator) {
+        return { allowed: false, message: "❌ Bot owner only.", silent: false }
+      }
+
+      return { allowed: true }
+    } catch (error) {
+      log.error("Error checking permissions:", error)
+      return { allowed: false, message: "❌ Permission check failed.", silent: false }
     }
   }
-  
-  // All retries failed
-  if (lastError) throw lastError
-}
+
+  async executePluginWithFallback(sock, sessionId, args, m, plugin) {
+    const maxRetries = plugin.category === 'groupmenu' ? 2 : 0
+    let lastError = null
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        if (attempt > 0) {
+          log.debug(`Retry attempt ${attempt} for ${plugin.name}`)
+          await new Promise(resolve => setTimeout(resolve, 100 * attempt))
+        }
+        
+        if (m.isGroup && (!m.hasOwnProperty('isAdmin') || !m.hasOwnProperty('isBotAdmin'))) {
+          const { isBotAdmin } = await import("../whatsapp/groups/index.js")
+          m.isAdmin = await isGroupAdmin(sock, m.chat, m.sender)
+          m.isBotAdmin = await isBotAdmin(sock, m.chat)
+        }
+
+        if (plugin.execute.length === 4) {
+          return await plugin.execute(sock, sessionId, args, m)
+        }
+        
+        if (plugin.execute.length === 3) {
+          const context = {
+            args: args || [],
+            quoted: m.quoted || null,
+            isAdmin: m.isAdmin || false,
+            isBotAdmin: m.isBotAdmin || false,
+            isCreator: m.isCreator || false,
+            store: null
+          }
+          return await plugin.execute(sock, m, context)
+        }
+
+        return await plugin.execute(sock, sessionId, args, m)
+      } catch (error) {
+        lastError = error
+        
+        if (attempt < maxRetries && error.message?.includes('database')) {
+          log.warn(`Database error on attempt ${attempt + 1}, retrying...`)
+          continue
+        }
+        
+        log.error(`Plugin execution failed for ${plugin.name}:`, error)
+        throw error
+      }
+    }
+    
+    if (lastError) throw lastError
+  }
 
   checkIsBotOwner(sock, userJid, fromMe = false) {
-    // If fromMe is true, it's the bot owner
     if (fromMe === true) return true
 
-    // Fallback: compare phone numbers
     try {
       if (!sock?.user?.id || !userJid) return false
 
@@ -853,36 +834,6 @@ async executePluginWithFallback(sock, sessionId, args, m, plugin) {
 
     return "user"
   }
-async executePluginWithFallback(sock, sessionId, args, m, plugin) {
-    try {
-      if (m.isGroup && (!m.hasOwnProperty('isAdmin') || !m.hasOwnProperty('isBotAdmin'))) {
-        m.isAdmin = await isGroupAdmin(sock, m.chat, m.sender)
-        m.isBotAdmin = await isBotAdmin(sock, m.chat)
-      }
-
-      if (plugin.execute.length === 4) {
-        return await plugin.execute(sock, sessionId, args, m)
-      }
-      
-      if (plugin.execute.length === 3) {
-        const context = {
-          args: args || [],
-          quoted: m.quoted || null,
-          isAdmin: m.isAdmin || false,
-          isBotAdmin: m.isBotAdmin || false,
-          isCreator: m.isCreator || false,
-          store: null
-        }
-        return await plugin.execute(sock, m, context)
-      }
-
-      return await plugin.execute(sock, sessionId, args, m)
-    } catch (error) {
-      log.error(`Plugin execution failed for ${plugin.name}:`, error)
-      throw error
-    }
-  }
-
     
   // ==================== HELPER METHODS ====================
 
@@ -915,25 +866,19 @@ async executePluginWithFallback(sock, sessionId, args, m, plugin) {
     }
   }
 
+  // ✅ FIX 6: IMPROVED ANTI-PLUGIN PROCESSING WITH PROPER LOCK LOGIC
   async processAntiPlugins(sock, sessionId, m) {
-    // DEDUPLICATION: Generate message key
     const messageKey = this.deduplicator.generateKey(m.chat, m.key?.id)
     if (!messageKey) {
       log.warn("Cannot generate message key for anti-plugin processing")
       return
     }
 
-    // ✅ CHECK IF BOT IS IN SELF MODE - For admin-only anti-plugins
-    let isSelfMode = false
-    if (m.sessionContext?.telegram_id) {
-      try {
-        const { UserQueries } = await import("../database/query.js")
-        const modeSettings = await UserQueries.getBotMode(m.sessionContext.telegram_id)
-        isSelfMode = modeSettings.mode === "self"
-      } catch (error) {
-        log.debug("Error checking self-mode for anti-plugins:", error.message)
-        isSelfMode = false
-      }
+    // ✅ Check bot mode first
+    const botModeAllowed = await this._checkBotMode(sock, m)
+    if (!botModeAllowed) {
+      log.debug(`Bot in self-mode, skipping anti-plugin for ${m.sender}`)
+      return
     }
 
     for (const plugin of this.antiPlugins.values()) {
@@ -952,61 +897,89 @@ async executePluginWithFallback(sock, sessionId, args, m, plugin) {
         }
         if (!shouldProcess) continue
 
-        // ✅ SELF-MODE CHECK FOR ADMIN-ONLY PLUGINS
-        // If bot is admin-only plugin handler AND in self mode, skip to let another bot handle it
-        if (plugin.adminOnly && m.isGroup && isSelfMode) {
-          log.debug(`${plugin.name}: Skipping (admin bot in self-mode, another bot should handle)`)
-          continue
-        }
-
-        // ✅ CHECK BOT ADMIN STATUS: For admin-only plugins
+        // ✅ CRITICAL FIX 7: CHECK BOT ADMIN STATUS FOR ADMIN-ONLY PLUGINS
+        let canFullyProcess = true
         let isBotAdmin = false
-        let isOwner = false
-        let canFullyProcess = false
-
+        
         if (plugin.adminOnly && m.isGroup) {
           const { isBotAdmin: checkBotAdmin } = await import("../whatsapp/groups/index.js")
           isBotAdmin = await checkBotAdmin(sock, m.chat)
-          const botJid = sock.user?.id
-          isOwner = this.checkIsBotOwner(sock, botJid)
+          const isOwner = this.checkIsBotOwner(sock, sock.user?.id)
           canFullyProcess = isBotAdmin || isOwner
-        } else {
-          // Non-admin plugins can always fully process
-          canFullyProcess = true
+          
+          log.debug(`${plugin.name}: Bot admin check - isBotAdmin: ${isBotAdmin}, canFullyProcess: ${canFullyProcess}`)
         }
 
-        // DEDUPLICATION: Lock strategy depends on bot admin status
         const actionKey = `anti-${plugin.name || "unknown"}`
-        let shouldAcquireLock = true
-        let shouldMarkAsProcessed = true
 
+        // ✅ FIX 8: LOCK STRATEGY BASED ON BOT CAPABILITIES
         if (plugin.adminOnly && m.isGroup && !canFullyProcess) {
-          // ✅ NON-ADMIN BOT FOR ADMIN-ONLY PLUGIN:
-          // - Still process (detect and log)
-          // - BUT don't acquire lock (don't block other bots)
-          // - Don't mark as processed (let admin bot do it)
-          shouldAcquireLock = false
-          shouldMarkAsProcessed = false
-          log.debug(`${plugin.name}: Non-admin bot will process but not lock`)
-        } else if (canFullyProcess || !plugin.adminOnly) {
-          // ✅ ADMIN BOT or NON-ADMIN PLUGIN:
-          // - Acquire lock to prevent duplicate work
-          // - Mark as processed when done
-          if (!this.deduplicator.tryLockForProcessing(messageKey, sessionId, actionKey)) {
-            log.debug(`Skipping ${plugin.name} - already being processed by another session`)
-            continue // Another session is processing, SKIP
+          // Non-admin bot for admin-only plugin:
+          // - Can detect and notify users
+          // - CANNOT lock (let admin bot handle actual deletion)
+          // - CANNOT mark as processed (admin bot will mark it)
+          
+          // Check if action already processed by admin bot
+          if (this.deduplicator.isActionProcessed(messageKey, actionKey)) {
+            log.debug(`${plugin.name}: Already processed by admin bot, skipping notification`)
+            continue
           }
+          
+          // Check if admin bot is currently processing
+          if (this.deduplicator.isActionProcessed(messageKey, `${actionKey}-admin-processing`)) {
+            log.debug(`${plugin.name}: Admin bot is processing, skipping notification`)
+            continue
+          }
+          
+          // Mark that a non-admin bot is notifying (to prevent duplicate notifications)
+          const notifyKey = `${actionKey}-notify`
+          if (!this.deduplicator.tryLockForProcessing(messageKey, sessionId, notifyKey)) {
+            log.debug(`${plugin.name}: Another non-admin bot already notified`)
+            continue
+          }
+          
+          log.debug(`${plugin.name}: Non-admin bot notifying (no lock for deletion)`)
+          
+          // Process (detect and notify, but don't take action like deleting)
+          if (typeof plugin.processMessage === "function") {
+            await plugin.processMessage(sock, sessionId, m)
+          }
+          
+          // Mark notification as sent
+          this.deduplicator.markAsProcessed(messageKey, sessionId, notifyKey)
+          
+          // Don't lock the main action or mark as processed
+          // Let admin bot handle actual deletion
+          continue
         }
 
-        // ✅ PROCESS MESSAGE (all bots can reach here)
+        // Admin bot or non-admin-required plugin:
+        // - Can lock to prevent duplicates
+        // - Can fully process and take action
+        
+        if (this.deduplicator.isActionProcessed(messageKey, actionKey)) {
+          log.debug(`${plugin.name}: Already processed by another bot`)
+          continue
+        }
+
+        if (!this.deduplicator.tryLockForProcessing(messageKey, sessionId, actionKey)) {
+          log.debug(`${plugin.name}: Locked by another bot`)
+          continue
+        }
+        
+        // Mark admin processing to prevent non-admin notifications
+        if (plugin.adminOnly && canFullyProcess) {
+          this.deduplicator.markAsProcessed(messageKey, sessionId, `${actionKey}-admin-processing`)
+        }
+
+        // Fully process with lock
         if (typeof plugin.processMessage === "function") {
           await plugin.processMessage(sock, sessionId, m)
         }
 
-        // ✅ MARK AS PROCESSED (only if we acquired a lock)
-        if (shouldMarkAsProcessed) {
-          this.deduplicator.markAsProcessed(messageKey, sessionId, actionKey)
-        }
+        // Mark as processed
+        this.deduplicator.markAsProcessed(messageKey, sessionId, actionKey)
+        
       } catch (pluginErr) {
         log.warn(`Anti-plugin error in ${plugin?.name || "unknown"}: ${pluginErr.message}`)
       }
@@ -1054,7 +1027,7 @@ async executePluginWithFallback(sock, sessionId, args, m, plugin) {
       isInitialized: this.isInitialized,
       autoReloadEnabled: this.autoReloadEnabled,
       watchersActive: this.watchers.size,
-      deduplication: this.deduplicator.getStats(), // Add deduplicator stats
+      deduplication: this.deduplicator.getStats(),
     }
   }
 

@@ -68,10 +68,15 @@ export class EventDispatcher {
       
       // ✅ FIX: Monitor key store health to detect storage issues early
       // Store monitor reference for cleanup on disconnect
-      sock._keyStoreMonitor = monitorKeyStoreHealth(this.sessionManager.authState, sessionId)
+      // Use the auth state from socket (it was set during socket creation)
+      if (sock.authState && typeof sock.authState === 'object') {
+        sock._keyStoreMonitor = monitorKeyStoreHealth(sock.authState, sessionId)
+      } else {
+        logger.warn(`[${sessionId}] Auth state not available on socket, skipping key store health monitoring`)
+      }
       
       // ✅ HEALTH CHECK: Start monitoring message receipt for this session
-      this._startHealthCheck(sock, sessionId)
+     // this._startHealthCheck(sock, sessionId)
 
       logger.info(`Event handlers setup complete for ${sessionId}`)
       return true

@@ -38,7 +38,7 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
       return
     }
 
-    logger.info(`[${sessionId}] Received messages.upsert: ${messages.length} messages (type: ${type})`)
+   // logger.info(`[${sessionId}] Received messages.upsert: ${messages.length} messages (type: ${type})`)
 
     // **HANDLE PRESENCE ON MESSAGE RECEIVED**
     try {
@@ -128,7 +128,7 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
 
     // ✅ ENHANCED: Request retry for CIPHERTEXT messages after short delay
     if (ciphertextMessages.length > 0) {
-      logger.info(`[${sessionId}] Found ${ciphertextMessages.length} CIPHERTEXT messages - requesting retry after 2s`)
+     // logger.info(`[${sessionId}] Found ${ciphertextMessages.length} CIPHERTEXT messages - requesting retry after 2s`)
       
       // Wait a bit for Signal keys to be established
       setTimeout(() => {
@@ -251,7 +251,7 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
         if (message.key && sock.sendRetryRequest) {
           try {
             await sock.sendRetryRequest(message.key)
-            logger.info(`[${sessionId}] Requested retry for message ${message.key?.id}`)
+           // logger.info(`[${sessionId}] Requested retry for message ${message.key?.id}`)
           } catch (retryError) {
             logger.debug(`[${sessionId}] Retry request failed: ${retryError.message}`)
           }
@@ -319,7 +319,7 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
         pushName: message.pushName
       }
 
-      logger.info(`Status from ${statusData.sender}: ${statusData.type}`)
+     // logger.info(`Status from ${statusData.sender}: ${statusData.type}`)
 
       return statusData
 
@@ -361,7 +361,7 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
         fromMe: message.key.fromMe || false
       }
 
-      logger.info(`Broadcast message from ${broadcastId}`)
+     // logger.info(`Broadcast message from ${broadcastId}`)
 
       return broadcastData
 
