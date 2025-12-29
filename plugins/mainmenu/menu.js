@@ -1,8 +1,18 @@
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fs from 'fs';
+import { generateWAMessageFromContent, WAProto as proto, prepareWAMessageMedia } from '@whiskeysockets/baileys';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 export default {
   name: "Menu",
   description: "Show main bot menu with all available categories",
   commands: ["menu", "start", "bot", "help"],
-  adminOnly: false,
+  permissions: {
+
+},
   category: "mainmenu",
   usage: "• .menu - Show complete menu with all categories",
   async execute(sock, sessionId, args, m) {
@@ -52,7 +62,7 @@ export default {
       captionText += `│⏰ ᴛɪᴍᴇ: ${currentTime.toLocaleTimeString()}\n`;
       captionText += `│🛠 ᴠᴇʀsɪᴏɴ: 1.0.0\n`;
       captionText += `└─────────────┈⳹\n\n`;
-      captionText += `🎯 Select a menu category from the list below.\n`;
+      captionText += `🎯 Select a menu category below:\n`;
       captionText += `📊 Total Categories: ${folders.length + 1}\n`;
       
       // Priority order for menus
@@ -71,47 +81,140 @@ export default {
         return aIndex - bIndex;
       });
 
-      // Build rows for classic WhatsApp listMessage
-      const rows = [];
+      // Get local image only (no profile picture)
+      let imageBuffer = null;
+      console.log("[Menu] Loading local menu image");
+      
+      const possiblePaths = [
+        path.resolve(process.cwd(), "Defaults", "images", "menu.png"),
+        path.resolve(process.cwd(), "defaults", "images", "menu.png"), 
+        path.resolve(process.cwd(), "assets", "images", "menu.png")
+      ];
+      
+      for (const imagePath of possiblePaths) {
+        if (fs.existsSync(imagePath)) {
+          imageBuffer = fs.readFileSync(imagePath);
+          console.log(`[Menu] Using local image: ${imagePath}`);
+          break;
+        }
+      }
+      
+      if (!imageBuffer) {
+        console.log("[Menu] No local image found, continuing without image");
+      }
 
-      // All commands first
-      rows.push({
-        title: "📶 All Commands",
-        rowId: `${m.prefix}allmenu`,
-        description: "View all available commands in one list",
+      // Build menu rows for single_select - FIXED FORMAT
+      const menuRows = [];
+
+      // Add allmenu first
+      menuRows.push({
+        header: "📶 All Commands",
+        title: "All Menu",
+        description: "View all available commands",
+        id: `${m.prefix}allmenu`
       });
 
-      // One row per category
+      // Add each menu category
       for (const folder of sortedFolders) {
         const emoji = menuSystem.getMenuEmoji(folder.name);
-        rows.push({
-          title: `${emoji} ${folder.displayName}`,
-          rowId: `${m.prefix}${folder.name.toLowerCase()}`,
+        menuRows.push({
+          header: emoji,
+          title: folder.displayName,
           description: `View ${folder.displayName.toLowerCase()} commands`,
+          id: `${m.prefix}${folder.name.toLowerCase()}`
         });
       }
 
-      const sections = [
-        {
-          title: "Menu Categories",
-          rows,
-        },
-      ];
+      // Prepare header with image if available
+      let headerConfig = {
+        title: "🤖 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 MENU",
+        subtitle: timeGreeting,
+        hasMediaAttachment: false
+      };
 
-      // Send Baileys listMessage
-      await sock.sendMessage(
-        m.chat,
-        {
-          text: captionText,
-          footer: "© 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Select a category",
-          title: "🤖 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 MENU",
-          buttonText: "📋 Open Menu",
-          sections,
-        },
-        { quoted: m },
-      );
+      if (imageBuffer) {
+        try {
+          const mediaMessage = await prepareWAMessageMedia(
+            { image: imageBuffer },
+            { upload: sock.waUploadToServer }
+          );
+          
+          headerConfig = {
+            title: "🤖 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 MENU",
+            subtitle: timeGreeting,
+            hasMediaAttachment: true,
+            imageMessage: mediaMessage.imageMessage
+          };
+          console.log("[Menu] Image header prepared successfully");
+        } catch (imgErr) {
+          console.error("[Menu] Failed to prepare image header:", imgErr.message);
+        }
+      }
 
-      console.log("[Menu] List menu sent successfully!");
+      // Create interactive message with PROPER STRING FORMAT
+      const msg = generateWAMessageFromContent(m.chat, {
+        viewOnceMessage: {
+          message: {
+            messageContextInfo: {
+              deviceListMetadata: {},
+              deviceListMetadataVersion: 2
+            },
+            interactiveMessage: proto.Message.InteractiveMessage.create({
+              body: proto.Message.InteractiveMessage.Body.create({
+                text: captionText
+              }),
+              footer: proto.Message.InteractiveMessage.Footer.create({
+                text: "© 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Select a category"
+              }),
+              header: proto.Message.InteractiveMessage.Header.create(headerConfig),
+              nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
+                buttons: [
+                  {
+                    name: "single_select",
+                    buttonParamsJson: JSON.stringify({
+                      title: "📋 Select Menu",
+                      sections: [{
+                        title: "Menu Categories",
+                        highlight_label: "Popular",
+                        rows: menuRows
+                      }]
+                    })
+                  },
+                  {
+                    name: "quick_reply",
+                    buttonParamsJson: JSON.stringify({
+                      display_text: "📶 All Commands",
+                      id: `${m.prefix}allmenu`
+                    })
+                  },
+                  {
+                    name: "quick_reply",
+                    buttonParamsJson: JSON.stringify({
+                      display_text: "ℹ️ Bot Info",
+                      id: `${m.prefix}botinfo`
+                    })
+                  },
+                  {
+                    name: "cta_url",
+                    buttonParamsJson: JSON.stringify({
+                      display_text: "💬 Support Channel",
+                      url: "https://whatsapp.com/channel/0029VbBK53XBvvslYeZlBe0V",
+                      merchant_url: "https://whatsapp.com/channel/0029VbBK53XBvvslYeZlBe0V"
+                    })
+                  }
+                ]
+              })
+            })
+          }
+        }
+      }, {});
+
+      // Send the message
+      await sock.relayMessage(msg.key.remoteJid, msg.message, {
+        messageId: msg.key.id
+      });
+
+      console.log("[Menu] Interactive menu sent successfully!");
       return { success: true };
       
     } catch (error) {
