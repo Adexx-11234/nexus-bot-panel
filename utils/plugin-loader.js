@@ -457,104 +457,250 @@ class PluginLoader {
   }
 
   async executeCommand(sock, sessionId, commandName, args, m) {
-    try {
-      const plugin = this.findCommand(commandName)
-      if (!plugin) return { success: false, silent: true }
+  try {
+    const plugin = this.findCommand(commandName)
+    if (!plugin) return { success: false, silent: true }
 
-      if (!m.pushName) {
-        this.extractPushName(sock, m)
-          .then((name) => {
-            m.pushName = name
-          })
-          .catch(() => {})
-      }
+    if (!m.pushName) {
+      this.extractPushName(sock, m)
+        .then((name) => {
+          m.pushName = name
+        })
+        .catch(() => {})
+    }
 
-      const isCreator = this.checkIsBotOwner(sock, m.sender, m.key?.fromMe)
+    const isCreator = this.checkIsBotOwner(sock, m.sender, m.key?.fromMe)
 
-      const enhancedM = {
-        ...m,
-        chat: m.chat || m.key?.remoteJid || m.from,
-        sender: m.sender || m.key?.participant || m.from,
-        isCreator,
-        isOwner: isCreator,
-        isGroup: m.isGroup || (m.chat && m.chat.endsWith("@g.us")),
-        sessionContext: m.sessionContext || { telegram_id: "Unknown", session_id: sessionId },
-        sessionId,
-        reply: m.reply,
-        prefix: m.prefix || ".",
-        pluginCategory: plugin.category,
-        commandName: commandName.toLowerCase()
-      }
+    const enhancedM = {
+      ...m,
+      chat: m.chat || m.key?.remoteJid || m.from,
+      sender: m.sender || m.key?.participant || m.from,
+      isCreator,
+      isOwner: isCreator,
+      isGroup: m.isGroup || (m.chat && m.chat.endsWith("@g.us")),
+      sessionContext: m.sessionContext || { telegram_id: "Unknown", session_id: sessionId },
+      sessionId,
+      reply: m.reply,
+      prefix: m.prefix || ".",
+      pluginCategory: plugin.category,
+      commandName: commandName.toLowerCase()
+    }
 
-      // ✅ CRITICAL FIX 1: CHECK BOT MODE FIRST (before ANY permission checks)
-      const botModeAllowed = await this._checkBotMode(sock, enhancedM)
-      if (!botModeAllowed) {
-        log.debug(`Bot in self-mode, skipping command from ${enhancedM.sender}`)
-        this.clearTempData()
-        return { success: false, silent: true }
-      }
+    // ✅ STEP 1: CHECK BOT MODE FIRST
+    const botModeAllowed = await this._checkBotMode(sock, enhancedM)
+    if (!botModeAllowed) {
+      log.debug(`Bot in self-mode, skipping command from ${enhancedM.sender}`)
+      this.clearTempData()
+      return { success: false, silent: true }
+    }
 
-      // ✅ CRITICAL FIX 2: CHECK PERMISSIONS EARLY (before lock acquisition)
-      const permissionCheck = await this._checkPermissionsCached(sock, plugin, enhancedM)
+    // ✅ STEP 2: CHECK IF SENDER HAS PERMISSION TO USE THIS COMMAND
+    // This is independent of which bot processes it - validates the command itself
+    const senderValidation = await this._validateSenderPermissions(sock, plugin, enhancedM)
+    
+    if (!senderValidation.allowed) {
+      // Command is invalid - only ONE bot should send error
+      const needsDeduplication = plugin.category === 'groupmenu' || plugin.category === 'group' || plugin.category === 'gamemenu'
+      const messageKey = needsDeduplication ? this.deduplicator.generateKey(enhancedM.chat, m.key?.id) : null
+      const errorActionKey = messageKey ? `cmd-error-${commandName}` : null
       
-      if (!permissionCheck.allowed) {
-        this.clearTempData()
-        
-        if (permissionCheck.silent) {
-          log.debug(`Permission denied silently for ${enhancedM.sender}: ${permissionCheck.reason || 'unknown'}`)
+      if (messageKey && errorActionKey) {
+        if (!this.deduplicator.tryLockForProcessing(messageKey, sessionId, errorActionKey)) {
+          log.debug(`Another bot already sent error for ${commandName}`)
+          this.clearTempData()
           return { success: false, silent: true }
         }
         
         try {
-          await sock.sendMessage(enhancedM.chat, { text: permissionCheck.message }, { quoted: m })
-        } catch (sendError) {
-          log.error("Failed to send permission error:", sendError)
+          await sock.sendMessage(enhancedM.chat, { 
+            text: senderValidation.message 
+          }, { quoted: m })
+        } catch (error) {
+          log.error("Failed to send permission error:", error)
         }
         
-        return { success: false, error: permissionCheck.message }
+        this.deduplicator.markAsProcessed(messageKey, sessionId, errorActionKey)
       }
+      
+      this.clearTempData()
+      return { success: false, error: senderValidation.message }
+    }
 
-      // ✅ FIX 3: ACQUIRE LOCK ONLY AFTER ALL CHECKS PASS
-      const needsDeduplication = plugin.category === 'groupmenu' || plugin.category === 'gamemenu'
-      const messageKey = needsDeduplication ? this.deduplicator.generateKey(enhancedM.chat, m.key?.id) : null
-      const executionActionKey = needsDeduplication ? `cmd-execute-${commandName}` : null
+    // ✅ STEP 3: SENDER IS VALID - Check if this bot CAN execute
+    // For groupmenu/group commands, check bot's capabilities
+    const botCapability = await this._checkBotCapabilities(sock, plugin, enhancedM)
+    
+    const needsDeduplication = plugin.category === 'groupmenu' || plugin.category === 'group' || plugin.category === 'gamemenu'
+    const messageKey = needsDeduplication ? this.deduplicator.generateKey(enhancedM.chat, m.key?.id) : null
+    const executionActionKey = needsDeduplication ? `cmd-execute-${commandName}` : null
 
-      if (messageKey && this.deduplicator.isActionProcessed(messageKey, executionActionKey)) {
-        log.debug(`Command ${commandName} already executed by another authorized bot`)
-        this.clearTempData()
-        return { success: false, silent: true }
-      }
+    // Check if already fully processed
+    if (messageKey && this.deduplicator.isActionProcessed(messageKey, executionActionKey)) {
+      log.debug(`Command ${commandName} already executed by another bot`)
+      this.clearTempData()
+      return { success: false, silent: true }
+    }
 
-      if (messageKey && !this.deduplicator.tryLockForProcessing(messageKey, sessionId, executionActionKey)) {
-        log.debug(`Command ${commandName} locked by another authorized bot`)
-        this.clearTempData()
-        return { success: false, silent: true }
-      }
-
-      // Check group-only setting
-      if (enhancedM.isGroup) {
-        const groupOnlyAllowed = await this._checkGroupOnly(sock, enhancedM, commandName)
-        if (!groupOnlyAllowed) {
+    // ✅ STEP 4: PRIORITY-BASED LOCK ACQUISITION
+    if (!botCapability.canExecute) {
+      // This bot CANNOT execute (e.g., non-admin bot for admin command)
+      // Check if a capable bot already processed or is processing
+      if (messageKey) {
+        // Check if any capable bot marked as processing
+        if (this.deduplicator.isActionProcessed(messageKey, `${executionActionKey}-capable`)) {
+          log.debug(`Capable bot already processing ${commandName}, incapable bot skipping`)
+          this.clearTempData()
+          return { success: false, silent: true }
+        }
+        
+        // No capable bot yet - this incapable bot can try to lock
+        // But if a capable bot comes, it should take over
+        if (!this.deduplicator.tryLockForProcessing(messageKey, sessionId, `${executionActionKey}-incapable`)) {
+          log.debug(`Another incapable bot already locked ${commandName}`)
+          this.clearTempData()
+          return { success: false, silent: true }
+        }
+        
+        // This incapable bot locked it, but can't execute
+        // Just wait a bit to see if capable bot comes
+        await new Promise(resolve => setTimeout(resolve, 100))
+        
+        // Check again if capable bot took over
+        if (this.deduplicator.isActionProcessed(messageKey, `${executionActionKey}-capable`)) {
+          log.debug(`Capable bot took over ${commandName}, releasing incapable lock`)
           this.clearTempData()
           return { success: false, silent: true }
         }
       }
+      
+      // No capable bot available, incapable bot must skip
+      log.debug(`Bot cannot execute ${commandName}: ${botCapability.reason}`)
+      this.clearTempData()
+      return { success: false, silent: true }
+    }
 
-      // Execute plugin
-      const result = await this.executePluginWithFallback(sock, sessionId, args, enhancedM, plugin)
+    // ✅ STEP 5: THIS BOT CAN EXECUTE - Acquire execution lock
+    if (messageKey) {
+      // Mark that a capable bot is processing (overrides incapable locks)
+      this.deduplicator.markAsProcessed(messageKey, sessionId, `${executionActionKey}-capable`)
+      
+      // Try to acquire main execution lock
+      if (!this.deduplicator.tryLockForProcessing(messageKey, sessionId, executionActionKey)) {
+        // Check if another capable bot already locked it
+        log.debug(`Another capable bot already locked ${commandName}`)
+        this.clearTempData()
+        return { success: false, silent: true }
+      }
+    }
 
-      if (messageKey && executionActionKey) {
-        this.deduplicator.markAsProcessed(messageKey, sessionId, executionActionKey)
+    // Check group-only setting
+    if (enhancedM.isGroup) {
+      const groupOnlyAllowed = await this._checkGroupOnly(sock, enhancedM, commandName)
+      if (!groupOnlyAllowed) {
+        this.clearTempData()
+        return { success: false, silent: true }
+      }
+    }
+
+    // ✅ STEP 6: EXECUTE PLUGIN
+    const result = await this.executePluginWithFallback(sock, sessionId, args, enhancedM, plugin)
+
+    if (messageKey && executionActionKey) {
+      this.deduplicator.markAsProcessed(messageKey, sessionId, executionActionKey)
+    }
+
+    this.clearTempData()
+    return { success: true, result }
+  } catch (error) {
+    log.error(`Error executing command ${commandName}:`, error)
+    this.clearTempData()
+    return { success: false, error: error.message }
+  }
+}
+
+// ✅ NEW METHOD: Validate sender permissions (is sender allowed to use this command?)
+async _validateSenderPermissions(sock, plugin, m) {
+  try {
+    // For group/groupmenu commands in groups, check if SENDER is admin
+    if (m.isGroup && (plugin.category === 'groupmenu' || plugin.category === 'group')) {
+      // Check if command requires admin
+      if (plugin.adminOnly) {
+        const senderIsAdmin = await isGroupAdmin(sock, m.chat, m.sender)
+        
+        if (!m.isCreator && !senderIsAdmin) {
+          return { 
+            allowed: false, 
+            message: "❌ Only group admins can use this command!" 
+          }
+        }
+      }
+    }
+
+    // Owner-only commands
+    if (plugin.category === 'ownermenu' && !m.isCreator) {
+      return { 
+        allowed: false, 
+        message: "❌ Bot owner only." 
+      }
+    }
+
+    // VIP commands
+    if (plugin.category === 'vipmenu' || this.determineRequiredPermission(plugin) === 'vip') {
+      const { VIPQueries } = await import("../database/query.js")
+      const { VIPHelper } = await import("../whatsapp/index.js")
+
+      const userTelegramId = VIPHelper.fromSessionId(m.sessionId)
+      if (!userTelegramId) {
+        return { 
+          allowed: false, 
+          message: "❌ Could not verify VIP status." 
+        }
       }
 
-      this.clearTempData()
-      return { success: true, result }
-    } catch (error) {
-      log.error(`Error executing command ${commandName}:`, error)
-      this.clearTempData()
-      return { success: false, error: error.message }
+      const vipStatus = await VIPQueries.isVIP(userTelegramId)
+      if (!vipStatus.isVIP && !m.isCreator) {
+        return {
+          allowed: false,
+          message: "❌ VIP access required.\n\nContact bot owner.",
+        }
+      }
+    }
+
+    return { allowed: true }
+  } catch (error) {
+    log.error("Error validating sender permissions:", error)
+    return { 
+      allowed: false, 
+      message: "❌ Permission check failed." 
     }
   }
+}
+
+// ✅ NEW METHOD: Check if THIS BOT can execute (bot capabilities)
+async _checkBotCapabilities(sock, plugin, m) {
+  try {
+    // For group/groupmenu commands that are adminOnly
+    if (m.isGroup && (plugin.category === 'groupmenu' || plugin.category === 'group') && plugin.adminOnly) {
+      const { isBotAdmin: checkBotAdmin } = await import("../whatsapp/groups/index.js")
+      const botIsAdmin = await checkBotAdmin(sock, m.chat)
+      
+      if (!botIsAdmin && !m.isCreator) {
+        return { 
+          canExecute: false, 
+          reason: 'Bot is not group admin, cannot execute admin-required command' 
+        }
+      }
+    }
+
+    return { canExecute: true }
+  } catch (error) {
+    log.error("Error checking bot capabilities:", error)
+    return { 
+      canExecute: false, 
+      reason: 'Capability check failed' 
+    }
+  }
+}
 
   // ✅ FIX 4: IMPROVED BOT MODE CHECK WITH OWNER VALIDATION
   async _checkBotMode(sock, m) {
