@@ -325,6 +325,25 @@ async createConnection(sessionId, phoneNumber = null, callbacks = {}, allowPairi
       if (authState.cleanup) authState.cleanup()
     }
 
+    // ✅ CRITICAL: Use ev.process() to capture buffered messages
+    // This handles messages that arrive BEFORE event handlers are fully registered
+    sock.ev.process(async (events) => {
+      // This is called for ALL events, including buffered ones
+      // Check if this is a messages.upsert event
+      if (events['messages.upsert']) {
+        // Store for later processing once handlers are set up
+        if (!sock._deferredEvents) {
+          sock._deferredEvents = []
+        }
+        sock._deferredEvents.push({
+          type: 'messages.upsert',
+          data: events['messages.upsert'],
+          timestamp: Date.now()
+        })
+        logger.debug(`[${sessionId}] Captured upsert event via ev.process()`)
+      }
+    })
+
     // Track active socket
     this.activeSockets.set(sessionId, sock)
 

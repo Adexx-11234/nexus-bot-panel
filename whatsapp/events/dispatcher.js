@@ -55,11 +55,56 @@ export class EventDispatcher {
 
       sock.eventHandlersSetup = true
 
+      // ✅ CRITICAL FIX: Process any deferred events that were captured before handlers were ready
+      this._processDeferredEvents(sock, sessionId)
+
       logger.info(`Event handlers setup complete for ${sessionId}`)
       return true
     } catch (error) {
       logger.error(`Failed to setup event handlers for ${sessionId}:`, error)
       return false
+    }
+  }
+
+  /**
+   * Process events that were deferred before handlers were set up
+   * @private
+   */
+  _processDeferredEvents(sock, sessionId) {
+    try {
+      const deferred = sock._deferredEvents || []
+      
+      if (deferred.length === 0) {
+        return
+      }
+
+      logger.info(`[${sessionId}] Processing ${deferred.length} deferred events`)
+
+      // Sort by timestamp to maintain order
+      deferred.sort((a, b) => a.timestamp - b.timestamp)
+
+      // Process each deferred event
+      for (const event of deferred) {
+        if (event.type === 'messages.upsert') {
+          try {
+            recordSessionActivity(sessionId)
+            this.messageHandler
+              .handleMessagesUpsert(sock, sessionId, event.data)
+              .catch((err) => {
+                logger.error(`Error processing deferred message upsert for ${sessionId}:`, err)
+              })
+          } catch (error) {
+            logger.error(`Error handling deferred message upsert:`, error)
+          }
+        }
+      }
+
+      // Clear deferred events
+      sock._deferredEvents = []
+      logger.debug(`[${sessionId}] Deferred events cleared`)
+
+    } catch (error) {
+      logger.error(`Failed to process deferred events for ${sessionId}:`, error)
     }
   }
 

@@ -515,21 +515,44 @@ export class SessionEventHandlers {
    */
   async _sendWelcomeMessage(sock, sessionId) {
     try {
-      const userJid = sock.user.id
+      let userJid = sock.user?.id
       const telegramId = sessionId.replace("session_", "")
+
+      // ✅ FIX: Ensure JID is properly formatted
+      // sock.user.id comes as "62811xxx:xx@s.whatsapp.net" but we need just the phone part
+      if (userJid && userJid.includes('@')) {
+        // Already formatted, use as-is
+        logger.debug(`User JID already formatted: ${userJid}`)
+      } else if (userJid) {
+        // Not formatted, add @s.whatsapp.net
+        userJid = userJid + '@s.whatsapp.net'
+        logger.debug(`Formatted user JID: ${userJid}`)
+      } else {
+        logger.error(`No user JID found for ${sessionId}`)
+        return
+      }
 
       // Get user's custom prefix
       const userPrefix = await this.getUserPrefix(telegramId)
 
       logger.info(`📤 Sending welcome message to ${sessionId} (JID: ${userJid}, prefix: "${userPrefix}")`)
 
+      // ✅ FIX: Wait a moment to ensure socket is fully ready
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+
       // Send welcome message with user's prefix
-      await sock.sendMessage(userJid, {
+      const welcomeResult = await sock.sendMessage(userJid, {
         text: `Welcome to 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙! 🤖\n\nType *${userPrefix}allmenu* to begin exploring all features.`,
       })
 
+      if (!welcomeResult) {
+        logger.warn(`Welcome message returned no result for ${sessionId}`)
+      } else {
+        logger.debug(`Welcome message result:`, welcomeResult)
+      }
+
       // Flush buffer if buffering
-      if (sock.ev.isBuffering && sock.ev.isBuffering()) {
+      if (sock.ev?.isBuffering?.()) {
         sock.ev.flush()
       }
 
@@ -537,18 +560,26 @@ export class SessionEventHandlers {
       await new Promise((resolve) => setTimeout(resolve, 500))
 
       // Send ping command with user's prefix
-      await sock.sendMessage(userJid, {
+      const pingResult = await sock.sendMessage(userJid, {
         text: `${userPrefix}ping`,
       })
 
+      if (!pingResult) {
+        logger.warn(`Ping message returned no result for ${sessionId}`)
+      } else {
+        logger.debug(`Ping message result:`, pingResult)
+      }
+
       // Flush buffer again
-      if (sock.ev.isBuffering && sock.ev.isBuffering()) {
+      if (sock.ev?.isBuffering?.()) {
         sock.ev.flush()
       }
 
       logger.info(`✅ Welcome message sent successfully to ${sessionId}`)
     } catch (error) {
       logger.error(`❌ Failed to send welcome message to ${sessionId}:`, error)
+      logger.error(`Error details: ${error.message}`)
+      logger.error(`Stack: ${error.stack}`)
     }
   }
 
