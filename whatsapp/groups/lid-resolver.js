@@ -38,12 +38,20 @@ export async function getLidForPn(sock, phoneNumber) {
 
 /**
  * Get phone number from LID using Baileys v7 signal repository
+ * WITH TIMEOUT to prevent hanging after socket degrades
  */
-export async function getPnForLid(sock, lid) {
+export async function getPnForLid(sock, lid, timeoutMs = 3000) {
   try {
     // Baileys v7+ method
     if (sock.signalRepository?.lidMapping?.getPNForLID) {
-      let pn = await sock.signalRepository.lidMapping.getPNForLID(lid)
+      // ✅ Add timeout to prevent hanging
+      let pn = await Promise.race([
+        sock.signalRepository.lidMapping.getPNForLID(lid),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('LID resolution timeout')), timeoutMs)
+        )
+      ])
+      
       if (pn) {
         // Ensure it's in proper JID format (@s.whatsapp.net)
         // First remove device suffix (:0, :1, etc) then extract digits
@@ -56,7 +64,7 @@ export async function getPnForLid(sock, lid) {
     // Fallback: return LID as-is
     return lid
   } catch (error) {
-    logger.error(`Error getting PN for ${lid}:`, error)
+    logger.warn(`LID resolution failed for ${lid} (timeout or error), using LID as fallback: ${error.message}`)
     return lid
   }
 }
