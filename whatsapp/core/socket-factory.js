@@ -7,7 +7,7 @@
  * when needed, completely bypassing baileys' global tracking.
  */
 
-import { createComponentLogger } from '../utils/logger.js'
+import { createComponentLogger } from '../../utils/logger.js'
 
 const logger = createComponentLogger('SOCKET_FACTORY')
 
