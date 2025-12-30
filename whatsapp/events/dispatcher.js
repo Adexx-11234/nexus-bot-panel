@@ -5,7 +5,7 @@ import { GroupEventHandler } from "./group.js"
 import { ConnectionEventHandler } from "./connection.js"
 import { UtilityEventHandler } from "./utility.js"
 import { recordSessionActivity } from "../utils/index.js"
-import { enhanceTransactionHandling, monitorKeyStoreHealth } from "../core/index.js"
+import { enhanceTransactionHandling } from "../core/index.js"
 
 const logger = createComponentLogger("EVENT_DISPATCHER")
 
