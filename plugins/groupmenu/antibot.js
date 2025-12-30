@@ -40,6 +40,16 @@ export default {
     try {
       switch (action) {
         case "on":
+          // Check if bot is admin before enabling
+          const botIsAdmin = await adminChecker.isBotAdmin(sock, groupJid)
+          if (!botIsAdmin) {
+            return {
+              response: "⚠️ *Cannot Enable Anti-Bot*\n\n" +
+                "I need admin permissions to remove bots.\n" +
+                "Please make me an admin first!\n\n" +
+                "> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
+            }
+          }
           await GroupQueries.setAntiCommand(groupJid, "antibot", true)
           return { response: "✅ Anti-bot enabled\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }
         
@@ -49,8 +59,13 @@ export default {
 
         case "status":
           const status = await GroupQueries.isAntiCommandEnabled(groupJid, "antibot")
+          const botAdminStatus = await adminChecker.isBotAdmin(sock, groupJid)
           return {
-            response: `🤖 *Anti-bot Status*\n\nStatus: ${status ? "✅ Enabled" : "❌ Disabled"}\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
+            response: `🤖 *Anti-bot Status*\n\n` +
+              `Status: ${status ? "✅ Enabled" : "❌ Disabled"}\n` +
+              `Bot Admin: ${botAdminStatus ? "✅ Yes" : "❌ No"}\n\n` +
+              `${!botAdminStatus ? "⚠️ Bot needs admin permissions to remove bots!\n\n" : ""}` +
+              `> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
           }
 
         default:
@@ -106,35 +121,43 @@ export default {
     try {
       // Final protection check before removal
       if (await this.isProtectedUser(sock, groupJid, botJid)) {
-        logger.warn(`Attempted to remove protected user, aborting: ${botJid}`)
+        logger.warn(`[Anti-Bot] Attempted to remove protected user, aborting: ${botJid}`)
+        return
+      }
+
+      // Check if bot has admin permissions FIRST
+      const adminChecker = new AdminChecker()
+      const botIsAdmin = await adminChecker.isBotAdmin(sock, groupJid)
+      
+      if (!botIsAdmin) {
+        logger.warn(`[Anti-Bot] Bot is not admin in ${groupJid}, cannot remove ${botJid}`)
         return
       }
 
       logger.info(`[Anti-Bot] Attempting to remove bot: ${botJid} from ${groupJid}`)
-      
-      // Send warning message BEFORE removal
-      await sock.sendMessage(groupJid, {
-        text: `🤖 *Bot Detected!*\n\n` +
-          `👤 User: @${botJid.split('@')[0]}\n` +
-          `⚡ Action: Removing unauthorized bot...\n` +
-          `📋 Detection: ${detectionMethod}\n\n` +
-          `> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
-        mentions: [botJid]
-      })
-
-      // Wait a moment before removal
-      await new Promise(resolve => setTimeout(resolve, 1000))
       
       // Attempt removal with proper error handling
       try {
         await sock.groupParticipantsUpdate(groupJid, [botJid], "remove")
         logger.info(`[Anti-Bot] Successfully removed bot: ${botJid}`)
         
+        // Delete the bot's message
+        try {
+          await sock.sendMessage(groupJid, {
+            delete: m.key
+          })
+          logger.info(`[Anti-Bot] Deleted bot message from ${botJid}`)
+        } catch (deleteError) {
+          logger.error(`[Anti-Bot] Failed to delete bot message:`, deleteError)
+        }
+        
         // Send success confirmation
         await sock.sendMessage(groupJid, {
           text: `✅ *Bot Removed Successfully!*\n\n` +
+            `👤 User: @${botJid.split('@')[0]}\n` +
             `The unauthorized bot has been removed from the group.\n\n` +
-            `> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
+            `> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+          mentions: [botJid]
         })
         
         // Log the violation
