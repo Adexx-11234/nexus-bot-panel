@@ -136,20 +136,23 @@ export default {
 
       logger.info(`[Anti-Bot] Attempting to remove bot: ${botJid} from ${groupJid}`)
       
+      // Delete the bot's message FIRST
+      try {
+        await sock.sendMessage(groupJid, {
+          delete: m.key
+        })
+        logger.info(`[Anti-Bot] Deleted bot message from ${botJid}`)
+      } catch (deleteError) {
+        logger.error(`[Anti-Bot] Failed to delete bot message:`, deleteError)
+      }
+      
+      // Wait a moment before removal
+      await new Promise(resolve => setTimeout(resolve, 500))
+      
       // Attempt removal with proper error handling
       try {
         await sock.groupParticipantsUpdate(groupJid, [botJid], "remove")
         logger.info(`[Anti-Bot] Successfully removed bot: ${botJid}`)
-        
-        // Delete the bot's message
-        try {
-          await sock.sendMessage(groupJid, {
-            delete: m.key
-          })
-          logger.info(`[Anti-Bot] Deleted bot message from ${botJid}`)
-        } catch (deleteError) {
-          logger.error(`[Anti-Bot] Failed to delete bot message:`, deleteError)
-        }
         
         // Send success confirmation
         await sock.sendMessage(groupJid, {
