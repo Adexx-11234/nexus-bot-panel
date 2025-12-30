@@ -443,8 +443,15 @@ const normalizeMetadata = (metadata) => {
 }
 
 // ==================== SOCKET CREATION ====================
+// Import socket manager for multi-socket workaround
+import { getSocketManager } from '../whatsapp/core/index.js'
+
 /**
  * Create Baileys socket - extensions are applied via extendSocket in connection manager
+ * 
+ * WORKAROUND: The baileys library uses a global __ACTIVE_SOCKET__ variable that gets
+ * overwritten with each new connection. This function registers each socket with
+ * a SocketManager to preserve multiple simultaneous connections.
  */
 export function createBaileysSocket(authState, sessionId, getMessage = null) {
   try {
@@ -456,6 +463,14 @@ export function createBaileysSocket(authState, sessionId, getMessage = null) {
     })
 
     setupSocketDefaults(sock)
+
+    // ✅ WORKAROUND: Register this socket with SocketManager
+    // This prevents baileys' global socket variable from overwriting previous sockets
+    if (sessionId) {
+      const socketManager = getSocketManager()
+      socketManager.registerSocket(sessionId, sock)
+      logger.info(`[Socket Manager] Registered socket for session: ${sessionId}`)
+    }
 
     // Socket extensions (sendMessage override, groupMetadata, LID helpers, media helpers)
     // are applied in connection manager via extendSocket()
