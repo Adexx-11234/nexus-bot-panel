@@ -365,57 +365,14 @@ export class MessageProcessor {
 if (m.isCommand && m.body) {
   this.messageStats.commands++
   
-  // Check if command needs deduplication (groupmenu/gamemenu only)
-  const plugin = this.pluginLoader.findCommand(m.command.name)
-  const needsDeduplication = plugin && (plugin.category === 'groupmenu' || plugin.category === 'gamemenu')
+  // ✅ REMOVED PRE-EMPTIVE LOCK - Let plugin-loader handle it based on capability
   
-  if (needsDeduplication) {
-    // Try to lock for processing
-    const messageKey = this.pluginLoader.deduplicator.generateKey(m.chat, m.key?.id)
-    if (messageKey) {
-      // Use PRIMARY command name (first in commands array) to prevent alias issues
-      const primaryCommand = plugin.commands?.[0] || m.command.name
-      const actionKey = `command-${primaryCommand}`
-      
-      if (!this.pluginLoader.deduplicator.tryLockForProcessing(messageKey, sessionId, actionKey)) {
-        logger.debug(`Command ${m.command.name} already being processed by another session`)
-        return { processed: false, silent: true, duplicate: true }
-      }
-    }
-  }
-  
-let result
+  let result
   try {
     result = await this._handleCommand(sock, sessionId, m)
   } catch (commandError) {
     logger.error(`Command execution failed: ${m.command.name}`, commandError)
-    
-    // On error, release lock so another bot can retry
-    if (needsDeduplication) {
-      const messageKey = this.pluginLoader.deduplicator.generateKey(m.chat, m.key?.id)
-      if (messageKey) {
-        const primaryCommand = plugin.commands?.[0] || m.command.name
-        const actionKey = `command-${primaryCommand}`
-        
-        // Remove the lock (don't mark as processed)
-        const entry = this.pluginLoader.deduplicator.processedMessages.get(messageKey)
-        if (entry && entry.lockedBy === sessionId) {
-          entry.lockedBy = null // Release lock for retry
-        }
-      }
-    }
-    
     return { processed: false, error: commandError.message }
-  }
-  
-  // Only mark as processed if command succeeded AND needs deduplication
-  if (needsDeduplication && result?.commandExecuted && !result?.error) {
-    const messageKey = this.pluginLoader.deduplicator.generateKey(m.chat, m.key?.id)
-    if (messageKey) {
-      const primaryCommand = plugin.commands?.[0] || m.command.name
-      const actionKey = `command-${primaryCommand}`
-      this.pluginLoader.deduplicator.markAsProcessed(messageKey, sessionId, actionKey)
-    }
   }
   
   return result
