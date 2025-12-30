@@ -112,7 +112,7 @@ export function enhanceTransactionHandling(sock, sessionId) {
 /**
  * Monitors key store health and detects storage issues early
  */
-export function monitorKeyStoreHealth(authState, sessionId) {
+/*export function monitorKeyStoreHealth(authState, sessionId) {
   const writeTest = async () => {
     try {
       // ✅ FIX: Safely access keys from authState
@@ -172,4 +172,4 @@ export function monitorKeyStoreHealth(authState, sessionId) {
     stop: () => clearInterval(healthCheckInterval),
     test: writeTest
   }
-}
+}*/

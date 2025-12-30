@@ -70,7 +70,7 @@ export class EventDispatcher {
       // Store monitor reference for cleanup on disconnect
       // Use the auth state from socket (it was set during socket creation)
       if (sock.authState && typeof sock.authState === 'object') {
-        sock._keyStoreMonitor = monitorKeyStoreHealth(sock.authState, sessionId)
+       // sock._keyStoreMonitor = monitorKeyStoreHealth(sock.authState, sessionId)
       } else {
         logger.warn(`[${sessionId}] Auth state not available on socket, skipping key store health monitoring`)
       }
