@@ -15,6 +15,8 @@ export class TelegramBot {
     this.options = options
     this.bot = null
     this.isRunning = false
+    this.isPolling = false
+    this.isRestartingPolling = false
     this.userStates = new Map()
     
     // Handlers (lazy loaded)
@@ -111,6 +113,7 @@ export class TelegramBot {
       logger.info('Webhook cleared successfully')
       
       await new Promise(resolve => setTimeout(resolve, 1000))
+      this.isPolling = true
       await this.bot.startPolling({ restart: true })
       logger.info('Polling started successfully')
       
@@ -128,10 +131,12 @@ export class TelegramBot {
             timeout: 30000
           }
         })
+        this.isPolling = true
         logger.info('Bot recreated with direct polling')
         
       } catch (pollingError) {
         logger.error('All polling methods failed:', pollingError.message)
+        this.isPolling = false
         throw pollingError
       }
     }
@@ -255,17 +260,47 @@ export class TelegramBot {
    * @private
    */
   _handlePollingError(error) {
+    // Check if this is a 409 Conflict error (another instance is polling)
+    const is409Error = error.message && error.message.includes('409')
+    
+    // Don't attempt to restart if:
+    // 1. Already restarting polling
+    // 2. Bot is not running
+    // 3. This is a 409 conflict (another instance is already polling)
+    if (this.isRestartingPolling || !this.isRunning || is409Error) {
+      if (is409Error) {
+        logger.warn('409 Conflict detected: Another bot instance is already polling. Skipping restart attempt.')
+        this.isPolling = false
+      }
+      return
+    }
+
+    this.isRestartingPolling = true
+
     setTimeout(async () => {
       try {
-        if (this.bot && this.isRunning) {
+        if (this.bot && this.isRunning && !this.isPolling) {
           logger.info('Attempting to restart polling...')
           await this.bot.stopPolling()
           await new Promise(resolve => setTimeout(resolve, 2000))
+          
+          this.isPolling = true
           await this.bot.startPolling({ restart: true })
           logger.info('Polling restarted successfully')
+        } else if (this.isPolling) {
+          logger.debug('Polling already active, skipping restart')
         }
       } catch (restartError) {
-        logger.error('Failed to restart polling:', restartError.message)
+        this.isPolling = false
+        
+        // Check if restart error is also a 409
+        if (restartError.message && restartError.message.includes('409')) {
+          logger.warn('409 Conflict on restart: Another bot instance is already polling.')
+        } else {
+          logger.error('Failed to restart polling:', restartError.message)
+        }
+      } finally {
+        this.isRestartingPolling = false
       }
     }, 5000)
   }
@@ -419,6 +454,8 @@ export class TelegramBot {
   async stop() {
     try {
       this.isRunning = false
+      this.isPolling = false
+      this.isRestartingPolling = false
       if (this.bot) {
         await this.bot.stopPolling()
         logger.info('Telegram bot stopped successfully')

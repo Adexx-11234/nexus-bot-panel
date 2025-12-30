@@ -449,23 +449,24 @@ import { getSocketManager } from '../whatsapp/core/index.js'
 /**
  * Create Baileys socket - extensions are applied via extendSocket in connection manager
  * 
- * WORKAROUND: The baileys library uses a global __ACTIVE_SOCKET__ variable that gets
- * overwritten with each new connection. This function registers each socket with
- * a SocketManager to preserve multiple simultaneous connections.
+ * WORKAROUND: The baileys library uses a global __ACTIVE_SOCKETS__ Map that stores
+ * multiple socket instances by sessionId. This function MUST pass sessionId in config
+ * so baileys can properly track multiple simultaneous connections.
  */
 export function createBaileysSocket(authState, sessionId, getMessage = null) {
   try {
+    // ✅ CRITICAL: Pass sessionId in config so baileys can map it correctly
     const sock = makeWASocket({
       ...baileysConfig,
       auth: authState,
+      sessionId,  // ✅ MUST pass sessionId here for multi-socket support
       getMessage: getMessage || defaultGetMessage,
       msgRetryCounterCache,
     })
 
     setupSocketDefaults(sock)
 
-    // ✅ WORKAROUND: Register this socket with SocketManager
-    // This prevents baileys' global socket variable from overwriting previous sockets
+    // ✅ Also register with local SocketManager as backup
     if (sessionId) {
       const socketManager = getSocketManager()
       socketManager.registerSocket(sessionId, sock)
