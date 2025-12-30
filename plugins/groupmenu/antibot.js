@@ -180,7 +180,7 @@ export default {
     }
   },
 
-  async detectBotFromMessage(m) {
+async detectBotFromMessage(m) {
     try {
       // Skip fromMe messages (bot's own messages)
       if (m.key?.fromMe === true) {
@@ -196,15 +196,16 @@ export default {
       if (m.key && m.key.id) {
         const messageId = m.key.id
         
-        // Check if message ID follows Baileys pattern
+        // First check: Is this a Baileys bot message?
         if (this.isBaileysMessageId(messageId)) {
-          // If it matches Baileys pattern but DOESN'T end with NEXUSBOT, it's a foreign bot
-          if (!messageId.endsWith('NEXUSBOT')) {
-            logger.info(`Foreign bot detected - Baileys message ID without NEXUSBOT: ${m.sender} (ID: ${messageId})`)
-            return true
-          } else {
+          // Second check: Is it OUR bot (ends with NEXUSBOT)?
+          if (messageId.endsWith('NEXUSBOT')) {
             logger.debug(`Own bot message detected (has NEXUSBOT suffix): ${messageId}`)
-            return false
+            return false // Our bot, don't kick
+          } else {
+            // Baileys bot but NOT ours - FOREIGN BOT
+            logger.info(`Foreign bot detected - Baileys message ID without NEXUSBOT: ${m.sender} (ID: ${messageId})`)
+            return true // Foreign bot, kick it!
           }
         }
       }
@@ -219,14 +220,14 @@ export default {
   isBaileysMessageId(messageId) {
     if (!messageId) return false
     
-    // Baileys typically generates message IDs in specific patterns
-    // Check for common Baileys message ID patterns (keep only most reliable)
+    // Baileys patterns - check if message ID STARTS with these patterns
     const baileysPatterns = [
-      /^3EB[0-9A-F]{17}/i, // Common Baileys pattern (removed $ to allow NEXUSBOT suffix)
-      /^BAE[0-9A-F]{17}/i, // Another Baileys pattern
-      /^3A[0-9A-F]{18}/i,  // Extended pattern
+      /^3EB[0-9A-F]+/i, // Starts with 3EB followed by hex chars
+      /^BAE[0-9A-F]+/i, // Starts with BAE followed by hex chars
+      /^3A[0-9A-F]+/i,  // Starts with 3A followed by hex chars
     ]
     
+    // Check if messageId matches any Baileys pattern
     return baileysPatterns.some(pattern => pattern.test(messageId))
   }
 }
