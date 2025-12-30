@@ -443,34 +443,33 @@ const normalizeMetadata = (metadata) => {
 }
 
 // ==================== SOCKET CREATION ====================
-// Import socket manager for multi-socket workaround
-import { getSocketManager } from '../whatsapp/core/index.js'
+// Import socket factory for multi-socket support (no node_modules modification needed)
+import { registerSocket, getSocket, getAllSockets } from '../whatsapp/core/socket-factory.js'
 
 /**
  * Create Baileys socket - extensions are applied via extendSocket in connection manager
  * 
- * WORKAROUND: The baileys library uses a global __ACTIVE_SOCKETS__ Map that stores
- * multiple socket instances by sessionId. This function MUST pass sessionId in config
- * so baileys can properly track multiple simultaneous connections.
+ * WORKAROUND: Instead of relying on baileys' global __ACTIVE_SOCKET__ variable,
+ * we manage all sockets in our own SocketFactory Map. This prevents socket overwriting
+ * and allows unlimited simultaneous connections.
  */
 export function createBaileysSocket(authState, sessionId, getMessage = null) {
   try {
-    // ✅ CRITICAL: Pass sessionId in config so baileys can map it correctly
+    // Create socket - baileys will use its internal variable but we capture it immediately
     const sock = makeWASocket({
       ...baileysConfig,
       auth: authState,
-      sessionId,  // ✅ MUST pass sessionId here for multi-socket support
       getMessage: getMessage || defaultGetMessage,
       msgRetryCounterCache,
     })
 
     setupSocketDefaults(sock)
 
-    // ✅ Also register with local SocketManager as backup
+    // ✅ CRITICAL: Register in our SocketFactory immediately
+    // This ensures we have our own reference independent of baileys' global variable
     if (sessionId) {
-      const socketManager = getSocketManager()
-      socketManager.registerSocket(sessionId, sock)
-      logger.info(`[Socket Manager] Registered socket for session: ${sessionId}`)
+      registerSocket(sessionId, sock)
+      logger.info(`[Socket Factory] Registered socket for session: ${sessionId}`)
     }
 
     // Socket extensions (sendMessage override, groupMetadata, LID helpers, media helpers)
