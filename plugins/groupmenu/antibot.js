@@ -95,46 +95,92 @@ export default {
       
       // Check if this message is from a bot based on message ID
       if (await this.detectBotFromMessage(m)) {
-        await this.handleDetectedBot(sock, m.chat, m.sender, "message_id_pattern")
+        await this.handleDetectedBot(sock, m.chat, m.sender, "message_id_pattern", m)
       }
     } catch (error) {
       logger.error("Error processing message for bot detection:", error)
     }
   },
 
-  async handleDetectedBot(sock, groupJid, botJid, detectionMethod) {
+  async handleDetectedBot(sock, groupJid, botJid, detectionMethod, m) {
     try {
       // Final protection check before removal
       if (await this.isProtectedUser(sock, groupJid, botJid)) {
         logger.warn(`Attempted to remove protected user, aborting: ${botJid}`)
         return
       }
+
+      logger.info(`[Anti-Bot] Attempting to remove bot: ${botJid} from ${groupJid}`)
       
-      await sock.groupParticipantsUpdate(groupJid, [botJid], "remove")
-      
+      // Send warning message BEFORE removal
       await sock.sendMessage(groupJid, {
-        text: `🤖 *Bot Detected & Removed!*\n\n` +
+        text: `🤖 *Bot Detected!*\n\n` +
           `👤 User: @${botJid.split('@')[0]}\n` +
-          `⚡ Action: Automatically removed\n` +
-          `📋 Reason: Unauthorized bot detected\n\n` +
+          `⚡ Action: Removing unauthorized bot...\n` +
+          `📋 Detection: ${detectionMethod}\n\n` +
           `> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
         mentions: [botJid]
       })
+
+      // Wait a moment before removal
+      await new Promise(resolve => setTimeout(resolve, 1000))
       
-      // Log the violation
-      await ViolationQueries.logViolation(
-        groupJid,
-        botJid,
-        "antibot",
-        `Suspected bot account (${detectionMethod})`,
-        { detectionMethod },
-        "kick",
-        0,
-        null
-      )
+      // Attempt removal with proper error handling
+      try {
+        await sock.groupParticipantsUpdate(groupJid, [botJid], "remove")
+        logger.info(`[Anti-Bot] Successfully removed bot: ${botJid}`)
+        
+        // Send success confirmation
+        await sock.sendMessage(groupJid, {
+          text: `✅ *Bot Removed Successfully!*\n\n` +
+            `The unauthorized bot has been removed from the group.\n\n` +
+            `> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
+        })
+        
+        // Log the violation
+        await ViolationQueries.logViolation(
+          groupJid,
+          botJid,
+          "antibot",
+          `Suspected bot account (${detectionMethod})`,
+          { detectionMethod },
+          "kick",
+          0,
+          null
+        )
+        
+      } catch (removeError) {
+        logger.error(`[Anti-Bot] Failed to remove bot ${botJid}:`, removeError)
+        
+        // Send failure message
+        await sock.sendMessage(groupJid, {
+          text: `⚠️ *Failed to Remove Bot*\n\n` +
+            `User: @${botJid.split('@')[0]}\n` +
+            `Reason: ${removeError.message || 'Unknown error'}\n\n` +
+            `💡 Possible reasons:\n` +
+            `• Bot is a group admin\n` +
+            `• Bot already left\n` +
+            `• Network/API issue\n\n` +
+            `Please try removing manually.\n\n` +
+            `> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+          mentions: [botJid]
+        })
+      }
       
     } catch (error) {
-      logger.error("Failed to remove detected bot:", error)
+      logger.error("[Anti-Bot] Error in handleDetectedBot:", error)
+      
+      // Try to send error notification
+      try {
+        await sock.sendMessage(groupJid, {
+          text: `❌ *Anti-Bot Error*\n\n` +
+            `Failed to process bot removal.\n` +
+            `Error: ${error.message}\n\n` +
+            `> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
+        })
+      } catch (msgError) {
+        logger.error("[Anti-Bot] Failed to send error message:", msgError)
+      }
     }
   },
 
@@ -145,7 +191,7 @@ export default {
       
       // Skip the bot itself
       if (normalizedUserJid === normalizedBotId) {
-        logger.info(`Protected: Bot itself - ${userJid}`)
+        logger.info(`[Anti-Bot] Protected: Bot itself - ${userJid}`)
         return true
       }
       
@@ -153,7 +199,7 @@ export default {
       const adminChecker = new AdminChecker()
       const isAdmin = await adminChecker.isGroupAdmin(sock, groupJid, userJid)
       if (isAdmin) {
-        logger.info(`Protected: Admin user - ${userJid}`)
+        logger.info(`[Anti-Bot] Protected: Admin user - ${userJid}`)
         return true
       }
       
@@ -166,21 +212,21 @@ export default {
         })
         
         if (participant && (participant.admin === 'admin' || participant.admin === 'superadmin')) {
-          logger.info(`Protected: Admin from metadata - ${userJid}`)
+          logger.info(`[Anti-Bot] Protected: Admin from metadata - ${userJid}`)
           return true
         }
       } catch (error) {
-        logger.error("Error getting group metadata for protection check:", error)
+        logger.error("[Anti-Bot] Error getting group metadata for protection check:", error)
       }
       
       return false
     } catch (error) {
-      logger.error("Error checking if user is protected:", error)
+      logger.error("[Anti-Bot] Error checking if user is protected:", error)
       return true // Return true on error to be safe
     }
   },
 
-async detectBotFromMessage(m) {
+  async detectBotFromMessage(m) {
     try {
       // Skip fromMe messages (bot's own messages)
       if (m.key?.fromMe === true) {
@@ -200,11 +246,11 @@ async detectBotFromMessage(m) {
         if (this.isBaileysMessageId(messageId)) {
           // Second check: Is it OUR bot (ends with NEXUSBOT)?
           if (messageId.endsWith('NEXUSBOT')) {
-            logger.debug(`Own bot message detected (has NEXUSBOT suffix): ${messageId}`)
+            logger.debug(`[Anti-Bot] Own bot message detected (has NEXUSBOT suffix): ${messageId}`)
             return false // Our bot, don't kick
           } else {
             // Baileys bot but NOT ours - FOREIGN BOT
-            logger.info(`Foreign bot detected - Baileys message ID without NEXUSBOT: ${m.sender} (ID: ${messageId})`)
+            logger.info(`[Anti-Bot] Foreign bot detected - Baileys ID without NEXUSBOT: ${m.sender} (ID: ${messageId})`)
             return true // Foreign bot, kick it!
           }
         }
@@ -212,7 +258,7 @@ async detectBotFromMessage(m) {
       
       return false
     } catch (error) {
-      logger.error("Error detecting bot from message:", error)
+      logger.error("[Anti-Bot] Error detecting bot from message:", error)
       return false
     }
   },
