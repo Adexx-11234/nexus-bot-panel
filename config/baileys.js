@@ -8,6 +8,7 @@ import { wrapBaileysSocket } from "../whatsapp/core/socket-wrapper.js"
 // ✅ Wrap baileys' makeWASocket to capture ALL sockets regardless of baileys version
 const makeWASocket = wrapBaileysSocket(originalMakeWASocket)
 
+
 // ==================== LOGGER CONFIGURATION ====================
 const baileysLogger = pino({
   level: process.env.BAILEYS_LOG_LEVEL || "silent",

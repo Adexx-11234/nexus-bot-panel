@@ -170,7 +170,6 @@ export class MessageProcessor {
       if (!m || !m.message) {
         return { processed: false, error: "Invalid message object" }
       }
-
       // Skip virtex check if message is from the bot itself
       if (!m.key?.fromMe) {
         const virtexCheck = analyzeMessage(m.message)

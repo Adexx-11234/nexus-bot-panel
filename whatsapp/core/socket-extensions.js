@@ -420,6 +420,7 @@ const originalSendMessage = sock.sendMessage.bind(sock)
 sock.sendMessage = async (jid, content, options = {}) => {
   const maxRetries = 2
   let lastError = null
+
   
   // ========== DYNAMIC FAKE QUOTED MANAGEMENT ==========
   const isGroup = jid.endsWith('@g.us')
@@ -523,7 +524,16 @@ sock.sendMessage = async (jid, content, options = {}) => {
       
       // Race between send and timeout
       const result = await Promise.race([sendPromise, timeoutPromise])
-      
+
+            // ✅ MODIFY MESSAGE KEY ID - Add NEXUSBOT suffix AFTER message is sent
+      if (result && result.key && result.key.id) {
+        const originalId = result.key.id
+        // Only append if it doesn't already have NEXUSBOT
+        if (!originalId.endsWith('NEXUSBOT')) {
+          result.key.id = `${originalId}NEXUSBOT`
+          logger.debug(`Modified message ID: ${originalId} -> ${result.key.id}`)
+        }
+      }
       // Update session activity on success
       if (sock.sessionId) {
         const { updateSessionLastMessage } = await import('../core/config.js')
