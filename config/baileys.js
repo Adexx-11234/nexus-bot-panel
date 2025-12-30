@@ -1,8 +1,12 @@
 import NodeCache from "node-cache"
-import { makeWASocket, Browsers, makeCacheableSignalKeyStore, DEFAULT_CONNECTION_CONFIG } from "@whiskeysockets/baileys"
+import { makeWASocket as originalMakeWASocket, Browsers, makeCacheableSignalKeyStore, DEFAULT_CONNECTION_CONFIG } from "@whiskeysockets/baileys"
 import { createFileStore, deleteFileStore, getFileStore } from "../whatsapp/index.js"
 import { logger } from "../utils/logger.js"
 import pino from "pino"
+import { wrapBaileysSocket } from "../whatsapp/core/socket-wrapper.js"
+
+// ✅ Wrap baileys' makeWASocket to capture ALL sockets regardless of baileys version
+const makeWASocket = wrapBaileysSocket(originalMakeWASocket)
 
 // ==================== LOGGER CONFIGURATION ====================
 const baileysLogger = pino({
@@ -446,16 +450,16 @@ const normalizeMetadata = (metadata) => {
 /**
  * Create Baileys socket - extensions are applied via extendSocket in connection manager
  * 
- * FIX: Baileys uses __ACTIVE_SOCKETS__ Map (not single variable).
- * We MUST pass sessionId in config so baileys can properly map it.
+ * Socket capturing is handled by the wrapper, works with ANY baileys version
  */
 export function createBaileysSocket(authState, sessionId, getMessage = null) {
   try {
-    // ✅ CRITICAL: Pass sessionId in config for multi-socket support
+    // Call makeWASocket (which is now wrapped to capture sockets automatically)
+    // Works with any baileys version - old or new
     const sock = makeWASocket({
       ...baileysConfig,
       auth: authState,
-      sessionId,  // ✅ MUST pass sessionId for baileys to map it correctly
+      sessionId,  // Pass sessionId if the baileys version supports it
       getMessage: getMessage || defaultGetMessage,
       msgRetryCounterCache,
     })
