@@ -3,19 +3,6 @@ export { WhatsAppClient } from './client.js'
 export { ConnectionManager } from './connection.js'
 export { DecryptionHandler, getDecryptionHandler, resetDecryptionHandler } from './decryption-handler.js'
 export { enhanceTransactionHandling } from './transaction-handler.js'
-export { 
-  registerSocket, 
-  getSocket, 
-  getAllSockets, 
-  getSocketCount,
-  hasSocket,
-  unregisterSocket,
-  updateSessionState,
-  getSessionState,
-  getAllSessions,
-  createSocketWrapper,
-  getStats
-} from './socket-factory.js'
 
 // Re-export everything from config for convenience
 export { 
