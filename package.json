@@ -34,7 +34,7 @@
     "file-type": "latest",
     "form-data": "^4.0.0",
     "guaranteed_security": "^1.0.0",
-    "jimp": "^0.16.1",
+    "jimp": "^1.6.0",
     "jsdom": "latest",
     "jsonwebtoken": "latest",
     "libphonenumber-js": "^1.10.51",
