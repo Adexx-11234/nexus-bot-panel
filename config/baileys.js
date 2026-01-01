@@ -1,5 +1,5 @@
 import NodeCache from "node-cache"
-import { makeWASocket as originalMakeWASocket, Browsers, makeCacheableSignalKeyStore, DEFAULT_CONNECTION_CONFIG } from "@whiskeysockets/baileys"
+import { makeWASocket as originalMakeWASocket, makeCacheableSignalKeyStore, fetchLatestBaileysVersion, DEFAULT_CONNECTION_CONFIG } from "@whiskeysockets/baileys"
 import { createFileStore, deleteFileStore, getFileStore } from "../whatsapp/index.js"
 import { logger } from "../utils/logger.js"
 import pino from "pino"
@@ -13,6 +13,7 @@ const makeWASocket = wrapBaileysSocket(originalMakeWASocket)
 const baileysLogger = pino({
   level: process.env.BAILEYS_LOG_LEVEL || "silent",
 })
+const { version, isLatest} = await fetchLatestBaileysVersion()
 
 // ==================== CACHE CONFIGURATION ====================
 // Cache for group metadata to reduce API calls
@@ -44,6 +45,7 @@ const HEALTH_CHECK_TIMEOUT = 30 * 60 * 1000      // 30 minutes
 // 3. getMessage failing silently
 export const baileysConfig = { 
   ...DEFAULT_CONNECTION_CONFIG,
+  version,
   
   // ✅ CRITICAL FIX #1: shouldIgnoreJid - NEVER filter out messages
   // The default behavior filters JIDs which causes messages to disappear

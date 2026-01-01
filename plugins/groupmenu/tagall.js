@@ -1,6 +1,5 @@
 import { createComponentLogger } from "../../utils/logger.js"
 import AdminChecker from "../../whatsapp/utils/admin-checker.js"
-import { resolveLidsToJids } from "../../whatsapp/groups/index.js"
 
 const logger = createComponentLogger("TAGALL")
 
@@ -38,7 +37,7 @@ export default {
       }
 
       // Get participants
-      let participants = groupMetadata?.participants || []
+      const participants = groupMetadata?.participants || []
       
       if (participants.length === 0) {
         return { response: "❌ No participants found in this group!" + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙` }
@@ -50,32 +49,24 @@ export default {
       // Get sender's phone number
       const senderNumber = m.sender.split('@')[0]
       
-      // ✅ CRITICAL FIX: Resolve LIDs to proper JIDs
-      // whiskeysockets sometimes returns participants with @lid instead of @s.whatsapp.net
-      const participantIds = participants.map(p => p.id)
-      const resolvedIds = await resolveLidsToJids(sock, groupJid, participantIds)
-      
-      logger.debug(`[TagAll] Resolved ${participantIds.length} participant IDs (LIDs -> JIDs)`)
-      
       // Build the tag message
       let tagMessage = `╚»˙·٠🎯●♥  ♥●🎯٠·˙«╝\n`
       tagMessage += `😶 Tagger: @${senderNumber}\n`
       tagMessage += `🌿 Message: ${customMessage}\n\n`
       
-      // Add all participants in a list format using resolved JIDs
-      resolvedIds.forEach((jid, index) => {
-        const phoneNumber = jid.split('@')[0].split(':')[0]  // Remove device suffix if present
-        tagMessage += `${index + 1}. @${phoneNumber}\n`
+      // Add all participants
+      participants.forEach((participant, index) => {
+        const phoneNumber = participant.id.split('@')[0]
+       tagMessage += `${index + 1}. @${phoneNumber}\n`
       })
 
-      tagMessage += `\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
       
-      // ✅ Use resolved IDs for mentions
-      const mentions = resolvedIds
+      // Prepare mentions array
+      const mentions = participants.map(participant => participant.id)
       // Add sender to mentions
       mentions.push(m.sender)
 
-      logger.info(`[TagAll] Tagging ${mentions.length - 1} members in ${groupJid} with proper JIDs`)
+      logger.info(`[TagAll] Tagging ${participants.length} members in ${groupJid}`)
 
       // Send the tag message
       await sock.sendMessage(groupJid, {
@@ -83,7 +74,7 @@ export default {
         mentions: mentions
       }, { quoted: m })
 
-      logger.info(`[TagAll] Successfully tagged ${mentions.length - 1} members`)
+      logger.info(`[TagAll] Successfully tagged ${participants.length} members`)
       
       // Return success (no additional response needed since we already sent the message)
       return { response: null, success: true }
