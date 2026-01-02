@@ -137,7 +137,7 @@ export default {
           nativeFlowMessage: {
             messageParamsJson: JSON.stringify({
               bottom_sheet: {
-                in_thread_buttons_limit: 3,
+                in_thread_buttons_limit: 2,
                 divider_indices: [0],
                 list_title: "Menu Categories",
                 button_title: "📋 Select Menu"

@@ -582,33 +582,29 @@ async _getAuthState(sessionId, allowPairing = true) {
   }
 
   async checkAuthAvailability(sessionId) {
-  const availability = {
-    mongodb: false,
-    file: false,
-    preferred: 'none'
-  }
-
-  if (this.mongoClient) {
     try {
-      const { hasValidAuthData } = await import('../storage/index.js')
-      const db = this.mongoClient.db()
-      const collection = db.collection('auth_baileys')
-      availability.mongodb = await hasValidAuthData(collection, sessionId)
+      const { checkAuthAvailability } = await import('../storage/index.js')
+      
+      // Use the proper checkAuthAvailability function that handles both MongoDB and file storage
+      const mongoStorage = this.mongoStorage
+      const result = await checkAuthAvailability(mongoStorage, sessionId)
+      
+      return {
+        mongodb: result.hasMongo,
+        file: result.hasFile,
+        preferred: result.preferred
+      }
     } catch (error) {
-      availability.mongodb = false
+      logger.error(`[${sessionId}] Auth availability check failed:`, error.message)
+      // Fallback to file-only check
+      const hasFile = this.fileManager ? await this.fileManager.hasValidCredentials(sessionId) : false
+      return {
+        mongodb: false,
+        file: hasFile,
+        preferred: hasFile ? 'file' : 'none'
+      }
     }
   }
-
-  if (this.fileManager) {
-    // Now async
-    availability.file = await this.fileManager.hasValidCredentials(sessionId)
-  }
-
-  availability.preferred = availability.mongodb ? 'mongodb' : 
-                          availability.file ? 'file' : 'none'
-
-  return availability
-}
 
   async cleanupAuthState(sessionId) {
     const results = { mongodb: false, file: false }

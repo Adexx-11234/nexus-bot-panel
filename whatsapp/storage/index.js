@@ -7,6 +7,7 @@ export {
   useMongoDBAuthState,
   cleanupSessionAuthData,
   hasValidAuthData,
+  checkAuthAvailability,
 } from "./auth-state.js"
 
 export {
