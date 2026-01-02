@@ -499,14 +499,14 @@ const shouldWriteToMongo = (primaryStorage === "mongodb" && mongoStore) || (isMo
 
 if (shouldWriteToMongo) {
     // 🔴 CRITICAL: Write to MongoDB FIRST during pairing
-    logger.info(`[${sessionId}] 📦 PAIRING MODE: Writing ${fileName} to MongoDB + File`)
+ //   logger.info(`[${sessionId}] 📦 PAIRING MODE: Writing ${fileName} to MongoDB + File`)
     
     // Write to MongoDB synchronously (BLOCKING)
     let mongoSuccess = false
     try {
       mongoSuccess = await mongoStore.writeData(fileName, data)
       if (mongoSuccess) {
-        logger.info(`[${sessionId}] ✅ MongoDB write successful: ${fileName}`)
+       // logger.info(`[${sessionId}] ✅ MongoDB write successful: ${fileName}`)
       } else {
         logger.error(`[${sessionId}] ❌ MongoDB write returned false: ${fileName}`)
       }
