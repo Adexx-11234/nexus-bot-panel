@@ -142,15 +142,21 @@ export class SessionManager {
    * @private
    */
   async _initializeConnectionManager() {
-    const { ConnectionManager } = await import("../core/index.js")
-    const { FileManager } = await import("../storage/index.js")
+  const { ConnectionManager } = await import("../core/index.js")
+  const { FileManager } = await import("../storage/index.js")
 
-    this.fileManager = new FileManager(this.sessionDir)
-    this.connectionManager = new ConnectionManager()
-    this.connectionManager.initialize(this.fileManager, this.storage.isMongoConnected ? this.storage.client : null)
+  this.fileManager = new FileManager(this.sessionDir)
+  this.connectionManager = new ConnectionManager()
+  
+  // ✅ CRITICAL FIX: Pass storage instance instead of snapshot
+  // This allows ConnectionManager to check CURRENT MongoDB status dynamically
+  this.connectionManager.initialize(
+    this.fileManager, 
+    this.storage  // Pass entire storage object, not just client
+  )
 
-    logger.info("Connection manager initialized")
-  }
+  logger.info("Connection manager initialized")
+}
 
   /**
  * Wait for MongoDB to be ready
@@ -178,7 +184,7 @@ async _waitForMongoDB(maxWaitTime = 90000) {
   while (Date.now() - startTime < maxWaitTime) {
     // Check if MongoDB is connected
     if (this.storage.isMongoConnected && this.storage.sessions) {
-      this.connectionManager.mongoClient = this.storage.client
+      // mongoClient is a getter that automatically returns this.storage?.client
       logger.info("MongoDB ready for auth + metadata storage")
       return true
     }

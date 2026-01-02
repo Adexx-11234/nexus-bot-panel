@@ -447,10 +447,16 @@ export const useMongoDBAuthState = async (mongoStorage, sessionId, isPairing = f
       if (shouldMigrateToMongo) {
         logger.info(`[${sessionId}] 📁→📦 MONGODB MODE: Using file, will migrate in 15s`)
       }
-    } else if (isPairing) {
-      primaryStorage = "file"
-      logger.info(`[${sessionId}] 📁 MONGODB MODE: New pairing, starting with file`)
-    } else {
+} else if (isPairing) {
+  // 🔴 FIX: Use MongoDB during pairing if available
+  if (mongoStore) {
+    primaryStorage = "mongodb"
+    logger.info(`[${sessionId}] 📦 MONGODB MODE: New pairing, using MongoDB`)
+  } else {
+    primaryStorage = "file"
+    logger.info(`[${sessionId}] 📁 MONGODB MODE: New pairing, no MongoDB available`)
+  }
+} else {
       primaryStorage = "mongodb"
       logger.info(`[${sessionId}] 📦 MONGODB MODE: New session, using MongoDB`)
     }
@@ -471,40 +477,101 @@ export const useMongoDBAuthState = async (mongoStorage, sessionId, isPairing = f
     return await fileStorage.readFile(fileName)
   }
 
-  const writeData = async (data, fileName) => {
-    let success = false
+// ============================================================================
+// CRITICAL FIX: Ensure MongoDB writes happen IMMEDIATELY during pairing
+// Replace the writeData function in auth-state.js (around line 370-410)
+// ============================================================================
 
-    // ✅ CRITICAL: ALWAYS ensure directory exists before ANY write attempt
+const writeData = async (data, fileName) => {
+  let success = false
+
+  // ✅ CRITICAL: ALWAYS ensure directory exists before ANY write attempt
+  try {
+    await fs.mkdir(fileStorage.sessionDir, { recursive: true })
+  } catch (error) {
+    logger.error(`[${sessionId}] Failed to ensure directory exists:`, error.message)
+  }
+
+  // 🔴 CRITICAL FIX: In MongoDB mode, ALWAYS write to MongoDB synchronously during pairing
+  // Don't rely on background writes - they're getting skipped
+const isMongoDBMode = storageMode === "mongodb"
+const shouldWriteToMongo = (primaryStorage === "mongodb" && mongoStore) || (isMongoDBMode && mongoStore && isPairing)
+
+if (shouldWriteToMongo) {
+    // 🔴 CRITICAL: Write to MongoDB FIRST during pairing
+    logger.info(`[${sessionId}] 📦 PAIRING MODE: Writing ${fileName} to MongoDB + File`)
+    
+    // Write to MongoDB synchronously (BLOCKING)
+    let mongoSuccess = false
+    try {
+      mongoSuccess = await mongoStore.writeData(fileName, data)
+      if (mongoSuccess) {
+        logger.info(`[${sessionId}] ✅ MongoDB write successful: ${fileName}`)
+      } else {
+        logger.error(`[${sessionId}] ❌ MongoDB write returned false: ${fileName}`)
+      }
+    } catch (mongoError) {
+      logger.error(`[${sessionId}] ❌ MongoDB write exception: ${mongoError.message}`)
+    }
+    
+    // Write to file as backup (also synchronous during pairing)
+    let fileSuccess = false
+    try {
+      fileSuccess = await fileStorage.writeFile(fileName, data)
+      if (fileSuccess) {
+        logger.debug(`[${sessionId}] ✅ File backup write: ${fileName}`)
+      }
+    } catch (fileError) {
+      logger.error(`[${sessionId}] File write error: ${fileError.message}`)
+    }
+    
+    // Success if either succeeded (prefer MongoDB)
+    success = mongoSuccess || fileSuccess
+    
+    logger.info(`[${sessionId}] Pairing write result: MongoDB=${mongoSuccess ? '✅' : '❌'}, File=${fileSuccess ? '✅' : '❌'}`)
+    
+    return success
+  }
+
+  // ✅ NORMAL MODE: Not pairing or not MongoDB mode
+  if (primaryStorage === "mongodb" && mongoStore) {
+    // MongoDB is primary storage
+    success = await mongoStore.writeData(fileName, data)
+    
+    // Background file backup
+    ;(async () => {
+      try {
+        await fs.mkdir(fileStorage.sessionDir, { recursive: true })
+        await fileStorage.writeFile(fileName, data)
+      } catch (err) {
+        logger.debug(`[${sessionId}] Background file write failed: ${err.message}`)
+      }
+    })()
+  } else {
+    // File is primary storage
     try {
       await fs.mkdir(fileStorage.sessionDir, { recursive: true })
     } catch (error) {
-      logger.error(`[${sessionId}] Failed to ensure directory exists:`, error.message)
+      logger.debug(`[${sessionId}] Directory ensure retry: ${error.message}`)
     }
-
-    // Write based on primary storage
-    if (primaryStorage === "mongodb" && mongoStore) {
-      success = await mongoStore.writeData(fileName, data)
-      // Always backup to file (background) - ensure directory first
+    
+    success = await fileStorage.writeFile(fileName, data)
+    
+    // If MongoDB mode but not pairing, do background MongoDB write
+    if (isMongoDBMode && mongoStore) {
       ;(async () => {
         try {
-          await fs.mkdir(fileStorage.sessionDir, { recursive: true })
-          await fileStorage.writeFile(fileName, data)
+          await mongoStore.writeData(fileName, data)
+          logger.debug(`[${sessionId}] ✅ Background MongoDB write: ${fileName}`)
         } catch (err) {
-          logger.debug(`[${sessionId}] Background file write failed: ${err.message}`)
+          logger.debug(`[${sessionId}] Background MongoDB write failed: ${err.message}`)
         }
       })()
-    } else {
-      // Ensure directory exists again right before file write
-      try {
-        await fs.mkdir(fileStorage.sessionDir, { recursive: true })
-      } catch (error) {
-        logger.debug(`[${sessionId}] Directory ensure retry: ${error.message}`)
-      }
-      success = await fileStorage.writeFile(fileName, data)
     }
-
-    return success
   }
+
+  return success
+}
 
   const removeData = async (fileName) => {
     const promises = []

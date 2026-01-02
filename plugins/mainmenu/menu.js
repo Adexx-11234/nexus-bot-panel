@@ -1,7 +1,6 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
-import { generateWAMessageFromContent, WAProto as proto, prepareWAMessageMedia } from '@whiskeysockets/baileys';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -10,11 +9,10 @@ export default {
   name: "Menu",
   description: "Show main bot menu with all available categories",
   commands: ["menu", "start", "bot", "help"],
-  permissions: {
-
-},
+  permissions: {},
   category: "mainmenu",
   usage: "• .menu - Show complete menu with all categories",
+  
   async execute(sock, sessionId, args, m) {
     try {
       // Check connection state first
@@ -51,7 +49,7 @@ export default {
       const currentTime = new Date();
       const timeGreeting = menuSystem.getTimeGreeting();
       
-      // Build caption text
+      // Build caption text (no duplicate categories here)
       let captionText = `┌─❖\n`;
       captionText += `│ 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙\n`;
       captionText += `└┬❖\n`;
@@ -62,8 +60,9 @@ export default {
       captionText += `│⏰ ᴛɪᴍᴇ: ${currentTime.toLocaleTimeString()}\n`;
       captionText += `│🛠 ᴠᴇʀsɪᴏɴ: 1.0.0\n`;
       captionText += `└─────────────┈⳹\n\n`;
-      captionText += `🎯 Select a menu category below:\n`;
+      captionText += `🎯 Welcome to Nexus Bot!\n`;
       captionText += `📊 Total Categories: ${folders.length + 1}\n`;
+      captionText += `\nUse the button below to explore all menu categories.`;
       
       // Priority order for menus
       const priorityMenus = [
@@ -81,8 +80,8 @@ export default {
         return aIndex - bIndex;
       });
 
-      // Get local image only (no profile picture)
-      let imageBuffer = null;
+      // Get local image
+      let imageUrl = null;
       console.log("[Menu] Loading local menu image");
       
       const possiblePaths = [
@@ -93,17 +92,21 @@ export default {
       
       for (const imagePath of possiblePaths) {
         if (fs.existsSync(imagePath)) {
-          imageBuffer = fs.readFileSync(imagePath);
+          // Convert to base64 data URL for direct use
+          const imageBuffer = fs.readFileSync(imagePath);
+          const base64Image = imageBuffer.toString('base64');
+          imageUrl = `data:image/png;base64,${base64Image}`;
           console.log(`[Menu] Using local image: ${imagePath}`);
           break;
         }
       }
       
-      if (!imageBuffer) {
-        console.log("[Menu] No local image found, continuing without image");
+      if (!imageUrl) {
+        console.log("[Menu] No local image found, using placeholder");
+        imageUrl = "https://via.placeholder.com/800x400/1a1a1a/00ff00?text=Nexus+Bot";
       }
 
-      // Build menu rows for single_select - FIXED FORMAT
+      // Build menu rows for single_select
       const menuRows = [];
 
       // Add allmenu first
@@ -125,94 +128,65 @@ export default {
         });
       }
 
-      // Prepare header with image if available
-      let headerConfig = {
-        title: "🤖 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 MENU",
-        subtitle: timeGreeting,
-        hasMediaAttachment: false
-      };
-
-      if (imageBuffer) {
-        try {
-          const mediaMessage = await prepareWAMessageMedia(
-            { image: imageBuffer },
-            { upload: sock.waUploadToServer }
-          );
-          
-          headerConfig = {
-            title: "🤖 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 MENU",
-            subtitle: timeGreeting,
-            hasMediaAttachment: true,
-            imageMessage: mediaMessage.imageMessage
-          };
-          console.log("[Menu] Image header prepared successfully");
-        } catch (imgErr) {
-          console.error("[Menu] Failed to prepare image header:", imgErr.message);
-        }
-      }
-
-      // Create interactive message with PROPER STRING FORMAT
-      const msg = generateWAMessageFromContent(m.chat, {
-        viewOnceMessage: {
-          message: {
-            messageContextInfo: {
-              deviceListMetadata: {},
-              deviceListMetadataVersion: 2
-            },
-            interactiveMessage: proto.Message.InteractiveMessage.create({
-              body: proto.Message.InteractiveMessage.Body.create({
-                text: captionText
-              }),
-              footer: proto.Message.InteractiveMessage.Footer.create({
-                text: "© 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Select a category"
-              }),
-              header: proto.Message.InteractiveMessage.Header.create(headerConfig),
-              nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
-                buttons: [
-                  {
-                    name: "single_select",
-                    buttonParamsJson: JSON.stringify({
-                      title: "📋 Select Menu",
-                      sections: [{
-                        title: "Menu Categories",
-                        highlight_label: "Popular",
-                        rows: menuRows
-                      }]
-                    })
-                  },
-                  {
-                    name: "quick_reply",
-                    buttonParamsJson: JSON.stringify({
-                      display_text: "📶 All Commands",
-                      id: `${m.prefix}allmenu`
-                    })
-                  },
-                  {
-                    name: "quick_reply",
-                    buttonParamsJson: JSON.stringify({
-                      display_text: "ℹ️ Bot Info",
-                      id: `${m.prefix}botinfo`
-                    })
-                  },
-                  {
-                    name: "cta_url",
-                    buttonParamsJson: JSON.stringify({
-                      display_text: "💬 Support Channel",
-                      url: "https://whatsapp.com/channel/0029VbBK53XBvvslYeZlBe0V",
-                      merchant_url: "https://whatsapp.com/channel/0029VbBK53XBvvslYeZlBe0V"
-                    })
-                  }
-                ]
-              })
-            })
+      // Build the interactive message using the new method
+      await sock.sendMessage(m.chat, {
+        interactiveMessage: {
+          title: captionText,
+          footer: "© 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Select a category",
+          image: { url: imageUrl },
+          nativeFlowMessage: {
+            messageParamsJson: JSON.stringify({
+              bottom_sheet: {
+                in_thread_buttons_limit: 3,
+                divider_indices: [0],
+                list_title: "Menu Categories",
+                button_title: "📋 Select Menu"
+              }
+            }),
+            buttons: [
+              // Single select menu
+              {
+                name: "single_select",
+                buttonParamsJson: JSON.stringify({
+                  title: "📋 Select Menu",
+                  sections: [
+                    {
+                      title: "Menu Categories",
+                      highlight_label: "Popular",
+                      rows: menuRows
+                    }
+                  ]
+                })
+              },
+              // Quick reply: All Commands
+              {
+                name: "quick_reply",
+                buttonParamsJson: JSON.stringify({
+                  display_text: "📶 All Commands",
+                  id: `${m.prefix}allmenu`
+                })
+              },
+              // Quick reply: Bot Info
+              {
+                name: "quick_reply",
+                buttonParamsJson: JSON.stringify({
+                  display_text: "ℹ️ Bot Info",
+                  id: `${m.prefix}botinfo`
+                })
+              },
+              // CTA URL: Support Channel
+              {
+                name: "cta_url",
+                buttonParamsJson: JSON.stringify({
+                  display_text: "💬 Support Channel",
+                  url: "https://whatsapp.com/channel/0029VbBK53XBvvslYeZlBe0V",
+                  merchant_url: "https://whatsapp.com/channel/0029VbBK53XBvvslYeZlBe0V"
+                })
+              }
+            ]
           }
         }
-      }, {});
-
-      // Send the message
-      await sock.relayMessage(msg.key.remoteJid, msg.message, {
-        messageId: msg.key.id
-      });
+      }, { quoted: m });
 
       console.log("[Menu] Interactive menu sent successfully!");
       return { success: true };

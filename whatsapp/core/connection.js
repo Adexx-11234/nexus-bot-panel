@@ -237,21 +237,42 @@ export class ConnectionManager {
   constructor() {
     this.fileManager = null
     this.mongoClient = null
+    this.mongoStorage = null
     this.activeSockets = new Map()
     this.pairingInProgress = new Set()
     this.connectionTimeouts = new Map()
     this.enableSocketInspection = process.env.INSPECT_SOCKETS === 'true' // Enable via env var
   }
 
-  initialize(fileManager, mongoClient = null) {
-    this.fileManager = fileManager
-    this.mongoClient = mongoClient
-    logger.info('Connection manager initialized')
-    
-    if (this.enableSocketInspection) {
-      logger.info('🔍 Socket inspection ENABLED - logs will be saved to socket-inspections/')
+  initialize(fileManager, storage = null) {
+  this.fileManager = fileManager
+  this.storage = storage  // Store entire storage object
+  
+  // ✅ Dynamic getters for MongoDB state
+  Object.defineProperty(this, 'mongoClient', {
+    get() {
+      return this.storage?.client || null
     }
+  })
+  
+  Object.defineProperty(this, 'mongoStorage', {
+    get() {
+      return this.storage?.mongoStorage || null
+    }
+  })
+  
+  Object.defineProperty(this, 'isMongoAvailable', {
+    get() {
+      return !!(this.storage?.isMongoConnected && this.storage?.mongoStorage?.isConnected)
+    }
+  })
+  
+  logger.info('Connection manager initialized')
+  
+  if (this.enableSocketInspection) {
+    logger.info('🔍 Socket inspection ENABLED - logs will be saved to socket-inspections/')
   }
+}
 
 async createConnection(sessionId, phoneNumber = null, callbacks = {}, allowPairing = true) {
   try {
@@ -393,66 +414,63 @@ async createConnection(sessionId, phoneNumber = null, callbacks = {}, allowPairi
   }
 }
 
-// ==================== FIX _getAuthState in connection-manager.js ====================
-// Replace the _getAuthState method
+// ============================================================================
+// REPLACE _getAuthState in connection-manager.js
+// This fixes MongoDB auth detection for pairing sessions
+// ============================================================================
 
 async _getAuthState(sessionId, allowPairing = true) {
   try {
-    // Try MongoDB first if available
-    if (this.mongoClient) {
+    logger.info(`[${sessionId}] 🔍 Getting auth state (pairing: ${allowPairing})`)
+    
+    // ✅ CRITICAL: Check CURRENT MongoDB status dynamically
+    const isMongoAvailable = this.isMongoAvailable
+    
+    logger.info(`[${sessionId}] ℹ️ MongoDB status: ${isMongoAvailable ? 'AVAILABLE ✅' : 'NOT AVAILABLE ❌'}`)
+    
+    // Try MongoDB first if available RIGHT NOW
+    if (isMongoAvailable && this.mongoStorage) {
       try {
         const { useMongoDBAuthState } = await import('../storage/index.js')
         
-        // ✅ FIX: Verify MongoDB client is actually connected
-        const topology = this.mongoClient.topology
-        if (!topology || topology.isDestroyed()) {
-          logger.warn(`MongoDB client not connected for ${sessionId}`)
-          throw new Error('MongoDB not connected')
-        }
+        logger.info(`[${sessionId}] 📦 Attempting MongoDB auth (Pairing: ${allowPairing})`)
         
-        const db = this.mongoClient.db()
-        const collection = db.collection('auth_baileys')
-        
-        // ✅ FIX: Verify collection is accessible
-        if (!collection) {
-          logger.error(`Failed to get auth_baileys collection for ${sessionId}`)
-          throw new Error('Collection not available')
-        }
-        
-        // ✅ FIX: Test collection with a simple operation
-        try {
-          await collection.findOne({ _id: '__test__' })
-          logger.debug(`✅ Collection accessible for ${sessionId}`)
-        } catch (collError) {
-          logger.error(`Collection not accessible: ${collError.message}`)
-          throw new Error('Collection not accessible')
-        }
-        
-        logger.info(`[${sessionId}] � Auth mode: MONGODB | Source: telegram`)
-        
-        const mongoAuth = await useMongoDBAuthState(collection, sessionId, allowPairing, 'telegram')
+        const mongoAuth = await useMongoDBAuthState(
+          this.mongoStorage, 
+          sessionId, 
+          allowPairing, 
+          'telegram'
+        )
 
-        if (mongoAuth?.state?.creds?.noiseKey && mongoAuth.state.creds?.signedIdentityKey) {
-          logger.info(`Using MongoDB auth for ${sessionId}`)
+        if (mongoAuth?.state?.creds) {
+          const hasCreds = mongoAuth.state.creds.noiseKey && mongoAuth.state.creds.signedIdentityKey
           
-          const authState = {
-            creds: mongoAuth.state.creds,
-            keys: makeCacheableSignalKeyStore(
-              mongoAuth.state.keys,
-              pino({ level: 'silent' })
-            )
-          }
-          
-          return {
-            state: authState,
-            saveCreds: mongoAuth.saveCreds,
-            cleanup: mongoAuth.cleanup,
-            method: 'mongodb'
+          if (hasCreds || allowPairing) {
+            logger.info(`[${sessionId}] ✅ Using MongoDB auth (has creds: ${hasCreds}, pairing: ${allowPairing})`)
+            
+            const authState = {
+              creds: mongoAuth.state.creds,
+              keys: makeCacheableSignalKeyStore(
+                mongoAuth.state.keys,
+                pino({ level: 'silent' })
+              )
+            }
+            
+            return {
+              state: authState,
+              saveCreds: mongoAuth.saveCreds,
+              cleanup: mongoAuth.cleanup,
+              method: 'mongodb'
+            }
           }
         }
+        
+        logger.warn(`[${sessionId}] ⚠️ MongoDB auth returned invalid state`)
       } catch (mongoError) {
-        logger.warn(`MongoDB auth failed for ${sessionId}: ${mongoError.message}`)
+        logger.error(`[${sessionId}] ❌ MongoDB auth error: ${mongoError.message}`)
       }
+    } else {
+      logger.info(`[${sessionId}] ℹ️ MongoDB not available - using file auth`)
     }
 
     // Fall back to file-based auth
@@ -460,12 +478,15 @@ async _getAuthState(sessionId, allowPairing = true) {
       throw new Error('No auth state provider available')
     }
 
+    logger.info(`[${sessionId}] 📁 Using file auth`)
+    
     await this.fileManager.ensureSessionDirectory(sessionId)
     const sessionPath = this.fileManager.getSessionPath(sessionId)
     const fileAuth = await useMultiFileAuthState(sessionPath)
 
-    if (fileAuth?.state?.creds?.noiseKey && fileAuth.state.creds?.signedIdentityKey) {
-      logger.info(`Using file auth for ${sessionId}`)
+    if (fileAuth?.state?.creds) {
+      const hasCreds = fileAuth.state.creds.noiseKey && fileAuth.state.creds.signedIdentityKey
+      logger.info(`[${sessionId}] ✅ File auth loaded (has creds: ${hasCreds})`)
       
       const authState = {
         creds: fileAuth.state.creds,
@@ -486,7 +507,7 @@ async _getAuthState(sessionId, allowPairing = true) {
     throw new Error('No valid auth state found')
 
   } catch (error) {
-    logger.error(`Auth state retrieval failed for ${sessionId}:`, error)
+    logger.error(`[${sessionId}] ❌ Auth state retrieval failed: ${error.message}`)
     return null
   }
 }
