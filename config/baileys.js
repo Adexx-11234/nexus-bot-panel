@@ -76,7 +76,8 @@ export const baileysConfig = {
   
   // ✅ CRITICAL FIX #4: Keep socket alive longer
   // Prevents timeout disconnections
-  keepAliveIntervalMs: 30000, // Every 30 seconds
+  keepAliveIntervalMs: 60000,        // Every 60 seconds
+  tcpKeepAliveIntervalMs: 30000,     // TCP keepalive every 30 seconds
   connectTimeoutMs: 60000,    // 60 second timeout for connection attempts
   
   // ✅ CRITICAL FIX #4b: Extended timeout handling for 408 errors

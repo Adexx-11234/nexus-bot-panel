@@ -69,7 +69,7 @@ export class MessageLogger {
         const groupId = m.chat
         const groupName = m.groupMetadata.subject || 'Unknown Group'
 
-        logger.info(
+        logger.message(
           `${colors.bright}[MESSAGE]${colors.reset} ` +
           `${colors.cyan}TG:${telegramId}${colors.reset} | ` +
           `${colors.magenta}Group:${groupName}${colors.reset} ${colors.dim}(${groupId})${colors.reset} | ` +
@@ -80,7 +80,7 @@ export class MessageLogger {
         )
       } else {
         // Private message
-        logger.info(
+        logger.message(
           `${colors.bright}[MESSAGE]${colors.reset} ` +
           `${colors.cyan}TG:${telegramId}${colors.reset} | ` +
           `${colors.blue}Private:${pushName}${colors.reset} ${colors.dim}(${sender})${colors.reset} ` +
@@ -109,7 +109,7 @@ export class MessageLogger {
       const commandBadge = m.isCommand ? `${colors.bgGreen} CMD ${colors.reset}` : ''
 
       if (m.isGroup) {
-        logger.info(
+        logger.message(
           `${colors.bright}[MESSAGE]${colors.reset} ` +
           `${colors.cyan}TG:${telegramId}${colors.reset} | ` +
           `${colors.magenta}Group:${m.chat}${colors.reset} | ` +
@@ -119,7 +119,7 @@ export class MessageLogger {
           `${colors.white}${truncatedContent}${colors.reset}${content.length > 80 ? '...' : ''}`
         )
       } else {
-        logger.info(
+        logger.message(
           `${colors.bright}[MESSAGE]${colors.reset} ` +
           `${colors.cyan}TG:${telegramId}${colors.reset} | ` +
           `${colors.blue}Private:${pushName}${colors.reset} ${colors.dim}(${sender})${colors.reset} ` +

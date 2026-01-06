@@ -1,5 +1,5 @@
 // ============================================================================
-// auth-state.js - FIXED: Auth Sync Between MongoDB & Files
+// auth-state.js - Auth Sync Between MongoDB & File Storage
 // ============================================================================
 
 import { WAProto as proto, initAuthCreds } from "@whiskeysockets/baileys"
@@ -8,21 +8,25 @@ import fs from "fs/promises"
 import path from "path"
 
 const logger = createComponentLogger("AUTH_STATE")
-
-// ✅ Global collection references to prevent garbage collection
 const globalCollectionRefs = new Map()
 
-// ==================== CONFIGURATION ====================
+// ============================================================================
+// CONFIGURATION
+// ============================================================================
+
 const CONFIG = {
-  MONGODB_OPERATION_TIMEOUT: 5000,
-  MIGRATION_DELAY: 15000, // 15 seconds before migrating file → MongoDB
-  BACKUP_INTERVAL: 4 * 60 * 60 * 1000, // 4 hours
-  PREKEY_CLEANUP_INTERVAL: 10 * 60 * 1000, // 10 minutes
-  PREKEY_MAX_COUNT: 500, // Max prekeys to keep
-  PREKEY_CLEANUP_THRESHOLD: 300, // Start cleanup when exceeding this
+  MONGODB_TIMEOUT: 5000,
+  MIGRATION_DELAY: 15000,
+  BACKUP_INTERVAL: 4 * 60 * 60 * 1000,
+  PREKEY_CLEANUP_INTERVAL: 10 * 60 * 1000,
+  PREKEY_MAX: 500,
+  PREKEY_THRESHOLD: 300,
 }
 
-// ==================== SERIALIZATION ====================
+// ============================================================================
+// BUFFER SERIALIZATION
+// ============================================================================
+
 const BufferJSON = {
   replacer: (k, value) => {
     if (Buffer.isBuffer(value) || value instanceof Uint8Array || value?.type === "Buffer") {
@@ -31,7 +35,7 @@ const BufferJSON = {
     return value
   },
   reviver: (_, value) => {
-    if (typeof value === "object" && !!value && (value.buffer === true || value.type === "Buffer")) {
+    if (typeof value === "object" && value && (value.buffer === true || value.type === "Buffer")) {
       const val = value.data || value.value
       return typeof val === "string" ? Buffer.from(val, "base64") : Buffer.from(val || [])
     }
@@ -39,739 +43,467 @@ const BufferJSON = {
   },
 }
 
-// ==================== STORAGE MODE ====================
+// ============================================================================
+// UTILITY FUNCTIONS
+// ============================================================================
+
 const getStorageMode = () => (process.env.STORAGE_MODE || "mongodb").toLowerCase()
 const isMongoDBMode = () => getStorageMode() === "mongodb"
 const isFileMode = () => getStorageMode() === "file"
 
-// ==================== FILENAME SANITIZATION ====================
-const sanitizeFileName = (fileName) => {
-  if (!fileName) return fileName
-  return fileName.replace(/::/g, "__").replace(/:/g, "-").replace(/\//g, "_").replace(/\\/g, "_")
-}
+const sanitizeFileName = (name) => 
+  name?.replace(/::/g, "__").replace(/:/g, "-").replace(/[/\\]/g, "_")
 
-const isPreKeyFile = (fileName) => {
-  if (!fileName) return false
-  const lower = fileName.toLowerCase()
-  return lower.startsWith("pre-key") || lower.startsWith("pre_key") || lower.startsWith("prekey")
-}
+const isPreKeyFile = (name) => /^pre[-_]?key/i.test(name)
+const extractPreKeyId = (name) => Number.parseInt(name.match(/pre-?key-?(\d+)/i)?.[1] || "0", 10)
 
-const extractPreKeyId = (fileName) => {
-  const match = fileName.match(/pre-?key-?(\d+)/i)
-  return match ? Number.parseInt(match[1], 10) : 0
-}
+// ============================================================================
+// FILE STORAGE CLASS
+// ============================================================================
 
-// ==================== FILE STORAGE MANAGER ====================
-class FileStorageManager {
-  constructor(sessionId, sessionDir = "./sessions") {
+class FileStorage {
+  constructor(sessionId, baseDir = "./sessions") {
     this.sessionId = sessionId
-    this.sessionDir = path.join(sessionDir, sessionId)
-    this.initialized = false
+    this.dir = path.join(baseDir, sessionId)
   }
 
   async init() {
-    try {
-      await fs.mkdir(this.sessionDir, { recursive: true })
-      this.initialized = true
-      logger.debug(`[${this.sessionId}] 📁 File auth storage ready`)
-    } catch (error) {
-      logger.error(`[${this.sessionId}] Failed to init file storage:`, error.message)
-      throw error
-    }
+    await fs.mkdir(this.dir, { recursive: true })
   }
 
-  async readFile(fileName) {
-    if (!this.initialized) throw new Error("File storage not initialized")
-
+  async read(fileName) {
     try {
-      const sanitizedName = sanitizeFileName(fileName)
-      const filePath = path.join(this.sessionDir, sanitizedName)
-
-      try {
-        await fs.access(filePath)
-      } catch (error) {
-        return null
-      }
-
+      const filePath = path.join(this.dir, sanitizeFileName(fileName))
       const content = await fs.readFile(filePath, "utf8")
-
-      if (!content || content.trim() === "") {
-        return null
-      }
-
-      return JSON.parse(content, BufferJSON.reviver)
-    } catch (error) {
-      if (error.code !== "ENOENT") {
-        logger.debug(`[${this.sessionId}] Read ${fileName} error:`, error.message)
-      }
+      return content ? JSON.parse(content, BufferJSON.reviver) : null
+    } catch {
       return null
     }
   }
 
-  async writeFile(fileName, data) {
-    if (!this.initialized) throw new Error("File storage not initialized")
-
+  async write(fileName, data) {
     try {
-      await fs.mkdir(this.sessionDir, { recursive: true })
-
-      const sanitizedName = sanitizeFileName(fileName)
-      const filePath = path.join(this.sessionDir, sanitizedName)
-      const fileDir = path.dirname(filePath)
-
-      await fs.mkdir(fileDir, { recursive: true })
-
+      const filePath = path.join(this.dir, sanitizeFileName(fileName))
+      await fs.mkdir(path.dirname(filePath), { recursive: true })
       await fs.writeFile(filePath, JSON.stringify(data, BufferJSON.replacer, 2), "utf8")
       return true
     } catch (error) {
-      logger.error(`[${this.sessionId}] Write ${fileName} error:`, error.message)
+      logger.error(`[${this.sessionId}] Write failed ${fileName}: ${error.message}`)
       return false
     }
   }
 
-  async deleteFile(fileName) {
-    if (!this.initialized) return false
-
+  async delete(fileName) {
     try {
-      const sanitizedName = sanitizeFileName(fileName)
-      const filePath = path.join(this.sessionDir, sanitizedName)
-      await fs.unlink(filePath)
+      await fs.unlink(path.join(this.dir, sanitizeFileName(fileName)))
       return true
-    } catch (error) {
-      if (error.code !== "ENOENT") {
-        logger.debug(`[${this.sessionId}] Delete ${fileName} error:`, error.message)
-      }
+    } catch {
       return false
     }
   }
 
   async cleanup() {
     try {
-      await fs.rm(this.sessionDir, { recursive: true, force: true })
-      logger.info(`[${this.sessionId}] 🗑️ File auth storage cleaned`)
+      await fs.rm(this.dir, { recursive: true, force: true })
       return true
-    } catch (error) {
-      if (error.code !== "ENOENT") {
-        logger.error(`[${this.sessionId}] File cleanup error:`, error.message)
-      }
+    } catch {
       return false
     }
   }
 
-  async getAllFiles() {
-    if (!this.initialized) return []
-
+  async listFiles(filterFn = null) {
     try {
-      const files = await fs.readdir(this.sessionDir)
-      const authFiles = files.filter((f) => f.endsWith(".json"))
-
-      if (authFiles.length > 0) {
-        logger.debug(`[${this.sessionId}] Found ${authFiles.length} auth files`)
-      }
-
-      return authFiles
-    } catch (error) {
-      if (error.code !== "ENOENT") {
-        logger.error(`[${this.sessionId}] Failed to list files:`, error.message)
-      }
+      const files = await fs.readdir(this.dir)
+      const jsonFiles = files.filter(f => f.endsWith(".json"))
+      return filterFn ? jsonFiles.filter(filterFn) : jsonFiles
+    } catch {
       return []
     }
   }
 
-  async getPreKeyFiles() {
-    if (!this.initialized) return []
-
+  async cleanupPreKeys() {
     try {
-      const files = await fs.readdir(this.sessionDir)
-      return files.filter((f) => f.endsWith(".json") && isPreKeyFile(f))
-    } catch (error) {
-      if (error.code !== "ENOENT") {
-        logger.error(`[${this.sessionId}] Failed to list pre-key files:`, error.message)
-      }
-      return []
-    }
-  }
-
-  async cleanupOldPreKeys() {
-    if (!this.initialized) return { deleted: 0 }
-
-    try {
-      const preKeyFiles = await this.getPreKeyFiles()
-
-      if (preKeyFiles.length <= CONFIG.PREKEY_CLEANUP_THRESHOLD) {
-        return { deleted: 0, total: preKeyFiles.length }
+      const preKeys = await this.listFiles(isPreKeyFile)
+      
+      if (preKeys.length <= CONFIG.PREKEY_THRESHOLD) {
+        return { deleted: 0, total: preKeys.length }
       }
 
-      logger.info(
-        `[${this.sessionId}] 🧹 Pre-key cleanup: ${preKeyFiles.length} files (threshold: ${CONFIG.PREKEY_CLEANUP_THRESHOLD})`,
-      )
-
-      // Sort by pre-key ID (oldest first)
-      preKeyFiles.sort((a, b) => extractPreKeyId(a) - extractPreKeyId(b))
-
-      // Calculate how many to delete (keep up to PREKEY_MAX_COUNT)
-      const toDeleteCount = Math.max(0, preKeyFiles.length - CONFIG.PREKEY_MAX_COUNT)
-      const toDelete = preKeyFiles.slice(0, toDeleteCount)
-
+      preKeys.sort((a, b) => extractPreKeyId(a) - extractPreKeyId(b))
+      const toDelete = preKeys.slice(0, Math.max(0, preKeys.length - CONFIG.PREKEY_MAX))
+      
       let deleted = 0
-      for (const fileName of toDelete) {
-        const success = await this.deleteFile(fileName)
-        if (success) deleted++
+      for (const file of toDelete) {
+        if (await this.delete(file)) deleted++
       }
 
-      logger.info(`[${this.sessionId}] ✅ Deleted ${deleted}/${toDeleteCount} old pre-keys`)
-      return { deleted, total: preKeyFiles.length }
+      logger.info(`[${this.sessionId}] Cleaned ${deleted}/${toDelete.length} pre-keys`)
+      return { deleted, total: preKeys.length }
     } catch (error) {
-      logger.error(`[${this.sessionId}] Pre-key cleanup error:`, error.message)
       return { deleted: 0, error: error.message }
     }
   }
-
-  async getNonPreKeyFiles() {
-    if (!this.initialized) return []
-
-    try {
-      const files = await fs.readdir(this.sessionDir)
-      return files.filter((f) => f.endsWith(".json") && !isPreKeyFile(f))
-    } catch (error) {
-      if (error.code !== "ENOENT") {
-        logger.error(`[${this.sessionId}] Failed to list non-prekey files:`, error.message)
-      }
-      return []
-    }
-  }
 }
 
-// ==================== MONGODB STORAGE MANAGER ====================
-class MongoDBStorageManager {
+// ============================================================================
+// MONGODB STORAGE CLASS
+// ============================================================================
+
+class MongoStorage {
   constructor(mongoStorage, sessionId) {
-    this.mongoStorage = mongoStorage
+    this.mongo = mongoStorage
     this.sessionId = sessionId
-    this.isHealthy = true
-    this.consecutiveFailures = 0
-    this.maxFailures = 3
-
-    if (!mongoStorage) {
-      logger.error(`[${sessionId}] MongoDBStorageManager created with NULL storage!`)
-      this.isHealthy = false
-    } else {
-      logger.debug(`[${sessionId}] MongoDB storage manager created`)
-    }
+    this.healthy = !!mongoStorage?.isConnected
+    this.failures = 0
   }
 
-  _checkHealth() {
-    return this.mongoStorage?.isConnected && this.mongoStorage?.authBaileys
-  }
-
-  _recordResult(success) {
-    if (success) {
-      this.consecutiveFailures = 0
-      this.isHealthy = true
-    } else {
-      this.consecutiveFailures++
-      if (this.consecutiveFailures >= this.maxFailures) {
-        this.isHealthy = false
-      }
-    }
-  }
-
-  async _safeOperation(operationName, operation, fallbackValue = null) {
-    if (!this._checkHealth()) {
-      logger.debug(`[${this.sessionId}] MongoDB not healthy for ${operationName}`)
-      return fallbackValue
+  async safeOp(operation, fallback = null) {
+    if (!this.mongo?.isConnected || !this.mongo?.authBaileys) {
+      return fallback
     }
 
     try {
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("timeout")), CONFIG.MONGODB_OPERATION_TIMEOUT),
+      const timeout = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("timeout")), CONFIG.MONGODB_TIMEOUT)
       )
-
-      const result = await Promise.race([operation(), timeoutPromise])
-      this._recordResult(true)
+      const result = await Promise.race([operation(), timeout])
+      this.failures = 0
       return result
-    } catch (error) {
-      this._recordResult(false)
-      if (error.message === "timeout") {
-        logger.debug(`[${this.sessionId}] MongoDB ${operationName}: timeout`)
-      } else {
-        logger.error(`[${this.sessionId}] MongoDB ${operationName}: ${error.message}`)
-      }
-      return fallbackValue
+    } catch {
+      this.failures++
+      this.healthy = this.failures < 3
+      return fallback
     }
   }
 
-  async readData(fileName) {
-    return await this._safeOperation(
-      `read(${fileName})`,
-      async () => {
-        const dataStr = await this.mongoStorage.readAuthData(this.sessionId, fileName)
-        if (dataStr) {
-          return JSON.parse(dataStr, BufferJSON.reviver)
-        }
-        return null
-      },
-      null,
-    )
+  async read(fileName) {
+    return this.safeOp(async () => {
+      const data = await this.mongo.readAuthData(this.sessionId, fileName)
+      return data ? JSON.parse(data, BufferJSON.reviver) : null
+    })
   }
 
-  async writeData(fileName, data) {
-    const dataStr = JSON.stringify(data, BufferJSON.replacer)
-
-    const result = await this._safeOperation(
-      `write(${fileName})`,
-      async () => {
-        return await this.mongoStorage.writeAuthData(this.sessionId, fileName, dataStr)
-      },
-      false,
-    )
-
-    return result
+  async write(fileName, data) {
+    const json = JSON.stringify(data, BufferJSON.replacer)
+    return this.safeOp(() => this.mongo.writeAuthData(this.sessionId, fileName, json), false)
   }
 
-  async deleteData(fileName) {
-    return await this._safeOperation(
-      `delete(${fileName})`,
-      async () => {
-        return await this.mongoStorage.deleteAuthData(this.sessionId, fileName)
-      },
-      false,
-    )
+  async delete(fileName) {
+    return this.safeOp(() => this.mongo.deleteAuthData(this.sessionId, fileName), false)
   }
 
   async cleanup() {
-    return await this._safeOperation(
-      "cleanup",
-      async () => {
-        return await this.mongoStorage.deleteAuthState(this.sessionId)
-      },
-      false,
-    )
+    return this.safeOp(() => this.mongo.deleteAuthState(this.sessionId), false)
   }
 
-  async getAllFiles() {
-    return await this._safeOperation(
-      "getAllFiles",
-      async () => {
-        return await this.mongoStorage.getAllAuthFiles(this.sessionId)
-      },
-      [],
-    )
+  async listFiles() {
+    return this.safeOp(() => this.mongo.getAllAuthFiles(this.sessionId), [])
   }
 
-  async getPreKeyCount() {
-    return await this._safeOperation(
-      "getPreKeyCount",
-      async () => {
-        const files = await this.mongoStorage.getAllAuthFiles(this.sessionId)
-        return files.filter((f) => isPreKeyFile(f)).length
-      },
-      0,
-    )
-  }
+  async cleanupPreKeys() {
+    return this.safeOp(async () => {
+      const files = await this.mongo.getAllAuthFiles(this.sessionId)
+      const preKeys = files.filter(isPreKeyFile)
 
-  async cleanupOldPreKeys() {
-    return await this._safeOperation(
-      "cleanupOldPreKeys",
-      async () => {
-        const files = await this.mongoStorage.getAllAuthFiles(this.sessionId)
-        const preKeyFiles = files.filter((f) => isPreKeyFile(f))
+      if (preKeys.length <= CONFIG.PREKEY_THRESHOLD) {
+        return { deleted: 0, total: preKeys.length }
+      }
 
-        if (preKeyFiles.length <= CONFIG.PREKEY_CLEANUP_THRESHOLD) {
-          return { deleted: 0, total: preKeyFiles.length }
-        }
+      preKeys.sort((a, b) => extractPreKeyId(a) - extractPreKeyId(b))
+      const toDelete = preKeys.slice(0, Math.max(0, preKeys.length - CONFIG.PREKEY_MAX))
 
-        logger.info(`[${this.sessionId}] 🧹 MongoDB pre-key cleanup: ${preKeyFiles.length} files`)
+      let deleted = 0
+      for (const file of toDelete) {
+        if (await this.mongo.deleteAuthData(this.sessionId, file)) deleted++
+      }
 
-        // Sort by pre-key ID (oldest first)
-        preKeyFiles.sort((a, b) => extractPreKeyId(a) - extractPreKeyId(b))
-
-        // Calculate how many to delete
-        const toDeleteCount = Math.max(0, preKeyFiles.length - CONFIG.PREKEY_MAX_COUNT)
-        const toDelete = preKeyFiles.slice(0, toDeleteCount)
-
-        let deleted = 0
-        for (const fileName of toDelete) {
-          const success = await this.mongoStorage.deleteAuthData(this.sessionId, fileName)
-          if (success) deleted++
-        }
-
-        logger.info(`[${this.sessionId}] ✅ MongoDB: Deleted ${deleted}/${toDeleteCount} old pre-keys`)
-        return { deleted, total: preKeyFiles.length }
-      },
-      { deleted: 0 },
-    )
+      logger.info(`[${this.sessionId}] MongoDB cleaned ${deleted}/${toDelete.length} pre-keys`)
+      return { deleted, total: preKeys.length }
+    }, { deleted: 0 })
   }
 }
 
-// ==================== MAIN AUTH STATE FUNCTION ====================
-export const useMongoDBAuthState = async (mongoStorage, sessionId, isPairing = false, source = "telegram") => {
+// ============================================================================
+// CREDENTIAL VALIDATION
+// ============================================================================
+
+const isFullyInitialized = (creds) => !!(
+  creds?.noiseKey &&
+  creds?.signedIdentityKey &&
+  creds?.me &&
+  creds?.account &&
+  creds?.registered === true
+)
+
+const hasBasicKeys = (creds) => !!(creds?.noiseKey && creds?.signedIdentityKey)
+
+// ============================================================================
+// STORAGE SELECTION LOGIC
+// ============================================================================
+
+const determineStorage = async (mode, mongoStore, fileStore, isPairing) => {
+  if (mode === "file") {
+    return { primary: "file", migrate: false }
+  }
+
+  const mongoCreds = mongoStore ? await mongoStore.read("creds.json") : null
+  const fileCreds = await fileStore.read("creds.json")
+
+  if (hasBasicKeys(mongoCreds)) {
+    return { primary: "mongodb", migrate: false }
+  }
+
+  if (hasBasicKeys(fileCreds)) {
+    return { primary: "file", migrate: !!mongoStore }
+  }
+
+  if (isPairing && mongoStore) {
+    return { primary: "mongodb", migrate: false }
+  }
+
+  return { primary: "mongodb", migrate: false }
+}
+
+// ============================================================================
+// MAIN AUTH STATE FUNCTION
+// ============================================================================
+
+export const useMongoDBAuthState = async (
+  mongoStorage, 
+  sessionId, 
+  isPairing = false, 
+  source = "telegram"
+) => {
   if (!sessionId?.startsWith("session_")) {
     throw new Error(`Invalid sessionId: ${sessionId}`)
   }
 
-  const storageMode = getStorageMode()
-  const isWebSession = source === "web"
+  const mode = getStorageMode()
+  logger.info(`[${sessionId}] Auth: ${mode.toUpperCase()} | Source: ${source} | Pairing: ${isPairing}`)
 
-  logger.info(`[${sessionId}] 🔐 Auth mode: ${storageMode.toUpperCase()} | Source: ${source}`)
+  // Initialize storage layers
+  const fileStore = new FileStorage(sessionId)
+  await fileStore.init()
 
-  // Initialize file storage (always needed)
-  const fileStorage = new FileStorageManager(sessionId)
-  await fileStorage.init()
+  const mongoStore = (mode === "mongodb" || source === "web") && mongoStorage?.isConnected
+    ? new MongoStorage(mongoStorage, sessionId)
+    : null
 
-  // Initialize MongoDB storage if available
-  let mongoStore = null
-
-  if ((storageMode === "mongodb" || isWebSession) && mongoStorage?.isConnected) {
-    mongoStore = new MongoDBStorageManager(mongoStorage, sessionId)
-    globalCollectionRefs.set(sessionId, mongoStorage)
-    logger.info(`[${sessionId}] ✅ MongoDB storage manager created`)
-  }
-
-  // ==================== DETERMINE PRIMARY STORAGE ====================
-
-  let primaryStorage = "file"
-  let shouldMigrateToMongo = false
-
-  if (storageMode === "file") {
-    primaryStorage = "file"
-    logger.info(`[${sessionId}] 📁 FILE MODE: Using file storage only`)
-  } else if (storageMode === "mongodb") {
-    const mongoHasAuth = mongoStore ? await mongoStore.readData("creds.json") : null
-    const fileHasAuth = await fileStorage.readFile("creds.json")
-
-    if (mongoHasAuth?.noiseKey && mongoHasAuth?.signedIdentityKey) {
-      primaryStorage = "mongodb"
-      logger.info(`[${sessionId}] 📦 MONGODB MODE: Using MongoDB (auth exists)`)
-    } else if (fileHasAuth?.noiseKey && fileHasAuth?.signedIdentityKey) {
-      primaryStorage = "file"
-      shouldMigrateToMongo = mongoStore !== null
-      if (shouldMigrateToMongo) {
-        logger.info(`[${sessionId}] 📁→📦 MONGODB MODE: Using file, will migrate in 15s`)
-      }
-} else if (isPairing) {
-  // 🔴 FIX: Use MongoDB during pairing if available
   if (mongoStore) {
-    primaryStorage = "mongodb"
-    logger.info(`[${sessionId}] 📦 MONGODB MODE: New pairing, using MongoDB`)
-  } else {
-    primaryStorage = "file"
-    logger.info(`[${sessionId}] 📁 MONGODB MODE: New pairing, no MongoDB available`)
-  }
-} else {
-      primaryStorage = "mongodb"
-      logger.info(`[${sessionId}] 📦 MONGODB MODE: New session, using MongoDB`)
-    }
+    globalCollectionRefs.set(sessionId, mongoStorage)
   }
 
-  // ==================== READ/WRITE OPERATIONS ====================
+  // Determine primary storage
+  const { primary, migrate } = await determineStorage(mode, mongoStore, fileStore, isPairing)
+
+  if (migrate) {
+    logger.info(`[${sessionId}] Will migrate to MongoDB in ${CONFIG.MIGRATION_DELAY / 1000}s`)
+  }
+
+  // ============================================================================
+  // READ OPERATION
+  // ============================================================================
 
   const readData = async (fileName) => {
-    // Try primary storage first
-    if (primaryStorage === "mongodb" && mongoStore) {
-      const mongoData = await mongoStore.readData(fileName)
-      if (mongoData) {
-        return mongoData
-      }
+    if (primary === "mongodb" && mongoStore) {
+      const data = await mongoStore.read(fileName)
+      if (data) return data
     }
-
-    // Fallback to file
-    return await fileStorage.readFile(fileName)
+    return fileStore.read(fileName)
   }
 
-// ============================================================================
-// CRITICAL FIX: Ensure MongoDB writes happen IMMEDIATELY during pairing
-// Replace the writeData function in auth-state.js (around line 370-410)
-// ============================================================================
+  // ============================================================================
+  // WRITE OPERATION
+  // ============================================================================
 
-const writeData = async (data, fileName) => {
-  let success = false
+  const writeData = async (data, fileName) => {
+    await fs.mkdir(fileStore.dir, { recursive: true }).catch(() => {})
 
-  // ✅ CRITICAL: ALWAYS ensure directory exists before ANY write attempt
-  try {
-    await fs.mkdir(fileStorage.sessionDir, { recursive: true })
-  } catch (error) {
-    logger.error(`[${sessionId}] Failed to ensure directory exists:`, error.message)
-  }
+    // Handle orphaned sessions (only when NOT pairing)
+    if (fileName === "creds.json" && !isPairing) {
+      const existingCreds = await fileStore.read("creds.json")
+      
+      if (existingCreds) {
+        if (isFullyInitialized(existingCreds)) {
+          logger.info(`[${sessionId}] Reusing existing session`)
+          return true
+        }
 
-  // 🔴 CRITICAL FIX: In MongoDB mode, ALWAYS write to MongoDB synchronously during pairing
-  // Don't rely on background writes - they're getting skipped
-const isMongoDBMode = storageMode === "mongodb"
-const shouldWriteToMongo = (primaryStorage === "mongodb" && mongoStore) || (isMongoDBMode && mongoStore && isPairing)
-
-if (shouldWriteToMongo) {
-    // 🔴 CRITICAL: Write to MongoDB FIRST during pairing
-    logger.info(`[${sessionId}] 📦 PAIRING MODE: Writing ${fileName} to MongoDB + File`)
-    
-    // Write to MongoDB synchronously (BLOCKING)
-    let mongoSuccess = false
-    try {
-      mongoSuccess = await mongoStore.writeData(fileName, data)
-      if (mongoSuccess) {
-        logger.info(`[${sessionId}] ✅ MongoDB write successful: ${fileName}`)
-      } else {
-        logger.error(`[${sessionId}] ❌ MongoDB write returned false: ${fileName}`)
+        // Orphaned session detected
+        logger.warn(`[${sessionId}] Orphaned session detected, cleaning up...`)
+        
+        try {
+          const { getSessionStorage } = await import("../storage/index.js")
+          const storage = getSessionStorage()
+          await storage.completelyDeleteSession(sessionId)
+          logger.info(`[${sessionId}] Cleanup complete, creating fresh session`)
+        } catch (error) {
+          logger.error(`[${sessionId}] Cleanup error: ${error.message}`)
+          return false
+        }
       }
-    } catch (mongoError) {
-      logger.error(`[${sessionId}] ❌ MongoDB write exception: ${mongoError.message}`)
     }
-    
-    // Write to file as backup (also synchronous during pairing)
-    let fileSuccess = false
-    try {
-      fileSuccess = await fileStorage.writeFile(fileName, data)
-      if (fileSuccess) {
-        logger.debug(`[${sessionId}] ✅ File backup write: ${fileName}`)
+
+    const isMongoMode = mode === "mongodb"
+    const useMongo = (primary === "mongodb" && mongoStore) || (isMongoMode && mongoStore && isPairing)
+    const isPreKey = isPreKeyFile(fileName)
+
+    // Pairing mode: prioritize file writes
+    if (isPairing) {
+      if (isPreKey) {
+        fileStore.write(fileName, data).catch(() => {})
+        if (useMongo) mongoStore.write(fileName, data).catch(() => {})
+        return true
       }
-    } catch (fileError) {
-      logger.error(`[${sessionId}] File write error: ${fileError.message}`)
+      
+      const fileSuccess = await fileStore.write(fileName, data)
+      if (useMongo) mongoStore.write(fileName, data).catch(() => {})
+      return fileSuccess
     }
-    
-    // Success if either succeeded (prefer MongoDB)
-    success = mongoSuccess || fileSuccess
-    
-    logger.info(`[${sessionId}] Pairing write result: MongoDB=${mongoSuccess ? '✅' : '❌'}, File=${fileSuccess ? '✅' : '❌'}`)
-    
+
+    // Protect existing creds.json in normal mode
+    if (fileName === "creds.json" && !isPairing) {
+      return true
+    }
+
+    // Pre-key handling: async writes
+    if (isPreKey) {
+      if (useMongo) mongoStore.write(fileName, data).catch(() => {})
+      fileStore.write(fileName, data).catch(() => {})
+      return true
+    }
+
+    // Standard write operation
+    if (useMongo) {
+      const success = await mongoStore.write(fileName, data)
+      fileStore.write(fileName, data).catch(() => {})
+      return success
+    }
+
+    const success = await fileStore.write(fileName, data)
+    if (isMongoMode && mongoStore) {
+      mongoStore.write(fileName, data).catch(() => {})
+    }
     return success
   }
 
-  // ✅ NORMAL MODE: Not pairing or not MongoDB mode
-  if (primaryStorage === "mongodb" && mongoStore) {
-    // MongoDB is primary storage
-    success = await mongoStore.writeData(fileName, data)
-    
-    // Background file backup
-    ;(async () => {
-      try {
-        await fs.mkdir(fileStorage.sessionDir, { recursive: true })
-        await fileStorage.writeFile(fileName, data)
-      } catch (err) {
-        logger.debug(`[${sessionId}] Background file write failed: ${err.message}`)
-      }
-    })()
-  } else {
-    // File is primary storage
-    try {
-      await fs.mkdir(fileStorage.sessionDir, { recursive: true })
-    } catch (error) {
-      logger.debug(`[${sessionId}] Directory ensure retry: ${error.message}`)
-    }
-    
-    success = await fileStorage.writeFile(fileName, data)
-    
-    // If MongoDB mode but not pairing, do background MongoDB write
-    if (isMongoDBMode && mongoStore) {
-      ;(async () => {
-        try {
-          await mongoStore.writeData(fileName, data)
-          logger.debug(`[${sessionId}] ✅ Background MongoDB write: ${fileName}`)
-        } catch (err) {
-          logger.debug(`[${sessionId}] Background MongoDB write failed: ${err.message}`)
-        }
-      })()
-    }
-  }
-
-  return success
-}
+  // ============================================================================
+  // DELETE OPERATION
+  // ============================================================================
 
   const removeData = async (fileName) => {
-    const promises = []
-
-    if (mongoStore) {
-      promises.push(mongoStore.deleteData(fileName))
-    }
-
-    promises.push(fileStorage.deleteFile(fileName))
-
-    await Promise.all(promises)
+    const ops = [fileStore.delete(fileName)]
+    if (mongoStore) ops.push(mongoStore.delete(fileName))
+    await Promise.all(ops)
   }
 
-  // ==================== LOAD OR CREATE CREDENTIALS ====================
+  // ============================================================================
+  // LOAD OR CREATE CREDENTIALS
+  // ============================================================================
 
-  const existingCreds = await readData("creds.json")
-  const creds = existingCreds?.noiseKey && existingCreds?.signedIdentityKey ? existingCreds : initAuthCreds()
+  const existing = await readData("creds.json")
+  const creds = hasBasicKeys(existing) ? existing : initAuthCreds()
+  const isNew = !existing
 
-  const isNewSession = !existingCreds
-
-  if (isNewSession) {
-    logger.info(`[${sessionId}] 🆕 Creating new credentials`)
+  if (isNew) {
+    logger.info(`[${sessionId}] Creating new credentials`)
     await writeData(creds, "creds.json")
   } else {
-    logger.info(`[${sessionId}] ✅ Loaded existing credentials from ${primaryStorage}`)
+    logger.info(`[${sessionId}] Loaded credentials from ${primary}`)
   }
 
-  // ==================== MIGRATION TIMER ====================
+  // Sync MongoDB creds to file on initialization
+  if (mode === "mongodb" && mongoStore && primary === "mongodb" && !isNew) {
+    const mongoCreds = await mongoStore.read("creds.json")
+    if (hasBasicKeys(mongoCreds)) {
+      const syncSuccess = await fileStore.write("creds.json", mongoCreds)
+      if (syncSuccess) {
+        logger.info(`[${sessionId}] Synced creds.json from MongoDB to file`)
+      }
+    }
+  }
+
+  // ============================================================================
+  // MIGRATION TIMER
+  // ============================================================================
 
   let migrationTimer = null
 
-  if (shouldMigrateToMongo && mongoStore && !isNewSession) {
-    logger.info(`[${sessionId}] ⏰ Scheduling file→MongoDB migration in ${CONFIG.MIGRATION_DELAY / 1000}s`)
-
+  if (migrate && mongoStore && !isNew) {
     migrationTimer = setTimeout(async () => {
       try {
-        logger.info(`[${sessionId}] 🔄 Starting file→MongoDB migration`)
-
-        // Verify directory exists
-        try {
-          await fs.access(fileStorage.sessionDir)
-        } catch (error) {
-          logger.error(`[${sessionId}] ❌ Directory doesn't exist, staying on file storage`)
-          primaryStorage = "file"
-          return
-        }
-
-        const fileNames = await fileStorage.getAllFiles()
-
-        if (fileNames.length === 0) {
-          logger.warn(`[${sessionId}] No auth files found to migrate`)
-          return
-        }
-
-        logger.info(`[${sessionId}] Found ${fileNames.length} files to migrate`)
+        logger.info(`[${sessionId}] Starting migration...`)
+        
+        const files = await fileStore.listFiles()
+        if (!files.length) return
 
         let migrated = 0
-        let failed = 0
-
-        for (const fileName of fileNames) {
-          try {
-            const data = await fileStorage.readFile(fileName)
-
-            if (!data) {
-              failed++
-              continue
-            }
-
-            const success = await mongoStore.writeData(fileName, data)
-
-            if (success) {
-              migrated++
-              if (migrated % 50 === 0) {
-                logger.info(`[${sessionId}] Migration progress: ${migrated}/${fileNames.length}`)
-              }
-            } else {
-              failed++
-            }
-
-            await new Promise((resolve) => setTimeout(resolve, 50))
-          } catch (error) {
-            logger.error(`[${sessionId}] Migration error for ${fileName}: ${error.message}`)
-            failed++
+        for (const file of files) {
+          const data = await fileStore.read(file)
+          if (data && await mongoStore.write(file, data)) {
+            migrated++
           }
+          await new Promise(r => setTimeout(r, 50))
         }
 
-        const successRate = migrated / fileNames.length
-
-        logger.info(
-          `[${sessionId}] 📊 Migration: ${migrated} migrated, ${failed} failed (${(successRate * 100).toFixed(1)}%)`,
-        )
-
-        if (successRate >= 0.95) {
-          logger.info(`[${sessionId}] ✅ Migration successful → switched to MongoDB`)
-          primaryStorage = "mongodb"
-        } else {
-          logger.error(`[${sessionId}] ❌ Migration failed → staying on file storage`)
-          primaryStorage = "file"
+        if (migrated / files.length >= 0.95) {
+          logger.info(`[${sessionId}] Migration complete: ${migrated}/${files.length}`)
         }
       } catch (error) {
-        logger.error(`[${sessionId}] Migration crashed: ${error.message}`)
-        primaryStorage = "file"
+        logger.error(`[${sessionId}] Migration error: ${error.message}`)
       }
     }, CONFIG.MIGRATION_DELAY)
   }
 
+  // ============================================================================
+  // BACKUP TIMER (FILE MODE ONLY)
+  // ============================================================================
+
   let backupTimer = null
-  let preKeyCleanupTimer = null
 
-  if (storageMode === "file" && mongoStore && !isNewSession) {
-    // Start backup timer (every 4 hours with random jitter)
-    const startBackupTimer = () => {
-      const jitter = Math.random() * 30 * 60 * 1000 // 0-30 min random jitter
-      const interval = CONFIG.BACKUP_INTERVAL + jitter
-
-      backupTimer = setTimeout(async () => {
-        await performSessionBackup()
-        startBackupTimer() // Schedule next backup
-      }, interval)
-    }
-
-    const performSessionBackup = async () => {
+  if (mode === "file" && mongoStore && !isNew) {
+    const backup = async () => {
       try {
-        logger.info(`[${sessionId}] 📦 Starting session backup to MongoDB...`)
-
-        // Get non-prekey files for backup
-        const filesToBackup = await fileStorage.getNonPreKeyFiles()
-
-        if (filesToBackup.length === 0) {
-          logger.info(`[${sessionId}] No files to backup`)
-          return
-        }
-
+        const files = await fileStore.listFiles(f => !isPreKeyFile(f))
         let backed = 0
-        let failed = 0
-
-        for (const fileName of filesToBackup) {
-          try {
-            const data = await fileStorage.readFile(fileName)
-            if (data) {
-              const success = await mongoStore.writeData(fileName, data)
-              if (success) backed++
-              else failed++
-            }
-          } catch (error) {
-            failed++
-            logger.debug(`[${sessionId}] Backup failed for ${fileName}: ${error.message}`)
-          }
+        
+        for (const file of files) {
+          const data = await fileStore.read(file)
+          if (data && await mongoStore.write(file, data)) backed++
         }
-
-        // Also backup metadata to sessions collection
-        try {
-          const metadataPath = path.join(fileStorage.sessionDir, "metadata.json")
-          const metadataContent = await fs.readFile(metadataPath, "utf8").catch(() => null)
-
-          if (metadataContent) {
-            const metadata = JSON.parse(metadataContent)
-            await mongoStore.mongoStorage.saveSession(sessionId, metadata)
-            logger.debug(`[${sessionId}] Metadata backed up to sessions collection`)
-          }
-        } catch (error) {
-          logger.debug(`[${sessionId}] Metadata backup skipped: ${error.message}`)
-        }
-
-        logger.info(`[${sessionId}] ✅ Backup complete: ${backed} files backed up, ${failed} failed`)
+        
+        logger.info(`[${sessionId}] Backup: ${backed}/${files.length}`)
       } catch (error) {
-        logger.error(`[${sessionId}] Backup error: ${error.message}`)
+        logger.error(`[${sessionId}] Backup failed: ${error.message}`)
       }
     }
 
-    // Initial backup after 1 hour
-    setTimeout(
-      () => {
-        performSessionBackup()
-        startBackupTimer()
-      },
-      60 * 60 * 1000,
-    )
+    setTimeout(() => {
+      backup()
+      backupTimer = setInterval(backup, CONFIG.BACKUP_INTERVAL)
+    }, 60 * 60 * 1000)
   }
 
-  const startPreKeyCleanup = () => {
-    preKeyCleanupTimer = setInterval(async () => {
-      try {
-        // Cleanup file pre-keys
-        const fileResult = await fileStorage.cleanupOldPreKeys()
+  // ============================================================================
+  // PRE-KEY CLEANUP TIMER
+  // ============================================================================
 
-        // Cleanup MongoDB pre-keys if available
-        if (mongoStore) {
-          const mongoResult = await mongoStore.cleanupOldPreKeys()
-        }
+  let cleanupTimer = null
+
+  setTimeout(() => {
+    cleanupTimer = setInterval(async () => {
+      try {
+        await fileStore.cleanupPreKeys()
+        if (mongoStore) await mongoStore.cleanupPreKeys()
       } catch (error) {
-        logger.error(`[${sessionId}] Pre-key cleanup error: ${error.message}`)
+        logger.error(`[${sessionId}] Cleanup error: ${error.message}`)
       }
     }, CONFIG.PREKEY_CLEANUP_INTERVAL)
-  }
+  }, 2 * 60 * 1000)
 
-  // Start pre-key cleanup after 2 minutes
-  setTimeout(startPreKeyCleanup, 2 * 60 * 1000)
-
-  // ==================== RETURN AUTH STATE ====================
+  // ============================================================================
+  // RETURN AUTH STATE OBJECT
+  // ============================================================================
 
   return {
     state: {
@@ -779,18 +511,16 @@ if (shouldWriteToMongo) {
       keys: {
         get: async (type, ids) => {
           const data = {}
-
           for (const id of ids) {
             const fileName = `${type}-${id}.json`
             let value = await readData(fileName)
-
+            
             if (type === "app-state-sync-key" && value) {
               value = proto.Message.AppStateSyncKeyData.fromObject(value)
             }
-
+            
             if (value) data[id] = value
           }
-
           return data
         },
         set: async (data) => {
@@ -798,12 +528,7 @@ if (shouldWriteToMongo) {
             for (const id in data[category]) {
               const value = data[category][id]
               const file = `${category}-${id}.json`
-
-              if (value) {
-                await writeData(value, file)
-              } else {
-                await removeData(file)
-              }
+              value ? await writeData(value, file) : await removeData(file)
             }
           }
         },
@@ -811,139 +536,70 @@ if (shouldWriteToMongo) {
     },
     saveCreds: () => writeData(creds, "creds.json"),
     cleanup: async () => {
-      logger.info(`[${sessionId}] 🧹 Cleaning up auth state`)
+      if (migrationTimer) clearTimeout(migrationTimer)
+      if (backupTimer) clearInterval(backupTimer)
+      if (cleanupTimer) clearInterval(cleanupTimer)
 
-      if (migrationTimer) {
-        clearTimeout(migrationTimer)
-        logger.debug(`[${sessionId}] Cancelled pending migration`)
-      }
-
-      if (backupTimer) {
-        clearTimeout(backupTimer)
-        logger.debug(`[${sessionId}] Cancelled backup timer`)
-      }
-
-      if (preKeyCleanupTimer) {
-        clearInterval(preKeyCleanupTimer)
-        logger.debug(`[${sessionId}] Cancelled pre-key cleanup timer`)
-      }
-
-      const cleanupPromises = []
-
-      if (mongoStore) {
-        cleanupPromises.push(mongoStore.cleanup())
-      }
-
-      cleanupPromises.push(fileStorage.cleanup())
-
-      await Promise.allSettled(cleanupPromises)
-
+      const ops = [fileStore.cleanup()]
+      if (mongoStore) ops.push(mongoStore.cleanup())
+      
+      await Promise.allSettled(ops)
       globalCollectionRefs.delete(sessionId)
-
-      logger.info(`[${sessionId}] ✅ Auth cleanup complete`)
-    },
-    performBackup: async () => {
-      if (!mongoStore) {
-        return { success: false, message: "MongoDB not available" }
-      }
-
-      const filesToBackup = await fileStorage.getNonPreKeyFiles()
-      let backed = 0
-
-      for (const fileName of filesToBackup) {
-        try {
-          const data = await fileStorage.readFile(fileName)
-          if (data) {
-            const success = await mongoStore.writeData(fileName, data)
-            if (success) backed++
-          }
-        } catch (error) {
-          // Skip
-        }
-      }
-
-      return { success: true, backedUp: backed, total: filesToBackup.length }
-    },
-    cleanupPreKeys: async () => {
-      const fileResult = await fileStorage.cleanupOldPreKeys()
-      const mongoResult = mongoStore ? await mongoStore.cleanupOldPreKeys() : { deleted: 0 }
-
-      return {
-        file: fileResult,
-        mongodb: mongoResult,
-      }
+      
+      logger.info(`[${sessionId}] Cleanup complete`)
     },
   }
 }
 
-// ==================== HELPER FUNCTIONS ====================
+// ============================================================================
+// EXPORTED UTILITY FUNCTIONS
+// ============================================================================
 
 export const cleanupSessionAuthData = async (mongoStorage, sessionId) => {
   try {
-    logger.info(`[${sessionId}] Cleaning up all auth data`)
-
-    const cleanupPromises = []
-
-    // Cleanup MongoDB
+    const ops = []
+    
     if (isMongoDBMode() && mongoStorage?.isConnected) {
-      cleanupPromises.push(
-        mongoStorage.deleteAuthState(sessionId).catch((error) => {
-          logger.error(`[${sessionId}] MongoDB cleanup error:`, error.message)
-          return false
-        }),
-      )
+      ops.push(mongoStorage.deleteAuthState(sessionId).catch(() => false))
     }
+    
+    const fileStore = new FileStorage(sessionId)
+    await fileStore.init()
+    ops.push(fileStore.cleanup())
 
-    // Cleanup files
-    const fileStorage = new FileStorageManager(sessionId)
-    await fileStorage.init()
-    cleanupPromises.push(fileStorage.cleanup())
-
-    const results = await Promise.allSettled(cleanupPromises)
-    const success = results.some((r) => r.status === "fulfilled" && r.value)
-
+    const results = await Promise.allSettled(ops)
     globalCollectionRefs.delete(sessionId)
-
-    return success
+    
+    return results.some(r => r.status === "fulfilled" && r.value)
   } catch (error) {
-    logger.error(`[${sessionId}] Cleanup failed:`, error.message)
+    logger.error(`[${sessionId}] Cleanup failed: ${error.message}`)
     return false
   }
 }
 
 export const hasValidAuthData = async (mongoStorage, sessionId) => {
   try {
-    const fileStorage = new FileStorageManager(sessionId)
-    await fileStorage.init()
+    const fileStore = new FileStorage(sessionId)
+    await fileStore.init()
 
-    const fileCreds = await fileStorage.readFile("creds.json")
-    if (fileCreds?.noiseKey && fileCreds?.signedIdentityKey) {
-      return true
-    }
+    const fileCreds = await fileStore.read("creds.json")
+    if (hasBasicKeys(fileCreds)) return true
 
     if (isMongoDBMode() && mongoStorage?.isConnected) {
-      try {
-        const hasAuth = await mongoStorage.hasValidAuthData(sessionId)
-        if (hasAuth) {
-          return true
-        }
-      } catch (error) {
-        logger.debug(`[${sessionId}] MongoDB validation error:`, error.message)
-      }
+      return await mongoStorage.hasValidAuthData(sessionId)
     }
 
     return false
-  } catch (error) {
-    logger.error(`[${sessionId}] Auth validation error:`, error.message)
+  } catch {
     return false
   }
 }
 
 export const checkAuthAvailability = async (mongoStorage, sessionId) => {
-  const fileStorage = new FileStorageManager(sessionId)
-  await fileStorage.init()
+  const fileStore = new FileStorage(sessionId)
+  await fileStore.init()
 
-  const hasFile = (await fileStorage.readFile("creds.json")) !== null
+  const hasFile = (await fileStore.read("creds.json")) !== null
   let hasMongo = false
 
   if (isMongoDBMode() && mongoStorage?.isConnected) {
@@ -954,46 +610,43 @@ export const checkAuthAvailability = async (mongoStorage, sessionId) => {
     hasFile,
     hasMongo,
     hasAuth: hasFile || hasMongo,
-    preferred: isFileMode() ? (hasFile ? "file" : "none") : hasMongo ? "mongodb" : hasFile ? "file" : "none",
+    preferred: isFileMode() 
+      ? (hasFile ? "file" : "none") 
+      : hasMongo ? "mongodb" : hasFile ? "file" : "none",
   }
 }
 
-export const getAuthStorageStats = () => {
-  return {
-    storageMode: getStorageMode(),
-    isMongoDBMode: isMongoDBMode(),
-    isFileMode: isFileMode(),
-    migrationDelay: `${CONFIG.MIGRATION_DELAY / 1000}s`,
-    backupInterval: `${CONFIG.BACKUP_INTERVAL / 1000 / 60 / 60}h`,
-    preKeyCleanupInterval: `${CONFIG.PREKEY_CLEANUP_INTERVAL / 1000 / 60}min`,
-    preKeyMaxCount: CONFIG.PREKEY_MAX_COUNT,
-    preKeyCleanupThreshold: CONFIG.PREKEY_CLEANUP_THRESHOLD,
-    activeCollectionRefs: globalCollectionRefs.size,
-  }
-}
+export const getAuthStorageStats = () => ({
+  storageMode: getStorageMode(),
+  isMongoDBMode: isMongoDBMode(),
+  isFileMode: isFileMode(),
+  migrationDelay: `${CONFIG.MIGRATION_DELAY / 1000}s`,
+  backupInterval: `${CONFIG.BACKUP_INTERVAL / 3600000}h`,
+  preKeyCleanupInterval: `${CONFIG.PREKEY_CLEANUP_INTERVAL / 60000}min`,
+  preKeyMaxCount: CONFIG.PREKEY_MAX,
+  preKeyCleanupThreshold: CONFIG.PREKEY_THRESHOLD,
+  activeCollectionRefs: globalCollectionRefs.size,
+})
 
 export const cleanupAllSessionPreKeys = async (sessionsDir = "./sessions") => {
   try {
-    const fsModule = await import("fs/promises")
-    const pathModule = await import("path")
-
-    const entries = await fsModule.readdir(sessionsDir, { withFileTypes: true })
-    const sessionFolders = entries.filter((e) => e.isDirectory() && e.name.startsWith("session_"))
+    const entries = await fs.readdir(sessionsDir, { withFileTypes: true })
+    const sessionFolders = entries.filter(e => e.isDirectory() && e.name.startsWith("session_"))
 
     let totalDeleted = 0
 
     for (const folder of sessionFolders) {
-      const fileStorage = new FileStorageManager(folder.name, sessionsDir.replace("/" + folder.name, ""))
-      await fileStorage.init()
+      const fileStore = new FileStorage(folder.name, sessionsDir.replace("/" + folder.name, ""))
+      await fileStore.init()
 
-      const result = await fileStorage.cleanupOldPreKeys()
+      const result = await fileStore.cleanupPreKeys()
       totalDeleted += result.deleted || 0
     }
 
-    logger.info(`✅ Global pre-key cleanup: ${totalDeleted} pre-keys deleted across ${sessionFolders.length} sessions`)
+    logger.info(`Global cleanup: ${totalDeleted} pre-keys deleted across ${sessionFolders.length} sessions`)
     return { deleted: totalDeleted, sessions: sessionFolders.length }
   } catch (error) {
-    logger.error(`Global pre-key cleanup failed: ${error.message}`)
+    logger.error(`Global cleanup failed: ${error.message}`)
     return { deleted: 0, error: error.message }
   }
 }
