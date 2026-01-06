@@ -237,6 +237,23 @@ const isFullyInitialized = (creds) => !!(
 
 const hasBasicKeys = (creds) => !!(creds?.noiseKey && creds?.signedIdentityKey)
 
+const validateCredsForWrite = (creds, sessionId) => {
+  const missing = []
+  
+  if (!creds?.noiseKey) missing.push('noiseKey')
+  if (!creds?.signedIdentityKey) missing.push('signedIdentityKey')
+  if (!creds?.me) missing.push('me')
+  if (!creds?.account) missing.push('account')
+  if (creds?.registered !== true) missing.push('registered')
+  
+  if (missing.length > 0) {
+    logger.error(`[${sessionId}] ❌ INVALID creds.json write - Missing: ${missing.join(', ')}`)
+    return false
+  }
+  
+  return true
+}
+
 // ============================================================================
 // STORAGE SELECTION LOGIC
 // ============================================================================
@@ -281,7 +298,6 @@ export const useMongoDBAuthState = async (
   const mode = getStorageMode()
   logger.info(`[${sessionId}] Auth: ${mode.toUpperCase()} | Source: ${source} | Pairing: ${isPairing}`)
 
-  // Initialize storage layers
   const fileStore = new FileStorage(sessionId)
   await fileStore.init()
 
@@ -293,12 +309,13 @@ export const useMongoDBAuthState = async (
     globalCollectionRefs.set(sessionId, mongoStorage)
   }
 
-  // Determine primary storage
   const { primary, migrate } = await determineStorage(mode, mongoStore, fileStore, isPairing)
 
   if (migrate) {
     logger.info(`[${sessionId}] Will migrate to MongoDB in ${CONFIG.MIGRATION_DELAY / 1000}s`)
   }
+
+  let credsCheckDone = false
 
   // ============================================================================
   // READ OPERATION
@@ -319,27 +336,39 @@ export const useMongoDBAuthState = async (
   const writeData = async (data, fileName) => {
     await fs.mkdir(fileStore.dir, { recursive: true }).catch(() => {})
 
-    // Handle orphaned sessions (only when NOT pairing)
-    if (fileName === "creds.json" && !isPairing) {
-      const existingCreds = await fileStore.read("creds.json")
-      
-      if (existingCreds) {
-        if (isFullyInitialized(existingCreds)) {
-          logger.info(`[${sessionId}] Reusing existing session`)
-          return true
-        }
+    if (fileName === "creds.json") {
+      if (!validateCredsForWrite(data, sessionId)) {
+        logger.error(`[${sessionId}] 🚫 BLOCKED incomplete creds.json write`)
+        return false
+      }
 
-        // Orphaned session detected
-        logger.warn(`[${sessionId}] Orphaned session detected, cleaning up...`)
+      if (!credsCheckDone) {
+        credsCheckDone = true
         
-        try {
-          const { getSessionStorage } = await import("../storage/index.js")
-          const storage = getSessionStorage()
-          await storage.completelyDeleteSession(sessionId)
-          logger.info(`[${sessionId}] Cleanup complete, creating fresh session`)
-        } catch (error) {
-          logger.error(`[${sessionId}] Cleanup error: ${error.message}`)
-          return false
+        if (isPairing) {
+          logger.info(`[${sessionId}] ✅ Writing fully initialized creds.json (pairing mode)`)
+        } else {
+          const existingCreds = await fileStore.read("creds.json")
+          
+          if (existingCreds) {
+            if (isFullyInitialized(existingCreds)) {
+              logger.info(`[${sessionId}] Reusing existing session`)
+            } else {
+              logger.warn(`[${sessionId}] Orphaned session detected, cleaning up...`)
+              
+              try {
+                const { getSessionStorage } = await import("../storage/index.js")
+                const storage = getSessionStorage()
+                await storage.completelyDeleteSession(sessionId)
+                logger.info(`[${sessionId}] Cleanup complete, creating fresh session`)
+              } catch (error) {
+                logger.error(`[${sessionId}] Cleanup error: ${error.message}`)
+                return false
+              }
+            }
+          } else {
+            logger.info(`[${sessionId}] ✅ Writing fully initialized creds.json`)
+          }
         }
       }
     }
@@ -348,7 +377,6 @@ export const useMongoDBAuthState = async (
     const useMongo = (primary === "mongodb" && mongoStore) || (isMongoMode && mongoStore && isPairing)
     const isPreKey = isPreKeyFile(fileName)
 
-    // Pairing mode: prioritize file writes
     if (isPairing) {
       if (isPreKey) {
         fileStore.write(fileName, data).catch(() => {})
@@ -361,19 +389,20 @@ export const useMongoDBAuthState = async (
       return fileSuccess
     }
 
-    // Protect existing creds.json in normal mode
-    if (fileName === "creds.json" && !isPairing) {
-      return true
+    if (fileName === "creds.json") {
+      const fileSuccess = await fileStore.write(fileName, data)
+      if (useMongo) {
+        mongoStore.write(fileName, data).catch(() => {})
+      }
+      return fileSuccess
     }
 
-    // Pre-key handling: async writes
     if (isPreKey) {
       if (useMongo) mongoStore.write(fileName, data).catch(() => {})
       fileStore.write(fileName, data).catch(() => {})
       return true
     }
 
-    // Standard write operation
     if (useMongo) {
       const success = await mongoStore.write(fileName, data)
       fileStore.write(fileName, data).catch(() => {})
@@ -412,7 +441,6 @@ export const useMongoDBAuthState = async (
     logger.info(`[${sessionId}] Loaded credentials from ${primary}`)
   }
 
-  // Sync MongoDB creds to file on initialization
   if (mode === "mongodb" && mongoStore && primary === "mongodb" && !isNew) {
     const mongoCreds = await mongoStore.read("creds.json")
     if (hasBasicKeys(mongoCreds)) {
