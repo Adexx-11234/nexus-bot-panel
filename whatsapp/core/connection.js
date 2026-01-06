@@ -2,7 +2,7 @@ import { createComponentLogger } from "../../utils/logger.js"
 import { useMultiFileAuthState, makeCacheableSignalKeyStore } from "@whiskeysockets/baileys"
 import pino from "pino"
 import { extendSocket } from "./socket-extensions.js"
-import { proto } from "@whiskeysockets/baileys"
+import { WAProto as proto } from "@whiskeysockets/baileys"
 
 const logger = createComponentLogger("CONNECTION_MANAGER")
 
