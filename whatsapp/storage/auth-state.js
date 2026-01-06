@@ -332,47 +332,37 @@ export const useMongoDBAuthState = async (
   // ============================================================================
   // WRITE OPERATION
   // ============================================================================
-
-  const writeData = async (data, fileName) => {
+const writeData = async (data, fileName) => {
     await fs.mkdir(fileStore.dir, { recursive: true }).catch(() => {})
 
     if (fileName === "creds.json") {
+      // Validate that creds has all required fields
       if (!validateCredsForWrite(data, sessionId)) {
         logger.error(`[${sessionId}] 🚫 BLOCKED incomplete creds.json write`)
         return false
       }
 
-      if (!credsCheckDone) {
-        credsCheckDone = true
-        
-        if (isPairing) {
-          logger.info(`[${sessionId}] ✅ Writing fully initialized creds.json (pairing mode)`)
-        } else {
-          const existingCreds = await fileStore.read("creds.json")
-          
-          if (existingCreds) {
-            if (isFullyInitialized(existingCreds)) {
-              logger.info(`[${sessionId}] Reusing existing session`)
-            } else {
-              logger.warn(`[${sessionId}] Orphaned session detected, cleaning up...`)
-              
-              try {
-                const { getSessionStorage } = await import("../storage/index.js")
-                const storage = getSessionStorage()
-                await storage.completelyDeleteSession(sessionId)
-                logger.info(`[${sessionId}] Cleanup complete, creating fresh session`)
-              } catch (error) {
-                logger.error(`[${sessionId}] Cleanup error: ${error.message}`)
-                return false
-              }
-            }
-          } else {
-            logger.info(`[${sessionId}] ✅ Writing fully initialized creds.json`)
-          }
-        }
+      // If validation passes, FORCE WRITE to both storages
+      logger.info(`[${sessionId}] ✅ Force writing validated creds.json`)
+      
+      const isMongoMode = mode === "mongodb"
+      const useMongo = (primary === "mongodb" && mongoStore) || (isMongoMode && mongoStore && isPairing)
+      
+      // Write to file storage (primary write)
+      const fileSuccess = await fileStore.write(fileName, data)
+      
+      // Write to MongoDB if configured
+      if (useMongo) {
+        await mongoStore.write(fileName, data).catch((err) => {
+          logger.error(`[${sessionId}] MongoDB write failed: ${err.message}`)
+        })
       }
+      
+      logger.info(`[${sessionId}] ✅ creds.json written successfully (file: ${fileSuccess}, mongo: ${useMongo})`)
+      return fileSuccess
     }
 
+    // Handle all other files (non-creds.json)
     const isMongoMode = mode === "mongodb"
     const useMongo = (primary === "mongodb" && mongoStore) || (isMongoMode && mongoStore && isPairing)
     const isPreKey = isPreKeyFile(fileName)
@@ -386,14 +376,6 @@ export const useMongoDBAuthState = async (
       
       const fileSuccess = await fileStore.write(fileName, data)
       if (useMongo) mongoStore.write(fileName, data).catch(() => {})
-      return fileSuccess
-    }
-
-    if (fileName === "creds.json") {
-      const fileSuccess = await fileStore.write(fileName, data)
-      if (useMongo) {
-        mongoStore.write(fileName, data).catch(() => {})
-      }
       return fileSuccess
     }
 
@@ -415,6 +397,7 @@ export const useMongoDBAuthState = async (
     }
     return success
   }
+
 
   // ============================================================================
   // DELETE OPERATION
