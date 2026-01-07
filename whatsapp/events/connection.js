@@ -381,63 +381,86 @@ export class ConnectionEventHandler {
   }
 
   async _attemptReconnection(sessionId) {
-    try {
-      const session = await this.sessionManager.storage.getSession(sessionId)
+  try {
+    const session = await this.sessionManager.storage.getSession(sessionId)
 
-      if (!session) {
-        logger.error(`❌ No session data found for ${sessionId} - cannot reconnect`)
-        return false
-      }
-
-      const newAttempts = (session.reconnectAttempts || 0) + 1
-      await this.sessionManager.storage
-        .updateSession(sessionId, {
-          reconnectAttempts: newAttempts,
-          connectionStatus: "connecting",
-        })
-        .catch((err) => logger.warn(`Failed to update attempts: ${err.message}`))
-
-      logger.info(`🔄 Reconnection attempt ${newAttempts} for ${sessionId}`)
-
-      const sock = await this.sessionManager.createSession(
-        session.userId,
-        session.phoneNumber,
-        session.callbacks || {},
-        true,
-        session.source || "telegram",
-        false
-      )
-
-      if (sock) {
-        logger.info(`✅ Reconnection successful for ${sessionId}`)
-        return true
-      }
-
-      return false
-    } catch (error) {
-      logger.error(`❌ Reconnection failed for ${sessionId}:`, error)
-
-      const session = await this.sessionManager.storage.getSession(sessionId)
-      const attempts = session?.reconnectAttempts || 0
-      const maxAttempts = getMaxAttempts(428)
-
-      if (attempts >= maxAttempts) {
-        logger.warn(`⚠️ Session ${sessionId} exceeded max reconnection attempts (${attempts}/${maxAttempts}) - stopping`)
-        return false
-      }
-
-      const delay = getReconnectDelay(428, attempts)
-      logger.info(`⏱️ Scheduling retry for ${sessionId} in ${delay}ms (attempt ${attempts + 1}/${maxAttempts})`)
-
-      setTimeout(() => {
-        if (this._isReconnecting(sessionId)) {
-          this._attemptReconnection(sessionId)
-        }
-      }, delay)
-
+    if (!session) {
+      logger.error(`❌ No session data found for ${sessionId} - performing complete cleanup`)
+      
+      // Clear reconnection state
+      this._endReconnection(sessionId, false)
+      this.reconnectionLocks.delete(sessionId)
+      
+      // Perform complete user cleanup
+      await this.sessionManager.performCompleteUserCleanup(sessionId)
+      
       return false
     }
+
+    const newAttempts = (session.reconnectAttempts || 0) + 1
+    await this.sessionManager.storage
+      .updateSession(sessionId, {
+        reconnectAttempts: newAttempts,
+        connectionStatus: "connecting",
+      })
+      .catch((err) => logger.warn(`Failed to update attempts: ${err.message}`))
+
+    logger.info(`🔄 Reconnection attempt ${newAttempts} for ${sessionId}`)
+
+    const sock = await this.sessionManager.createSession(
+      session.userId,
+      session.phoneNumber,
+      session.callbacks || {},
+      true,
+      session.source || "telegram",
+      false
+    )
+
+    if (sock) {
+      logger.info(`✅ Reconnection successful for ${sessionId}`)
+      this._endReconnection(sessionId, true)
+      return true
+    }
+
+    return false
+  } catch (error) {
+    logger.error(`❌ Reconnection failed for ${sessionId}:`, error)
+
+    const session = await this.sessionManager.storage.getSession(sessionId).catch(() => null)
+    
+    // If session doesn't exist after error, cleanup completely
+    if (!session) {
+      logger.error(`❌ Session ${sessionId} no longer exists after error - performing complete cleanup`)
+      
+      this._endReconnection(sessionId, false)
+      this.reconnectionLocks.delete(sessionId)
+      
+      await this.sessionManager.performCompleteUserCleanup(sessionId)
+      
+      return false
+    }
+    
+    const attempts = session.reconnectAttempts || 0
+    const maxAttempts = getMaxAttempts(428)
+
+    if (attempts >= maxAttempts) {
+      logger.warn(`⚠️ Session ${sessionId} exceeded max reconnection attempts (${attempts}/${maxAttempts}) - stopping`)
+      this._endReconnection(sessionId, false)
+      return false
+    }
+
+    const delay = getReconnectDelay(428, attempts)
+    logger.info(`⏱️ Scheduling retry for ${sessionId} in ${delay}ms (attempt ${attempts + 1}/${maxAttempts})`)
+
+    setTimeout(() => {
+      if (this._isReconnecting(sessionId)) {
+        this._attemptReconnection(sessionId)
+      }
+    }, delay)
+
+    return false
   }
+}
 
   // ============================================================================
   // SOCKET CLEANUP
