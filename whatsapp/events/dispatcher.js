@@ -5,7 +5,6 @@ import { GroupEventHandler } from "./group.js"
 import { ConnectionEventHandler } from "./connection.js"
 import { UtilityEventHandler } from "./utility.js"
 import { recordSessionActivity } from "../utils/index.js"
-import { enhanceTransactionHandling } from "../core/index.js"
 
 const logger = createComponentLogger("EVENT_DISPATCHER")
 
@@ -62,9 +61,6 @@ export class EventDispatcher {
 
       // ✅ CRITICAL FIX: Process any deferred events that were captured before handlers were ready
       this._processDeferredEvents(sock, sessionId)
-      
-      // ✅ FIX: Enhanced transaction error handling for Signal keys
-      enhanceTransactionHandling(sock, sessionId)
       
       // ✅ FIX: Monitor key store health to detect storage issues early
       // Store monitor reference for cleanup on disconnect

@@ -56,13 +56,13 @@ export default {
       
       // Add all participants
       participants.forEach((participant, index) => {
-        const phoneNumber = participant.id.split('@')[0]
+        const phoneNumber = participant.jid.split('@')[0]
        tagMessage += `${index + 1}. @${phoneNumber}\n`
       })
 
       
       // Prepare mentions array
-      const mentions = participants.map(participant => participant.id)
+      const mentions = participants.map(participant => participant.jid)
       // Add sender to mentions
       mentions.push(m.sender)
 

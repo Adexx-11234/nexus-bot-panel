@@ -296,7 +296,7 @@ export class ConnectionManager {
         // Keep pairing flag for extended period
         setTimeout(() => {
           this.pairingInProgress.delete(sessionId)
-        }, 500000)
+        }, 60000) // 1 minute (60000ms)
       } catch (error) {
         logger.error(`Pairing error for ${sessionId}:`, error)
         this.pairingInProgress.delete(sessionId)

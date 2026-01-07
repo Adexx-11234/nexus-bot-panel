@@ -20,7 +20,7 @@ const CONFIG = {
   BACKUP_INTERVAL: 4 * 60 * 60 * 1000,
   PREKEY_CLEANUP_INTERVAL: 10 * 60 * 1000,
   PREKEY_MAX: 500,
-  PREKEY_THRESHOLD: 300,
+  PREKEY_THRESHOLD: 30,
 }
 
 // ============================================================================
