@@ -235,6 +235,14 @@ async saveSession(sessionId, sessionData, credentials = null) {
 
     const session = await this.getSession(sessionId)
     const isWeb = session?.source === "web"
+    // ✅ Delete makeinstore
+  try {
+    const { deleteFileStore } = await import("../whatsapp/index.js")
+    await deleteFileStore(sessionId)
+    logger.info(`✅ Deleted makeinstore for ${sessionId}`)
+  } catch (error) {
+    logger.error(`Failed to delete makeinstore for ${sessionId}: ${error.message}`)
+  }
 
     const results = {
       file: await this.fileManager.cleanupSessionFiles(sessionId),
@@ -272,6 +280,14 @@ async saveSession(sessionId, sessionData, credentials = null) {
 
   const session = await this.getSession(sessionId)
   const isWeb = session?.source === "web"
+  // ✅ CRITICAL: Delete makeinstore FIRST
+  try {
+    const { deleteFileStore } = await import("../whatsapp/index.js")
+    await deleteFileStore(sessionId)
+    logger.info(`✅ Deleted makeinstore for ${sessionId}`)
+  } catch (error) {
+    logger.error(`Failed to delete makeinstore for ${sessionId}: ${error.message}`)
+  }
 
   // ✅ CRITICAL: Delete ALL files first (including metadata.json)
   await this.fileManager.cleanupSessionFiles(sessionId)

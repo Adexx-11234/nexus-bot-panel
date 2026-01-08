@@ -1,9 +1,7 @@
 import { createComponentLogger } from '../../utils/logger.js'
-import { normalizeJid } from '../utils/jid.js'
 
 const logger = createComponentLogger('MESSAGE_EVENTS')
 
-// ✅ SINGLETON: Reuse same MessageProcessor instance
 let messageProcessorInstance = null
 
 async function getMessageProcessor() {
@@ -17,32 +15,63 @@ async function getMessageProcessor() {
 
 /**
  * MessageEventHandler - Handles all message-related events
- * Includes: upsert, update, delete, reactions, status messages
+ * Processes: new messages, updates, deletions, reactions, status messages
  */
 export class MessageEventHandler {
   constructor() {
-    // No decryption handler needed
+    this.statusBroadcastJid = 'status@broadcast'
   }
 
   /**
- * Handle new messages (messages.upsert)
- * Main entry point for message processing - WITH DEDUPLICATION
- * ✅ FIXED: Better error handling for decryption failures
- */
-async handleMessagesUpsert(sock, sessionId, messageUpdate) {
-  try {
-    const { messages, type } = messageUpdate
+   * Main message handler with deduplication and CIPHERTEXT retry
+   */
+  async handleMessagesUpsert(sock, sessionId, messageUpdate) {
+    try {
+      const { messages, type } = messageUpdate
 
-    if (!messages || messages.length === 0) {
-      logger.debug(`[${sessionId}] Empty messages.upsert (length: 0)`)
-      return
+      if (!messages || messages.length === 0) {
+        logger.debug(`[${sessionId}] Empty messages.upsert`)
+        return
+      }
+
+      // Handle presence updates
+      await this._handlePresenceUpdates(sock, sessionId, messages)
+
+      // Handle status messages (auto-view/like)
+      await this._handleStatusMessages(sock, sessionId, messages)
+
+      // Filter and categorize messages
+      const { validMessages, ciphertextMessages, filterStats } = 
+        await this._filterMessages(sessionId, messages)
+
+      // Request retry for CIPHERTEXT messages
+      if (ciphertextMessages.length > 0) {
+        await this._requestMessageRetries(sock, sessionId, ciphertextMessages)
+      }
+
+      // Log filtering summary
+      if (validMessages.length === 0) {
+        this._logFilterSummary(sessionId, messages.length, ciphertextMessages.length, filterStats)
+        return
+      }
+
+      logger.debug(`[${sessionId}] Processing ${validMessages.length}/${messages.length} messages`)
+
+      // Process valid messages
+      await this._processValidMessages(sock, sessionId, validMessages)
+
+    } catch (error) {
+      logger.error(`[${sessionId}] Messages upsert handler error:`, error)
     }
+  }
 
-   // logger.info(`[${sessionId}] Received messages.upsert: ${messages.length} messages (type: ${type})`)
-
-    // **HANDLE PRESENCE ON MESSAGE RECEIVED**
+  /**
+   * Handle presence updates for received messages
+   */
+  async _handlePresenceUpdates(sock, sessionId, messages) {
     try {
       const { handlePresenceOnReceive } = await import('../utils/index.js')
+      
       for (const msg of messages) {
         if (!msg.key?.fromMe) {
           await handlePresenceOnReceive(sock, sessionId, {
@@ -51,259 +80,479 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
           })
         }
       }
-    } catch (presenceError) {
-      logger.debug('[MessageHandler] Presence handler error:', presenceError.message)
-      // Silent fail - don't break message processing
+    } catch (error) {
+      logger.debug(`[${sessionId}] Presence handler error:`, error.message)
     }
+  }
 
-    // **HANDLE STATUS MESSAGES (Auto-view and Auto-like)**
+  /**
+   * Handle status broadcast messages
+   */
+  async _handleStatusMessages(sock, sessionId, messages) {
     try {
       const { handleStatusMessage } = await import('../utils/index.js')
+      
       for (const msg of messages) {
-        // Check if it's a status message
-        if (msg.key?.remoteJid === 'status@broadcast') {
+        if (msg.key?.remoteJid === this.statusBroadcastJid) {
           await handleStatusMessage(sock, sessionId, msg)
-          // Don't process status messages further
-          continue
         }
       }
-    } catch (statusError) {
-      logger.debug('[MessageHandler] Status handler error:', statusError.message)
-      // Silent fail - don't break message processing
+    } catch (error) {
+      logger.debug(`[${sessionId}] Status handler error:`, error.message)
     }
+  }
 
+  /**
+   * Filter messages and categorize them
+   */
+  async _filterMessages(sessionId, messages) {
     const { getMessageDeduplicator } = await import('../utils/index.js')
     const deduplicator = getMessageDeduplicator()
     
-    // ✅ ENHANCED: Track filtered messages with reasons
+    const validMessages = []
     const ciphertextMessages = []
-    const filteredReasons = {
+    const filterStats = {
       duplicates: 0,
       statusBroadcast: 0,
       broadcasts: 0,
       noMessage: 0
     }
-    
-    // Filter out invalid messages with detailed logging
-    const validMessages = messages.filter((msg, index) => {
-      // ✅ Check if THIS session already processed this message
+
+    for (const msg of messages) {
+      // Check for duplicates
       if (deduplicator.isDuplicate(msg.key?.remoteJid, msg.key?.id, sessionId)) {
-        logger.debug(`[${sessionId}] Skipping duplicate message ${msg.key?.id}`)
-        filteredReasons.duplicates++
-        return false
-      }
-      
-      // Skip status messages (already handled above)
-      if (msg.key?.remoteJid === 'status@broadcast') {
-        logger.debug(`[${sessionId}] Skipping status@broadcast message`)
-        filteredReasons.statusBroadcast++
-        return false
+        filterStats.duplicates++
+        continue
       }
 
-      // Skip broadcast list messages by default
-      if (msg.key?.remoteJid?.endsWith('@broadcast') && msg.key?.remoteJid !== 'status@broadcast') {
-        logger.debug(`[${sessionId}] Skipping broadcast message from ${msg.key?.remoteJid}`)
-        filteredReasons.broadcasts++
-        return false
+      // Skip status broadcast
+      if (msg.key?.remoteJid === this.statusBroadcastJid) {
+        filterStats.statusBroadcast++
+        continue
       }
-      
-      // ✅ ENHANCED: Handle CIPHERTEXT messages (messageStubType = 2)
+
+      // Skip other broadcasts
+      if (msg.key?.remoteJid?.endsWith('@broadcast')) {
+        filterStats.broadcasts++
+        continue
+      }
+
+      // Handle messages without content
       if (!msg.message) {
-        const stubType = msg.messageStubType
-        filteredReasons.noMessage++
+        filterStats.noMessage++
         
-        // Log with helpful context
-        if (stubType === 2) {
-          logger.debug(`[${sessionId}] Message ${index} is CIPHERTEXT (stub type 2) - will retry`)
+        // CIPHERTEXT messages (stub type 2)
+        if (msg.messageStubType === 2) {
           ciphertextMessages.push(msg)
-        } else {
-          logger.debug(`[${sessionId}] Message ${index} has no content (messageStubType: ${stubType})`)
         }
-        
-        return false
+        continue
       }
 
-      return true
-    })
+      validMessages.push(msg)
+    }
 
-    // ✅ ENHANCED: Request retry for CIPHERTEXT messages after short delay
-    if (ciphertextMessages.length > 0) {
-     // logger.info(`[${sessionId}] Found ${ciphertextMessages.length} CIPHERTEXT messages - requesting retry after 2s`)
-      
-      // Wait a bit for Signal keys to be established
-      setTimeout(() => {
-        for (const cipherMsg of ciphertextMessages) {
-          if (cipherMsg.key && cipherMsg.key.id && sock?.requestPlaceholderResend) {
-            sock.requestPlaceholderResend(cipherMsg.key)
-              .then(requestId => logger.debug(`[${sessionId}] Requested placeholder resend for ${cipherMsg.key.id}, requestId: ${requestId}`))
-              .catch(err => logger.debug(`[${sessionId}] Placeholder resend for ${cipherMsg.key.id} failed: ${err.message}`))
-          } else {
-            logger.debug(`[${sessionId}] Skipping retry for message without valid key: ${JSON.stringify(cipherMsg.key)}`)
-          }
+    return { validMessages, ciphertextMessages, filterStats }
+  }
+
+  /**
+   * Request retry for CIPHERTEXT or failed messages
+   */
+  async _requestMessageRetries(sock, sessionId, ciphertextMessages) {
+    logger.debug(`[${sessionId}] Requesting retry for ${ciphertextMessages.length} CIPHERTEXT messages`)
+
+    for (const cipherMsg of ciphertextMessages) {
+      if (!cipherMsg.key) continue
+
+      // Validate key structure
+      const retryKey = {
+        remoteJid: cipherMsg.key.remoteJid,
+        id: cipherMsg.key.id,
+        fromMe: cipherMsg.key.fromMe || false,
+        participant: cipherMsg.key.participant || undefined
+      }
+
+      if (!retryKey.remoteJid || !retryKey.id) {
+        logger.debug(`[${sessionId}] Invalid key for retry: ${JSON.stringify(retryKey)}`)
+        continue
+      }
+
+      // Try sendRetryRequest first, fallback to requestPlaceholderResend
+      let retrySuccess = false
+
+      if (sock.sendRetryRequest) {
+        try {
+          await sock.sendRetryRequest(retryKey)
+          logger.debug(`[${sessionId}] Retry requested (sendRetryRequest): ${retryKey.id}`)
+          retrySuccess = true
+        } catch (error) {
+          logger.debug(`[${sessionId}] sendRetryRequest failed for ${retryKey.id}: ${error.message}`)
         }
-      }, 2000)
+      }
+
+      if (!retrySuccess && sock.requestPlaceholderResend) {
+        try {
+          await sock.requestPlaceholderResend(retryKey)
+          logger.debug(`[${sessionId}] Retry requested (requestPlaceholderResend): ${retryKey.id}`)
+        } catch (error) {
+          logger.debug(`[${sessionId}] requestPlaceholderResend failed for ${retryKey.id}: ${error.message}`)
+        }
+      }
     }
+  }
 
-    if (validMessages.length === 0) {
-      const filterSummary = [
-        ciphertextMessages.length > 0 && `${ciphertextMessages.length} CIPHERTEXT`,
-        filteredReasons.statusBroadcast > 0 && `${filteredReasons.statusBroadcast} status@broadcast`,
-        filteredReasons.broadcasts > 0 && `${filteredReasons.broadcasts} broadcasts`,
-        filteredReasons.duplicates > 0 && `${filteredReasons.duplicates} duplicates`,
-        (filteredReasons.noMessage - ciphertextMessages.length) > 0 && `${filteredReasons.noMessage - ciphertextMessages.length} other-empty`
-      ].filter(Boolean).join(', ')
-      
-      logger.debug(`[${sessionId}] All ${messages.length} messages were filtered out (${filterSummary})`)
-      return
-    }
+  /**
+   * Log filtering summary
+   */
+  _logFilterSummary(sessionId, totalMessages, ciphertextCount, filterStats) {
+    const summary = [
+      ciphertextCount > 0 && `${ciphertextCount} CIPHERTEXT`,
+      filterStats.statusBroadcast > 0 && `${filterStats.statusBroadcast} status`,
+      filterStats.broadcasts > 0 && `${filterStats.broadcasts} broadcasts`,
+      filterStats.duplicates > 0 && `${filterStats.duplicates} duplicates`,
+      (filterStats.noMessage - ciphertextCount) > 0 && 
+        `${filterStats.noMessage - ciphertextCount} empty`
+    ].filter(Boolean).join(', ')
 
-    logger.debug(`[${sessionId}] Processing ${validMessages.length}/${messages.length} messages`)
+    logger.debug(`[${sessionId}] Filtered ${totalMessages} messages (${summary})`)
+  }
 
-    // ✅ Get SINGLETON MessageProcessor instance
+  /**
+   * Process valid messages
+   */
+  async _processValidMessages(sock, sessionId, validMessages) {
+    const { getMessageDeduplicator } = await import('../utils/index.js')
+    const deduplicator = getMessageDeduplicator()
     const processor = await getMessageProcessor()
 
-    // Process messages with LID resolution
     for (const message of validMessages) {
       try {
-        // ✅ LOCK MESSAGE FOR THIS SESSION
-        // Other sessions can still process the same message
+        // Lock message to prevent duplicate processing
         if (!deduplicator.tryLock(message.key?.remoteJid, message.key?.id, sessionId)) {
-          logger.debug(`[${sessionId}] Message ${message.key?.id} already locked`)
           continue
         }
 
-        // Process message with LID resolution
+        // Resolve LID to JID
         const processed = await this._processMessageWithLidResolution(sock, message)
-        
-        if (!processed) {
-          logger.debug(`[${sessionId}] Message ${message.key?.id} failed LID resolution`)
-          continue
-        }
+        if (!processed) continue
 
-        // Add timestamp correction (fix timezone issue)
-        if (processed.messageTimestamp) {
-          processed.messageTimestamp = Number(processed.messageTimestamp) + 3600 // Add 1 hour
-        } else {
-          processed.messageTimestamp = Math.floor(Date.now() / 1000) + 3600
-        }
+        // Fix timestamp (timezone correction)
+        processed.messageTimestamp = processed.messageTimestamp 
+          ? Number(processed.messageTimestamp) + 3600 
+          : Math.floor(Date.now() / 1000) + 3600
 
-        // Ensure basic properties
+        // Set chat property
         if (!processed.chat && processed.key?.remoteJid) {
           processed.chat = processed.key.remoteJid
         }
-        
-        // ✅ Set sender with proper JID format
-        if (!processed.sender) {
-          if (processed.key?.participant) {
-            processed.sender = processed.key.participant
-          } else if (processed.key?.remoteJid && !processed.key.remoteJid.includes('@g.us')) {
-            // Private message - ensure proper JID format
-            let sender = processed.key.remoteJid
-            // Only add @s.whatsapp.net if not already a proper JID
-            if (!sender.includes('@')) {
-              sender = `${sender}@s.whatsapp.net`
-            }
-            processed.sender = sender
-          }
-        }
+
+        // Set sender property
+        this._setSenderProperty(processed)
 
         // Validate chat
-        if (typeof processed.chat !== 'string') {
-          continue
-        }
+        if (typeof processed.chat !== 'string') continue
 
-        // Add reply helper
-        if (!processed.reply) {
-          processed.reply = async (text, options = {}) => {
-            try {
-              const chatJid = processed.chat || processed.key?.remoteJid
+        // Add reply helper function
+        processed.reply = this._createReplyFunction(sock, processed)
 
-              if (!chatJid || typeof chatJid !== 'string') {
-                throw new Error(`Invalid chat JID: ${chatJid}`)
-              }
-
-              const messageOptions = {
-                quoted: processed,
-                ...options
-              }
-
-              if (typeof text === 'string') {
-                return await sock.sendMessage(chatJid, { text }, messageOptions)
-              } else if (typeof text === 'object') {
-                return await sock.sendMessage(chatJid, text, messageOptions)
-              }
-            } catch (error) {
-              logger.error(`Error in m.reply:`, error)
-              throw error
-            }
-          }
-        }
-
-        // ✅ PROCESS MESSAGE DIRECTLY - NO DOUBLE HANDLING
-        logger.debug(`[${sessionId}] Processing message from ${processed.sender} in ${processed.chat}`)
+        // Process the message
         await processor.processMessage(sock, sessionId, processed)
 
       } catch (error) {
-        // Log the error and continue processing other messages
-        logger.error(`[${sessionId}] Failed to process message ${message.key?.id}: ${error.message}`)
-        
-        // ✅ Optional: Request retry for failed messages
-        if (message.key && sock.sendRetryRequest) {
-          try {
-            await sock.sendRetryRequest(message.key)
-           // logger.info(`[${sessionId}] Requested retry for message ${message.key?.id}`)
-          } catch (retryError) {
-            logger.debug(`[${sessionId}] Retry request failed: ${retryError.message}`)
-          }
+        logger.error(`[${sessionId}] Failed to process message ${message.key?.id}:`, error.message)
+
+        // Retry on Bad MAC error
+        if (this._isBadMacError(error) && message.key) {
+          await this._requestMessageRetries(sock, sessionId, [message])
         }
       }
     }
-
-  } catch (error) {
-    logger.error(`[${sessionId}] Messages upsert handler error:`, error)
   }
-}
 
   /**
-   * Check if a message is a status or broadcast message
-   * @private
+   * Set sender property with proper JID format
    */
-  _isStatusOrBroadcastMessage(remoteJid) {
-    if (!remoteJid) return false
-
-    // Status messages: status@broadcast
-    if (remoteJid === 'status@broadcast') {
-      return true
+  _setSenderProperty(processed) {
+    if (!processed.sender) {
+      if (processed.key?.participant) {
+        processed.sender = processed.key.participant
+      } else if (processed.key?.remoteJid && !processed.key.remoteJid.includes('@g.us')) {
+        let sender = processed.key.remoteJid
+        if (!sender.includes('@')) {
+          sender = `${sender}@s.whatsapp.net`
+        }
+        processed.sender = sender
+      }
     }
-
-    // Broadcast lists: [timestamp]@broadcast
-    if (remoteJid.endsWith('@broadcast') && remoteJid !== 'status@broadcast') {
-      return true
-    }
-
-    return false
   }
 
   /**
-   * Get the type of broadcast message
-   * @private
+   * Create reply helper function
    */
-  _getBroadcastType(remoteJid) {
-    if (!remoteJid) return null
+  _createReplyFunction(sock, processed) {
+    return async (text, options = {}) => {
+      try {
+        const chatJid = processed.chat || processed.key?.remoteJid
 
-    if (remoteJid === 'status@broadcast') {
-      return 'status'
+        if (!chatJid || typeof chatJid !== 'string') {
+          throw new Error(`Invalid chat JID: ${chatJid}`)
+        }
+
+        const messageOptions = { quoted: processed, ...options }
+
+        if (typeof text === 'string') {
+          return await sock.sendMessage(chatJid, { text }, messageOptions)
+        } else if (typeof text === 'object') {
+          return await sock.sendMessage(chatJid, text, messageOptions)
+        }
+      } catch (error) {
+        logger.error(`Reply error:`, error)
+        throw error
+      }
     }
-
-    if (remoteJid.endsWith('@broadcast')) {
-      return 'broadcast_list'
-    }
-
-    return null
   }
 
   /**
-   * Handle status messages specifically
+   * Check if error is Bad MAC error
+   */
+  _isBadMacError(error) {
+    return error.message?.includes('Bad MAC') || 
+           error.message?.includes('decrypt')
+  }
+
+  /**
+   * Resolve LID to actual JID for messages
+   */
+  async _processMessageWithLidResolution(sock, message) {
+    try {
+      if (!message?.key) return message
+
+      const isGroup = message.key.remoteJid?.endsWith('@g.us')
+      const { resolveLidToJid } = await import('../groups/index.js')
+
+      // Resolve participant LID
+      if (message.key.participant?.endsWith('@lid')) {
+        const actualJid = await resolveLidToJid(
+          sock,
+          message.key.remoteJid,
+          message.key.participant
+        )
+        message.key.participant = actualJid
+        message.participant = actualJid
+      } else {
+        message.participant = message.key.participant
+      }
+
+      // Resolve private message sender LID
+      if (!isGroup && message.key.remoteJid?.endsWith('@lid')) {
+        const actualJid = await resolveLidToJid(
+          sock,
+          'temp-group',
+          message.key.remoteJid
+        )
+        message.key.remoteJid = actualJid
+        message.chat = actualJid
+      }
+
+      // Resolve quoted message participant LID
+      const quotedParticipant = 
+        message.message?.contextInfo?.participant ||
+        message.message?.extendedTextMessage?.contextInfo?.participant
+
+      if (isGroup && quotedParticipant?.endsWith('@lid')) {
+        const actualJid = await resolveLidToJid(
+          sock,
+          message.key.remoteJid,
+          quotedParticipant
+        )
+
+        if (message.message?.contextInfo) {
+          message.message.contextInfo.participant = actualJid
+        }
+        if (message.message?.extendedTextMessage?.contextInfo) {
+          message.message.extendedTextMessage.contextInfo.participant = actualJid
+        }
+        
+        message.quotedParticipant = actualJid
+      }
+
+      return message
+
+    } catch (error) {
+      logger.error('LID resolution error:', error)
+      return message
+    }
+  }
+
+  /**
+   * Handle message updates (delivery status, edits)
+   */
+  async handleMessagesUpdate(sock, sessionId, updates) {
+    try {
+      if (!updates || updates.length === 0) return
+
+      logger.debug(`[${sessionId}] Processing ${updates.length} message updates`)
+
+      for (const update of updates) {
+        try {
+          if (update.key?.fromMe) continue
+          if (update.key?.remoteJid === this.statusBroadcastJid) continue
+          if (update.key?.remoteJid?.endsWith('@broadcast')) continue
+
+          // Resolve LID if needed
+          if (update.key?.participant?.endsWith('@lid')) {
+            const { resolveLidToJid } = await import('../groups/index.js')
+            const actualJid = await resolveLidToJid(
+              sock,
+              update.key.remoteJid,
+              update.key.participant
+            )
+            update.key.participant = actualJid
+            update.participant = actualJid
+          }
+
+          await this._handleMessageUpdate(sock, sessionId, update)
+
+        } catch (error) {
+          logger.error(`Failed to process message update:`, error)
+        }
+      }
+
+    } catch (error) {
+      logger.error(`[${sessionId}] Messages update error:`, error)
+    }
+  }
+
+  async _handleMessageUpdate(sock, sessionId, update) {
+    try {
+      const { key, update: updateData } = update
+
+      if (updateData?.status) {
+        logger.debug(`Message ${key.id} status: ${updateData.status}`)
+      }
+
+      if (updateData?.pollUpdates) {
+        logger.debug(`Poll update for message ${key.id}`)
+      }
+
+    } catch (error) {
+      logger.error('Message update processing error:', error)
+    }
+  }
+
+  /**
+   * Handle message deletions
+   */
+  async handleMessagesDelete(sock, sessionId, deletions) {
+    try {
+      const deletionArray = Array.isArray(deletions) ? deletions : [deletions]
+
+      if (deletionArray.length === 0) return
+
+      logger.debug(`[${sessionId}] Processing ${deletionArray.length} message deletions`)
+
+      for (const deletion of deletionArray) {
+        try {
+          if (deletion.key?.remoteJid === this.statusBroadcastJid) continue
+          if (deletion.key?.remoteJid?.endsWith('@broadcast')) continue
+
+          // Resolve LID if needed
+          if (deletion.key?.participant?.endsWith('@lid')) {
+            const { resolveLidToJid } = await import('../groups/index.js')
+            const actualJid = await resolveLidToJid(
+              sock,
+              deletion.key.remoteJid,
+              deletion.key.participant
+            )
+            deletion.key.participant = actualJid
+            deletion.participant = actualJid
+          }
+
+          await this._handleMessageDeletion(sock, sessionId, deletion)
+
+        } catch (error) {
+          logger.error('Failed to process message deletion:', error)
+        }
+      }
+
+    } catch (error) {
+      logger.error(`[${sessionId}] Messages delete error:`, error)
+    }
+  }
+
+  async _handleMessageDeletion(sock, sessionId, deletion) {
+    try {
+      const { key } = deletion
+      logger.debug(`Message deleted: ${key.id} from ${key.remoteJid}`)
+    } catch (error) {
+      // Silent fail
+    }
+  }
+
+  /**
+   * Handle message reactions
+   */
+  async handleMessagesReaction(sock, sessionId, reactions) {
+    try {
+      if (!reactions || reactions.length === 0) return
+
+      logger.debug(`[${sessionId}] Processing ${reactions.length} reactions`)
+
+      for (const reaction of reactions) {
+        try {
+          if (reaction.key?.remoteJid === this.statusBroadcastJid) continue
+          if (reaction.key?.remoteJid?.endsWith('@broadcast')) continue
+
+          // Resolve LID if needed
+          if (reaction.key?.participant?.endsWith('@lid')) {
+            const { resolveLidToJid } = await import('../groups/index.js')
+            const actualJid = await resolveLidToJid(
+              sock,
+              reaction.key.remoteJid,
+              reaction.key.participant
+            )
+            reaction.key.participant = actualJid
+            reaction.participant = actualJid
+          }
+
+          await this._handleMessageReaction(sock, sessionId, reaction)
+
+        } catch (error) {
+          logger.error('Failed to process reaction:', error)
+        }
+      }
+
+    } catch (error) {
+      logger.error(`[${sessionId}] Messages reaction error:`, error)
+    }
+  }
+
+  async _handleMessageReaction(sock, sessionId, reaction) {
+    try {
+      const { key, reaction: reactionData } = reaction
+
+      logger.debug(
+        `Reaction ${reactionData.text || 'removed'} on message ${key.id} ` +
+        `by ${reaction.participant || key.participant}`
+      )
+
+    } catch (error) {
+      logger.error('Reaction processing error:', error)
+    }
+  }
+
+  /**
+   * Handle receipt updates (read receipts)
+   */
+  async handleReceiptUpdate(sock, sessionId, receipts) {
+    try {
+      logger.debug(`[${sessionId}] Receipt updates received`)
+    } catch (error) {
+      logger.error(`Receipt update error:`, error)
+    }
+  }
+
+  /**
+   * Handle status message specifically
    */
   async handleStatusMessage(sock, sessionId, message) {
     try {
@@ -319,8 +568,6 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
         pushName: message.pushName
       }
 
-     // logger.info(`Status from ${statusData.sender}: ${statusData.type}`)
-
       return statusData
 
     } catch (error) {
@@ -330,8 +577,7 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
   }
 
   /**
-   * Get the type of status message
-   * @private
+   * Get status message content type
    */
   _getStatusMessageType(messageContent) {
     if (!messageContent) return 'unknown'
@@ -361,273 +607,11 @@ async handleMessagesUpsert(sock, sessionId, messageUpdate) {
         fromMe: message.key.fromMe || false
       }
 
-     // logger.info(`Broadcast message from ${broadcastId}`)
-
       return broadcastData
 
     } catch (error) {
       logger.error('Broadcast message processing error:', error)
       return null
-    }
-  }
-
-  /**
-   * Process message and resolve LIDs to actual JIDs
-   * ONLY calls LID resolver when participant actually ends with @lid
-   */
-  async _processMessageWithLidResolution(sock, message) {
-    try {
-      if (!message?.key) {
-        return message
-      }
-
-      const isGroup = message.key.remoteJid?.endsWith('@g.us')
-      
-      // ✅ RESOLVE PARTICIPANT LID FOR BOTH GROUPS AND PRIVATE MESSAGES
-      if (message.key.participant?.endsWith('@lid')) {
-        const { resolveLidToJid } = await import('../groups/index.js')
-        
-        const actualJid = await resolveLidToJid(
-          sock,
-          message.key.remoteJid,
-          message.key.participant
-        )
-        
-        message.key.participant = actualJid
-        message.participant = actualJid
-        
-        logger.debug(`Resolved participant LID ${message.key.participant} to ${actualJid}`)
-      } else {
-        message.participant = message.key.participant
-      }
-      
-      // ✅ RESOLVE PRIVATE MESSAGE SENDER IF IT'S LID FORMAT
-      if (!isGroup && message.key.remoteJid?.endsWith('@lid')) {
-        const { resolveLidToJid } = await import('../groups/index.js')
-        
-        const actualJid = await resolveLidToJid(
-          sock,
-          'temp-group',
-          message.key.remoteJid
-        )
-        
-        message.key.remoteJid = actualJid
-        message.chat = actualJid
-        
-        logger.debug(`Resolved private message LID ${message.key.remoteJid} to ${actualJid}`)
-      }
-
-      // ONLY resolve quoted message participant LID if it actually ends with @lid
-      const quotedParticipant = 
-        message.message?.contextInfo?.participant ||
-        message.message?.extendedTextMessage?.contextInfo?.participant
-
-      if (isGroup && quotedParticipant?.endsWith('@lid')) {
-        const { resolveLidToJid } = await import('../groups/index.js')
-        
-        const actualJid = await resolveLidToJid(
-          sock,
-          message.key.remoteJid,
-          quotedParticipant
-        )
-
-        // Update all contextInfo references
-        if (message.message?.contextInfo) {
-          message.message.contextInfo.participant = actualJid
-        }
-        if (message.message?.extendedTextMessage?.contextInfo) {
-          message.message.extendedTextMessage.contextInfo.participant = actualJid
-        }
-        
-        message.quotedParticipant = actualJid
-      }
-
-      return message
-
-    } catch (error) {
-      logger.error('LID resolution error:', error)
-      return message
-    }
-  }
-
-  /**
-   * Handle message updates (edits, delivery status)
-   */
-  async handleMessagesUpdate(sock, sessionId, updates) {
-    try {
-      if (!updates || updates.length === 0) {
-        return
-      }
-
-      logger.debug(`Processing ${updates.length} message updates for ${sessionId}`)
-
-      for (const update of updates) {
-        try {
-          if (update.key?.fromMe) {
-            continue
-          }
-
-          if (this._isStatusOrBroadcastMessage(update.key?.remoteJid)) {
-            continue
-          }
-
-          // ONLY resolve LID if it actually ends with @lid
-          if (update.key?.participant?.endsWith('@lid')) {
-            const { resolveLidToJid } = await import('../groups/index.js')
-            
-            const actualJid = await resolveLidToJid(
-              sock,
-              update.key.remoteJid,
-              update.key.participant
-            )
-            
-            update.key.participant = actualJid
-            update.participant = actualJid
-          }
-
-          await this._handleMessageUpdate(sock, sessionId, update)
-
-        } catch (error) {
-          logger.error(`Failed to process message update:`, error)
-        }
-      }
-
-    } catch (error) {
-      logger.error(`Messages update error for ${sessionId}:`, error)
-    }
-  }
-
-  async _handleMessageUpdate(sock, sessionId, update) {
-    try {
-      const { key, update: updateData } = update
-
-      if (updateData?.status) {
-        logger.debug(`Message ${key.id} status: ${updateData.status}`)
-      }
-
-      if (updateData?.pollUpdates) {
-        logger.debug(`Poll update for message ${key.id}`)
-      }
-
-    } catch (error) {
-      logger.error('Message update processing error:', error)
-    }
-  }
-
-  /**
-   * Handle message deletions
-   */
-  async handleMessagesDelete(sock, sessionId, deletions) {
-    try {
-      const deletionArray = Array.isArray(deletions) ? deletions : [deletions]
-
-      if (deletionArray.length === 0) {
-        return
-      }
-
-      logger.debug(`Processing ${deletionArray.length} message deletions for ${sessionId}`)
-
-      for (const deletion of deletionArray) {
-        try {
-          if (this._isStatusOrBroadcastMessage(deletion.key?.remoteJid)) {
-            continue
-          }
-
-          if (deletion.key?.participant?.endsWith('@lid')) {
-            const { resolveLidToJid } = await import('../groups/index.js')
-            
-            const actualJid = await resolveLidToJid(
-              sock,
-              deletion.key.remoteJid,
-              deletion.key.participant
-            )
-            
-            deletion.key.participant = actualJid
-            deletion.participant = actualJid
-          }
-
-          await this._handleMessageDeletion(sock, sessionId, deletion)
-
-        } catch (error) {
-          logger.error('Failed to process message deletion:', error)
-        }
-      }
-
-    } catch (error) {
-      logger.error(`Messages delete error for ${sessionId}:`, error)
-    }
-  }
-
-  async _handleMessageDeletion(sock, sessionId, deletion) {
-    try {
-      const { key } = deletion
-      logger.debug(`Message deleted: ${key.id} from ${key.remoteJid}`)
-    } catch (error) {
-      // Silent fail
-    }
-  }
-
-  /**
-   * Handle message reactions
-   */
-  async handleMessagesReaction(sock, sessionId, reactions) {
-    try {
-      if (!reactions || reactions.length === 0) {
-        return
-      }
-
-      logger.debug(`Processing ${reactions.length} reactions for ${sessionId}`)
-
-      for (const reaction of reactions) {
-        try {
-          if (this._isStatusOrBroadcastMessage(reaction.key?.remoteJid)) {
-            continue
-          }
-
-          if (reaction.key?.participant?.endsWith('@lid')) {
-            const { resolveLidToJid } = await import('../groups/index.js')
-            
-            const actualJid = await resolveLidToJid(
-              sock,
-              reaction.key.remoteJid,
-              reaction.key.participant
-            )
-            
-            reaction.key.participant = actualJid
-            reaction.participant = actualJid
-          }
-
-          await this._handleMessageReaction(sock, sessionId, reaction)
-
-        } catch (error) {
-          logger.error('Failed to process reaction:', error)
-        }
-      }
-
-    } catch (error) {
-      logger.error(`Messages reaction error for ${sessionId}:`, error)
-    }
-  }
-
-  async _handleMessageReaction(sock, sessionId, reaction) {
-    try {
-      const { key, reaction: reactionData } = reaction
-
-      logger.debug(
-        `Reaction ${reactionData.text || 'removed'} on message ${key.id} ` +
-        `by ${reaction.participant || key.participant}`
-      )
-
-    } catch (error) {
-      logger.error('Reaction processing error:', error)
-    }
-  }
-
-  async handleReceiptUpdate(sock, sessionId, receipts) {
-    try {
-      logger.debug(`Receipt updates for ${sessionId}`)
-    } catch (error) {
-      logger.error(`Receipt update error:`, error)
     }
   }
 }

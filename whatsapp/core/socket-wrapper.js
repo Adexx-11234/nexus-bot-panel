@@ -29,11 +29,11 @@ export function wrapBaileysSocket(originalMakeWASocket) {
 
     logger.info(`Creating socket for session: ${sessionId}`)
 
-    // Call original baileys makeWASocket (works with any version)
-    const socket = originalMakeWASocket(config)
+    // ✅ FIX: Call with BOTH config AND sessionId parameter
+    // Works with old version (ignores 2nd param) AND new version (uses it)
+    const socket = originalMakeWASocket(config, sessionId)
 
-    // ✅ IMMEDIATELY capture and store in our registry
-    // This works regardless of what baileys does internally
+    // Store in our registry
     socketRegistry.set(sessionId, {
       socket,
       sessionId,

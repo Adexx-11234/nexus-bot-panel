@@ -470,13 +470,13 @@ export class ConnectionEventHandler {
     try {
       logger.info(`🧹 Cleaning socket before reconnect for ${sessionId}`)
 
-      if (sock?.ev?.isBuffering?.()) {
+     /* if (sock?.ev?.isBuffering?.()) {
         try {
           sock.ev.flush()
         } catch (flushError) {
           logger.warn(`Failed to flush buffer for ${sessionId}:`, flushError.message)
         }
-      }
+      }*/
 
       if (this.sessionManager._cleanupSocket) {
         await this.sessionManager._cleanupSocket(sessionId, sock)

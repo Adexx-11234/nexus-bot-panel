@@ -189,7 +189,7 @@ export const DisconnectConfig = {
     requiresCleanup: false,
     clearVoluntaryFlag: true,
     reconnectDelay: 3000,
-    maxAttempts: 10,
+    maxAttempts: 1000000000000,
     message: 'Connection closed unexpectedly',
     userAction: 'Reconnecting automatically...',
     handler: 'handleConnectionClosed'

@@ -525,36 +525,62 @@ export class MongoDBStorage {
   // ==================== CLEANUP ====================
 
   async completeCleanup(sessionId) {
-    if (!this.isConnected) return { metadata: false, auth: false }
+  if (!this.isConnected) return { metadata: false, auth: false }
 
-    const results = {
-      metadata: false,
-      auth: false,
-    }
+  const results = {
+    metadata: false,
+    auth: false,
+  }
 
-    try {
-      // Delete session metadata
-      if (this.sessions) {
+  try {
+    // ✅ FORCE delete session metadata with retry
+    if (this.sessions) {
+      try {
         const metaResult = await this.sessions.deleteOne({ sessionId })
         results.metadata = metaResult.deletedCount > 0
+        
+        if (!results.metadata) {
+          // Retry once
+          const retryResult = await this.sessions.deleteOne({ sessionId })
+          results.metadata = retryResult.deletedCount > 0
+        }
+        
+        logger.info(`MongoDB metadata delete: ${results.metadata ? 'SUCCESS' : 'NOT_FOUND'} for ${sessionId}`)
+      } catch (error) {
+        logger.error(`MongoDB metadata delete failed for ${sessionId}: ${error.message}`)
       }
+    }
 
-      // Delete all auth data
-      if (this.authBaileys) {
+    // ✅ FORCE delete all auth data with retry
+    if (this.authBaileys) {
+      try {
         const authResult = await this.authBaileys.deleteMany({ sessionId })
         results.auth = authResult.deletedCount > 0
+        
+        if (!results.auth) {
+          // Retry once
+          const retryResult = await this.authBaileys.deleteMany({ sessionId })
+          results.auth = retryResult.deletedCount > 0
+        }
+        
+        logger.info(`MongoDB auth delete: ${authResult.deletedCount} docs deleted for ${sessionId}`)
+      } catch (error) {
+        logger.error(`MongoDB auth delete failed for ${sessionId}: ${error.message}`)
       }
-
-      if (results.metadata || results.auth) {
-        logger.info(`✅ Complete MongoDB cleanup: ${sessionId} (meta: ${results.metadata}, auth: ${results.auth})`)
-      }
-
-      return results
-    } catch (error) {
-      logger.error(`Complete cleanup failed ${sessionId}: ${error.message}`)
-      return results
     }
+
+    if (results.metadata || results.auth) {
+      logger.info(`✅ MongoDB cleanup complete: ${sessionId} (metadata: ${results.metadata}, auth: ${results.auth})`)
+    } else {
+      logger.warn(`⚠️ MongoDB cleanup found nothing to delete for ${sessionId}`)
+    }
+
+    return results
+  } catch (error) {
+    logger.error(`MongoDB complete cleanup failed ${sessionId}: ${error.message}`)
+    return results
   }
+}
 
   // ==================== PRE-KEY OPERATIONS ====================
 

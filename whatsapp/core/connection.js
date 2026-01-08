@@ -129,43 +129,43 @@ export class ConnectionManager {
   }
 
   // ==================== GET MESSAGE (OPTIMIZED) ====================
-  _createGetMessage(store) {
-    const cache = this.messageCache
+_createGetMessage(store) {
+  const cache = this.messageCache
 
-    const getMessage = async (key) => {
-      if (!key || !key.remoteJid || !key.id) {
-        return proto.Message.fromObject({})
-      }
-
-      const cacheKey = `${key.remoteJid}:${key.id}`
-
-      // Fast in-memory cache check
-      const cached = cache.get(cacheKey)
-      if (cached) return cached
-
-      // Try store lookup with timeout
-      if (store) {
-        try {
-          const msg = await Promise.race([
-            store.loadMessage(key.remoteJid, key.id),
-            new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 5000)),
-          ])
-
-          if (msg?.message) {
-            cache.set(cacheKey, msg.message)
-            return msg.message
-          }
-        } catch (error) {
-          logger.debug(`getMessage store lookup failed: ${error.message}`)
-        }
-      }
-
+  const getMessage = async (key) => {
+    if (!key || !key.remoteJid || !key.id) {
       return proto.Message.fromObject({})
     }
 
-    getMessage._cache = cache
-    return getMessage
+    const cacheKey = `${key.remoteJid}:${key.id}`
+
+    // Fast in-memory cache check
+    const cached = cache.get(cacheKey)
+    if (cached) return cached
+
+    // Try store lookup with timeout
+    if (store && typeof store.loadMessage === 'function') {
+      try {
+        const msg = await Promise.race([
+          store.loadMessage(key.remoteJid, key.id),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 5000)),
+        ])
+
+        if (msg?.message) {
+          cache.set(cacheKey, msg.message)
+          return msg.message
+        }
+      } catch (error) {
+        logger.debug(`getMessage store lookup failed: ${error.message}`)
+      }
+    }
+
+    return proto.Message.fromObject({})
   }
+
+  getMessage._cache = cache
+  return getMessage
+}
 
   // ==================== AUTH STATE ====================
   async _getAuthState(sessionId, allowPairing = true) {

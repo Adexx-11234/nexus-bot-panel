@@ -72,7 +72,7 @@ export class EventDispatcher {
       }
       
       // ✅ HEALTH CHECK: Start monitoring message receipt for this session
-     // this._startHealthCheck(sock, sessionId)
+      this._startHealthCheck(sock, sessionId)
 
       logger.info(`Event handlers setup complete for ${sessionId}`)
       return true
@@ -174,26 +174,26 @@ export class EventDispatcher {
    * Setup message event listeners with optimized filtering
    */
   _setupMessageEvents(sock, sessionId) {
-    // ============= MESSAGES_UPSERT =============
-    sock.ev.on(EventTypes.MESSAGES_UPSERT, async (messageUpdate) => {
-      try {
-        recordSessionActivity(sessionId)
-        
-        // ✅ HEALTH CHECK: Update last message time when we receive messages.upsert
-        this.lastMessageTime.set(sessionId, Date.now())
+ // ============= MESSAGES_UPSERT =============
+sock.ev.on(EventTypes.MESSAGES_UPSERT, async (messageUpdate) => {
+  try {
+    recordSessionActivity(sessionId)
+    
+    // ✅ HEALTH CHECK: Update last message time when we receive messages.upsert
+    this.lastMessageTime.set(sessionId, Date.now())
 
-        // Fire and forget - process without blocking
-        this.messageHandler
-          .handleMessagesUpsert(sock, sessionId, messageUpdate)
-          .then(() => {
-          })
-          .catch((err) => {
-            logger.error(`Error processing messages.upsert for ${sessionId}:`, err.message)
-          })
-      } catch (error) {
-        logger.error(`Error in MESSAGES_UPSERT handler for ${sessionId}:`, error)
-      }
-    })
+    // Fire and forget - process without blocking
+    this.messageHandler
+      .handleMessagesUpsert(sock, sessionId, messageUpdate)
+      .then(() => {
+      })
+      .catch((err) => {
+        logger.error(`Error processing messages.upsert for ${sessionId}:`, err.message)
+      })
+  } catch (error) {
+    logger.error(`Error in MESSAGES_UPSERT handler for ${sessionId}:`, error)
+  }
+})
 
     // ============= MESSAGES_UPDATE =============
     sock.ev.on(EventTypes.MESSAGES_UPDATE, async (updates) => {

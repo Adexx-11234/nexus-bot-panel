@@ -621,6 +621,16 @@ export class SessionManager {
     try {
       logger.info(`🧹 In-memory cleanup for ${sessionId}`)
 
+      
+      try {
+        const { deleteSessionStore } = await import("../core/index.js")
+        await deleteSessionStore(sessionId)
+        results.messageStore = true
+        logger.info(`✅ Message store deleted for ${sessionId}`)
+      } catch (error) {
+        logger.error(`Message store deletion failed: ${error.message}`)
+      }
+
       const sock = this.activeSockets.get(sessionId)
 
       if (sock) {
