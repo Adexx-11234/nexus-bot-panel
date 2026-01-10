@@ -2,7 +2,7 @@
 
 import aiService from '../../lib/ai/index.js';
 import { uploadDeline } from '../../lib/tools/index.js';
-import { downloadMediaMessage } from '@whiskeysockets/baileys';
+import { downloadMediaMessage } from '@nexustechpro/baileys';
 
 export default {
   name: "describe",

@@ -43,7 +43,7 @@ export class FileBasedStore {
     this.writeTimer = null
     this.isWriting = false
     this.isLoaded = false
-    
+
     // Track if connection was ever established
     this.connectionEstablished = false
 
@@ -107,7 +107,9 @@ export class FileBasedStore {
       }
 
       this.isLoaded = true
-      logger.info(`Loaded existing data for ${this.sessionId}: ${this.buffer.messages.length} messages, ${this.buffer.contacts.size} contacts, ${this.buffer.chats.size} chats, ${this.buffer.groups.size} groups`)
+      logger.info(
+        `Loaded existing data for ${this.sessionId}: ${this.buffer.messages.length} messages, ${this.buffer.contacts.size} contacts, ${this.buffer.chats.size} chats, ${this.buffer.groups.size} groups`,
+      )
     } catch (error) {
       logger.error(`Failed to load existing data for ${this.sessionId}:`, error.message)
       this.isLoaded = true
@@ -127,9 +129,12 @@ export class FileBasedStore {
   }
 
   _startCleanup() {
-    setInterval(() => {
-      this._cleanupOldMessages()
-    }, 30 * 60 * 1000)
+    setInterval(
+      () => {
+        this._cleanupOldMessages()
+      },
+      30 * 60 * 1000,
+    )
 
     setTimeout(() => this._cleanupOldMessages(), 5000)
   }
@@ -218,14 +223,14 @@ export class FileBasedStore {
     try {
       // ✅ CRITICAL FIX: Ensure directory exists before every write
       await fs.mkdir(this.sessionPath, { recursive: true })
-      
+
       const filePath = this.files[type]
       const content = JSON.stringify(data, null, 0)
       await fs.writeFile(filePath, content, "utf-8")
     } catch (error) {
       logger.error(`Write error for ${type}:`, error.message)
       // If write fails due to directory issues, try to recreate directory
-      if (error.code === 'ENOENT') {
+      if (error.code === "ENOENT") {
         try {
           logger.warn(`Directory missing during write, recreating for ${this.sessionId}`)
           await fs.mkdir(this.sessionPath, { recursive: true })
@@ -296,9 +301,9 @@ export class FileBasedStore {
         if (!msg.key?.remoteJid) continue
 
         const exists = this.buffer.messages.some(
-          (m) => m.key?.id === msg.key?.id && m.key?.remoteJid === msg.key?.remoteJid
+          (m) => m.key?.id === msg.key?.id && m.key?.remoteJid === msg.key?.remoteJid,
         )
-        
+
         if (!exists) {
           this.buffer.messages.push(msg)
 
@@ -470,26 +475,13 @@ export class FileBasedStore {
       }
     })
 
-    // Connection tracking and flush on close
-    ev.on("connection.update", (update) => {
-      if (update.connection === 'open') {
-        this.connectionEstablished = true
-        logger.debug(`Connection established for ${this.sessionId}`)
-      }
-      
-      if (update.connection === 'close' && this.connectionEstablished) {
-        logger.info(`Connection closed for ${this.sessionId}, flushing writes...`)
-        this._flushWrites()
-      }
-    })
-
     logger.debug(`Store bound to socket events for ${this.sessionId}`)
   }
 
   // Load message by key
   async loadMessage(jid, id) {
     await this.waitForLoad()
-    
+
     const bufferedMsg = this.buffer.messages.find((m) => m.key?.id === id && m.key?.remoteJid === jid)
     if (bufferedMsg) return bufferedMsg
 
@@ -507,7 +499,7 @@ export class FileBasedStore {
   // Load messages for chat
   async loadMessages(jid, count = 50) {
     await this.waitForLoad()
-    
+
     const buffered = this.buffer.messages.filter((m) => m.key?.remoteJid === jid)
 
     if (buffered.length < count) {
@@ -531,7 +523,7 @@ export class FileBasedStore {
   // Get contact
   async getContact(jid) {
     await this.waitForLoad()
-    
+
     if (this.buffer.contacts.has(jid)) {
       return this.buffer.contacts.get(jid)
     }
@@ -563,7 +555,7 @@ export class FileBasedStore {
 
   async getGroupMetadata(jid) {
     await this.waitForLoad()
-    
+
     if (this.buffer.groups.has(jid)) {
       return this.buffer.groups.get(jid)
     }
@@ -585,7 +577,7 @@ export class FileBasedStore {
 
   async setGroupMetadata(jid, metadata) {
     await this.waitForLoad()
-    
+
     this.buffer.groups.set(jid, metadata)
     if (this.buffer.groups.size > MAX_GROUPS_IN_MEMORY) {
       const firstKey = this.buffer.groups.keys().next().value

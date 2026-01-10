@@ -1,5 +1,10 @@
 import NodeCache from "node-cache"
-import { makeWASocket as originalMakeWASocket, makeCacheableSignalKeyStore, fetchLatestBaileysVersion, DEFAULT_CONNECTION_CONFIG } from "@whiskeysockets/baileys"
+import {
+  makeWASocket as originalMakeWASocket,
+  makeCacheableSignalKeyStore,
+  fetchLatestBaileysVersion,
+  DEFAULT_CONNECTION_CONFIG,
+} from "@nexustechpro/baileys"
 import { createFileStore, deleteFileStore, getFileStore } from "../whatsapp/index.js"
 import { logger } from "../utils/logger.js"
 import pino from "pino"
@@ -8,20 +13,19 @@ import { wrapBaileysSocket } from "../whatsapp/core/socket-wrapper.js"
 // ✅ Wrap baileys' makeWASocket to capture ALL sockets regardless of baileys version
 const makeWASocket = wrapBaileysSocket(originalMakeWASocket)
 
-
 // ==================== LOGGER CONFIGURATION ====================
 const baileysLogger = pino({
   level: process.env.BAILEYS_LOG_LEVEL || "silent",
 })
-const { version, isLatest} = await fetchLatestBaileysVersion()
+const { version, isLatest } = await fetchLatestBaileysVersion()
 
 // ==================== CACHE CONFIGURATION ====================
 // Cache for group metadata to reduce API calls
 const groupCache = new NodeCache({
-  stdTTL: 60,              // Cache for 60 seconds
-  checkperiod: 5,          // Check for expired keys every 5 seconds
-  useClones: false,        // Better performance, no deep cloning
-  maxKeys: 500,            // Maximum 500 groups cached
+  stdTTL: 60, // Cache for 60 seconds
+  checkperiod: 5, // Check for expired keys every 5 seconds
+  useClones: false, // Better performance, no deep cloning
+  maxKeys: 500, // Maximum 500 groups cached
 })
 
 // Cache for message retry counters
@@ -32,10 +36,10 @@ const sessionLastActivity = new Map()
 const sessionLastMessage = new Map()
 
 // Session cleanup intervals
-const SESSION_CLEANUP_INTERVAL = 60 * 1000        // Clean every 1 minute
+const SESSION_CLEANUP_INTERVAL = 60 * 1000 // Clean every 1 minute
 const SESSION_INACTIVITY_TIMEOUT = 10 * 60 * 1000 // 10 minutes inactivity
-const KEEPALIVE_INTERVAL = 5000                   // 5 seconds
-const HEALTH_CHECK_TIMEOUT = 30 * 60 * 1000      // 30 minutes
+const KEEPALIVE_INTERVAL = 5000 // 5 seconds
+const HEALTH_CHECK_TIMEOUT = 30 * 60 * 1000 // 30 minutes
 
 // ==================== BAILEYS DEFAULT CONFIGURATION ====================
 // ✅ FIX: Override DEFAULT_CONNECTION_CONFIG with proper filtering functions
@@ -43,10 +47,10 @@ const HEALTH_CHECK_TIMEOUT = 30 * 60 * 1000      // 30 minutes
 // 1. shouldIgnoreJid returning true
 // 2. shouldSyncHistoryMessage filtering out valid messages
 // 3. getMessage failing silently
-export const baileysConfig = { 
+export const baileysConfig = {
   ...DEFAULT_CONNECTION_CONFIG,
   version,
-  
+
   // ✅ CRITICAL FIX #1: shouldIgnoreJid - NEVER filter out messages
   // The default behavior filters JIDs which causes messages to disappear
   shouldIgnoreJid: (jid) => {
@@ -55,7 +59,7 @@ export const baileysConfig = {
     // This ensures ALL messages reach the handler
     return false
   },
-  
+
   // ✅ CRITICAL FIX #2: shouldSyncHistoryMessage - Allow history sync
   // This prevents historical message sync issues
   shouldSyncHistoryMessage: (historyMsg) => {
@@ -63,49 +67,52 @@ export const baileysConfig = {
     // The filterered history types are handled by PROCESSABLE_HISTORY_TYPES
     return true
   },
- 
+
   // ✅ CRITICAL FIX #3: Better logging for message processing
   // Helps debug when messages stop arriving
   logger: pino({
     level: process.env.BAILEYS_LOG_LEVEL || "debug",
-    transport: process.env.BAILEYS_LOG_LEVEL === "silent" ? undefined : {
-      target: "pino-pretty",
-      options: { colorize: true, singleLine: false }
-    }
+    transport:
+      process.env.BAILEYS_LOG_LEVEL === "silent"
+        ? undefined
+        : {
+            target: "pino-pretty",
+            options: { colorize: true, singleLine: false },
+          },
   }),
-  
+
   // ✅ CRITICAL FIX #4: Keep socket alive longer
   // Prevents timeout disconnections
-  keepAliveIntervalMs: 60000,        // Every 60 seconds
-  tcpKeepAliveIntervalMs: 30000,     // TCP keepalive every 30 seconds
-  connectTimeoutMs: 60000,    // 60 second timeout for connection attempts
-  
+  keepAliveIntervalMs: 60000, // Every 60 seconds
+  tcpKeepAliveIntervalMs: 30000, // TCP keepalive every 30 seconds
+  connectTimeoutMs: 60000, // 60 second timeout for connection attempts
+
   // ✅ CRITICAL FIX #4b: Extended timeout handling for 408 errors
   // WhatsApp can be slow, especially on poor connections
-  defaultQueryTimeoutMs: 120000,  // 2 minute default query timeout (was 60s)
-  retryRequestDelayMs: 500,       // 500ms between retries (was 250ms)
-  maxMsgRetryCount: 10,           // Retry failed messages 10 times (was 5)
-  
+  defaultQueryTimeoutMs: 120000, // 2 minute default query timeout (was 60s)
+  retryRequestDelayMs: 500, // 500ms between retries (was 250ms)
+  maxMsgRetryCount: 10, // Retry failed messages 10 times (was 5)
+
   // ✅ CRITICAL FIX #4c: Better session timeout handling
-  appStateSyncInitialTimeoutMs: 30000,  // 30s for initial sync (was 10s)
-  
+  appStateSyncInitialTimeoutMs: 30000, // 30s for initial sync (was 10s)
+
   // ✅ CRITICAL FIX #5: Better session recovery
   enableAutoSessionRecreation: true,
   enableRecentMessageCache: true,
   fireInitQueries: true,
-  
+
   // ✅ CRITICAL FIX #5b: Better prekey handling
   // Prevent excessive session recreation from prekey updates
-  preKeyCount: 50,  // Keep more prekeys available
-  
+  preKeyCount: 50, // Keep more prekeys available
+
   // ✅ CRITICAL FIX #6: Transaction failure recovery
   // Signal key store transactions can fail due to file system or permission issues
   // These settings improve reliability:
   transactionOpts: {
-    maxCommitRetries: 15,      // Increase from default 10 to 15 retries
-    delayBetweenTriesMs: 5000  // 5 seconds between retries (gives file system time to recover)
+    maxCommitRetries: 15, // Increase from default 10 to 15 retries
+    delayBetweenTriesMs: 5000, // 5 seconds between retries (gives file system time to recover)
   },
-  
+
   // ✅ CRITICAL FIX #7: Session error recovery
   // When "No matching sessions found" error occurs (libsignal can't decrypt)
   // Automatically request pre-keys and retry
@@ -178,7 +185,6 @@ export function updateSessionLastMessage(sessionId) {
   sessionLastMessage.set(sessionId, Date.now())
 }
 
-
 /**
  * ✅ CRITICAL: Always ensure keys are wrapped properly
  */
@@ -188,16 +194,11 @@ export function ensureCacheableKeys(authState) {
   }
 
   // Check if already wrapped (has required methods)
-  const hasRequiredMethods = 
-    typeof authState.keys.get === 'function' &&
-    typeof authState.keys.set === 'function'
+  const hasRequiredMethods = typeof authState.keys.get === "function" && typeof authState.keys.set === "function"
 
   if (!hasRequiredMethods) {
-    logger.warn('Auth keys not properly wrapped, fixing...')
-    authState.keys = makeCacheableSignalKeyStore(
-      authState.keys,
-      pino({ level: 'silent' })
-    )
+    logger.warn("Auth keys not properly wrapped, fixing...")
+    authState.keys = makeCacheableSignalKeyStore(authState.keys, pino({ level: "silent" }))
   }
 
   return authState
@@ -206,25 +207,47 @@ export function ensureCacheableKeys(authState) {
 // ==================== ENCRYPTION/DECRYPTION ERROR PATTERNS ====================
 const DECRYPTION_ERROR_PATTERNS = [
   // Standard decryption errors
-  'decrypt', 'Could not find', 'message key',
-  
+  "decrypt",
+  "Could not find",
+  "message key",
+
   // libsignal specific errors
-  'SessionEntry', 'Bad MAC', 'session_cipher', 'libsignal',
-  
+  "SessionEntry",
+  "Bad MAC",
+  "session_cipher",
+  "libsignal",
+
   // Session structure errors
-  '_chains', 'registrationId', 'currentRatchet', 'ephemeralKeyPair',
-  'indexInfo', 'pendingPreKey', 'baseKey', 'remoteIdentityKey',
-  
+  "_chains",
+  "registrationId",
+  "currentRatchet",
+  "ephemeralKeyPair",
+  "indexInfo",
+  "pendingPreKey",
+  "baseKey",
+  "remoteIdentityKey",
+
   // Key errors
-  'pubKey', 'privKey', 'lastRemoteEphemeralKey', 'previousCounter',
-  'rootKey', 'baseKeyType', 'signedKeyId', 'preKeyId', 'chainKey',
-  'chainType', 'messageKeys',
-  
+  "pubKey",
+  "privKey",
+  "lastRemoteEphemeralKey",
+  "previousCounter",
+  "rootKey",
+  "baseKeyType",
+  "signedKeyId",
+  "preKeyId",
+  "chainKey",
+  "chainType",
+  "messageKeys",
+
   // Session state errors
-  'used:', 'created:', 'closed:', 'Closing',
-  
+  "used:",
+  "created:",
+  "closed:",
+  "Closing",
+
   // Buffer errors related to encryption
-  '<Buffer'
+  "<Buffer",
 ]
 
 /**
@@ -232,14 +255,12 @@ const DECRYPTION_ERROR_PATTERNS = [
  */
 function isEncryptionError(error) {
   if (!error) return false
-  
-  const errorMessage = error.message || error.toString() || ''
-  const errorStack = error.stack || ''
+
+  const errorMessage = error.message || error.toString() || ""
+  const errorStack = error.stack || ""
   const combinedError = `${errorMessage} ${errorStack}`.toLowerCase()
-  
-  return DECRYPTION_ERROR_PATTERNS.some(pattern => 
-    combinedError.includes(pattern.toLowerCase())
-  )
+
+  return DECRYPTION_ERROR_PATTERNS.some((pattern) => combinedError.includes(pattern.toLowerCase()))
 }
 
 /**
@@ -247,32 +268,31 @@ function isEncryptionError(error) {
  */
 export function wrapSocketForDecryptionErrors(sock, sessionId) {
   const originalEmit = sock.ev.emit.bind(sock.ev)
-  
-  sock.ev.emit = function(event, ...args) {
+
+  sock.ev.emit = (event, ...args) => {
     try {
       return originalEmit(event, ...args)
     } catch (error) {
       // ✅ Catch ALL encryption/decryption related errors
       if (isEncryptionError(error)) {
         logger.warn(`Encryption error for ${sessionId} on ${event}:`, error.message)
-        
+
         // ✅ CRITICAL: Request message retry from WhatsApp
-        if (event === 'messages.upsert' && args[0]?.messages) {
+        if (event === "messages.upsert" && args[0]?.messages) {
           const msg = args[0].messages[0]
           if (msg?.key && sock.sendRetryRequest) {
             logger.info(`Requesting retry for message ${msg.key.id}`)
-            sock.sendRetryRequest(msg.key)
-              .catch(err => logger.debug(`Retry request failed: ${err.message}`))
+            sock.sendRetryRequest(msg.key).catch((err) => logger.debug(`Retry request failed: ${err.message}`))
           }
         }
-        
+
         return // Don't propagate error
       }
-      
+
       throw error // Re-throw non-encryption errors
     }
   }
-  
+
   return sock
 }
 
@@ -350,13 +370,13 @@ export function getSessionStoreStats() {
  */
 const normalizeJid = (jid) => {
   if (!jid) return null
-  
+
   // If it's already a LID, return as-is
-  if (jid.endsWith('@lid')) return jid
-  
+  if (jid.endsWith("@lid")) return jid
+
   // If already has @, return as-is
-  if (jid.includes('@')) return jid
-  
+  if (jid.includes("@")) return jid
+
   // Add default domain for phone numbers
   return jid.split("@")[0] + "@s.whatsapp.net"
 }
@@ -367,21 +387,21 @@ const normalizeJid = (jid) => {
  */
 const getParticipantJid = (participant) => {
   if (!participant) return null
-  
+
   // Priority 1: existing jid field
   if (participant.jid) return normalizeJid(participant.jid)
-  
+
   // Priority 2: phoneNumber field (v7)
   if (participant.phoneNumber) return normalizeJid(participant.phoneNumber)
-  
+
   // Priority 3: id field if it's not a LID
-  if (participant.id && !participant.id.endsWith('@lid')) {
+  if (participant.id && !participant.id.endsWith("@lid")) {
     return normalizeJid(participant.id)
   }
-  
+
   // Priority 4: id field even if it's a LID
   if (participant.id) return participant.id
-  
+
   return null
 }
 
@@ -390,20 +410,20 @@ const getParticipantJid = (participant) => {
  */
 const getParticipantPhoneNumber = (participant) => {
   if (!participant) return null
-  
+
   // Priority 1: phoneNumber field (v7)
   if (participant.phoneNumber) return normalizeJid(participant.phoneNumber)
-  
+
   // Priority 2: jid if it's a phone number
-  if (participant.jid && participant.jid.endsWith('@s.whatsapp.net')) {
+  if (participant.jid && participant.jid.endsWith("@s.whatsapp.net")) {
     return normalizeJid(participant.jid)
   }
-  
+
   // Priority 3: id if it's a phone number (not LID)
-  if (participant.id && !participant.id.endsWith('@lid')) {
+  if (participant.id && !participant.id.endsWith("@lid")) {
     return normalizeJid(participant.id)
   }
-  
+
   return null
 }
 
@@ -413,25 +433,25 @@ const getParticipantPhoneNumber = (participant) => {
  */
 const normalizeParticipantData = (participant) => {
   if (!participant) return null
-  
+
   const effectiveJid = getParticipantJid(participant)
   const effectivePhoneNumber = getParticipantPhoneNumber(participant)
-  
+
   // Ensure jid field exists (backward compatibility)
-  if (!participant.jid || participant.jid === '') {
+  if (!participant.jid || participant.jid === "") {
     participant.jid = effectiveJid
   }
-  
+
   // Ensure phoneNumber field exists (v7 compatibility)
-  if (!participant.phoneNumber || participant.phoneNumber === '') {
+  if (!participant.phoneNumber || participant.phoneNumber === "") {
     participant.phoneNumber = effectivePhoneNumber
   }
-  
+
   // Keep original id field
   if (!participant.id) {
     participant.id = effectiveJid
   }
-  
+
   return participant
 }
 
@@ -440,20 +460,18 @@ const normalizeParticipantData = (participant) => {
  */
 const normalizeMetadata = (metadata) => {
   if (!metadata) return null
-  
+
   if (metadata.participants && Array.isArray(metadata.participants)) {
-    metadata.participants = metadata.participants
-      .map(p => normalizeParticipantData(p))
-      .filter(Boolean)
+    metadata.participants = metadata.participants.map((p) => normalizeParticipantData(p)).filter(Boolean)
   }
-  
+
   return metadata
 }
 
 // ==================== SOCKET CREATION ====================
 /**
  * Create Baileys socket - extensions are applied via extendSocket in connection manager
- * 
+ *
  * Socket capturing is handled by the wrapper, works with ANY baileys version
  */
 export function createBaileysSocket(authState, sessionId, getMessage = null) {
@@ -463,8 +481,8 @@ export function createBaileysSocket(authState, sessionId, getMessage = null) {
     const sock = makeWASocket({
       ...baileysConfig,
       auth: authState,
-      sessionId,  // Pass sessionId if the baileys version supports it
-      getMessage: getMessage || defaultGetMessage,
+      sessionId, // Pass sessionId if the baileys version supports it
+      getMessage: getMessage || null,
       msgRetryCounterCache,
     })
 
@@ -505,7 +523,7 @@ export function setupSocketDefaults(sock) {
 /**
  * Get group metadata with intelligent caching
  * CACHE-FIRST: Always checks cache before fetching
- * 
+ *
  * @param {Object} sock - Baileys socket instance
  * @param {string} jid - Group JID
  * @param {boolean} forceRefresh - Force fetch from WhatsApp (bypasses cache)
@@ -546,45 +564,44 @@ export const getGroupMetadata = async (sock, jid, forceRefresh = false) => {
     logger.debug(`[Cache] Cached fresh metadata for ${jid}`)
 
     return metadata
-
   } catch (error) {
     // ========== ERROR HANDLING ==========
-    
+
     // 403 FORBIDDEN: Bot not in group or removed
-    if (error.output?.statusCode === 403 || error.data === 403 || error.message?.includes('forbidden')) {
+    if (error.output?.statusCode === 403 || error.data === 403 || error.message?.includes("forbidden")) {
       logger.warn(`[Baileys] 403 Forbidden for ${jid} - Bot not in group or was removed`)
-      
+
       // Clear any cached data for this group
       groupCache.del(cacheKey)
-      
+
       // Return null to indicate bot is not in group
       return null
     }
-    
+
     // RATE LIMIT: Try to use cached data
-    if (error.message?.includes('rate-overlimit') || error.output?.statusCode === 503) {
+    if (error.message?.includes("rate-overlimit") || error.output?.statusCode === 503) {
       const cachedMetadata = groupCache.get(cacheKey)
-      
+
       if (cachedMetadata) {
         logger.warn(`[Baileys] Rate limited for ${jid}, returning cached data`)
         return normalizeMetadata(cachedMetadata)
       }
-      
+
       logger.error(`[Baileys] Rate limited for ${jid} and no cache available`)
-      
+
       // Return minimal fallback structure
       return {
         id: jid,
-        subject: 'Unknown Group (Rate Limited)',
+        subject: "Unknown Group (Rate Limited)",
         participants: [],
         creation: Date.now(),
         owner: null,
         desc: null,
         announce: false,
-        restrict: false
+        restrict: false,
       }
     }
-    
+
     // UNEXPECTED ERRORS: Log and throw
     logger.error(`[Baileys] Error fetching group metadata for ${jid}:`, error.message)
     throw error
@@ -665,12 +682,12 @@ export const invalidateGroupCache = (groupJid, reason = "update") => {
 export const isUserGroupAdmin = async (sock, groupJid, userJid) => {
   try {
     const metadata = await getGroupMetadata(sock, groupJid)
-    
+
     if (!metadata || !metadata.participants) {
       logger.warn(`[Baileys] Cannot check admin - bot not in group ${groupJid}`)
       return false
     }
-    
+
     const normalizedUserJid = normalizeJid(userJid)
 
     if (!normalizedUserJid) {
@@ -679,7 +696,7 @@ export const isUserGroupAdmin = async (sock, groupJid, userJid) => {
 
     // Try to resolve LID to phone number
     let userPhoneNumber = userJid
-    if (userJid.endsWith('@lid') && sock.getPnForLid) {
+    if (userJid.endsWith("@lid") && sock.getPnForLid) {
       try {
         userPhoneNumber = await sock.getPnForLid(userJid)
       } catch (err) {
@@ -692,23 +709,23 @@ export const isUserGroupAdmin = async (sock, groupJid, userJid) => {
       const participantJid = getParticipantJid(participant)
       const participantPhone = getParticipantPhoneNumber(participant)
       const participantId = participant.id || participantJid
-      
+
       if (!participantJid) {
         return false
       }
-      
+
       const normalizedParticipantJid = normalizeJid(participantJid)
       const normalizedParticipantId = normalizeJid(participantId)
       const normalizedParticipantPhone = participantPhone ? normalizeJid(participantPhone) : null
-      
-      const matches = 
+
+      const matches =
         normalizedParticipantJid === normalizedUserJid ||
         normalizedParticipantJid === normalizeJid(userPhoneNumber) ||
         normalizedParticipantId === normalizedUserJid ||
         normalizedParticipantId === normalizeJid(userPhoneNumber) ||
         (normalizedParticipantPhone && normalizedParticipantPhone === normalizedUserJid) ||
         (normalizedParticipantPhone && normalizedParticipantPhone === normalizeJid(userPhoneNumber))
-      
+
       return matches && ["admin", "superadmin"].includes(participant.admin)
     })
   } catch (error) {
@@ -754,7 +771,7 @@ export const setupCacheInvalidation = (sock) => {
       updates.forEach((update) => {
         if (update.id) {
           logger.debug(`[Event] Group update: ${update.id}`)
-          
+
           if (update.announce !== undefined || update.restrict !== undefined) {
             invalidateGroupCache(update.id, "settings_change")
           } else if (Object.keys(update).length > 1) {
@@ -764,10 +781,13 @@ export const setupCacheInvalidation = (sock) => {
       })
     })
 
-    if (sock.ev.listenerCount("lid-mapping.update") === 0) {
+    // The Baileys event buffer doesn't implement standard EventEmitter methods
+    try {
       sock.ev.on("lid-mapping.update", (mapping) => {
         logger.debug(`[Event] LID mapping update received:`, mapping)
       })
+    } catch (err) {
+      logger.debug(`[Cache] LID mapping listener already exists or failed to add: ${err.message}`)
     }
 
     logger.info("[Cache] Setup group cache invalidation listeners")
@@ -839,11 +859,11 @@ export const getCacheStats = () => {
 export async function bindStoreToSocket(sock, sessionId) {
   try {
     const store = await getSessionStore(sessionId)
-    if (!store || typeof store.bind !== 'function') {
+    if (!store || typeof store.bind !== "function") {
       logger.error(`[Store] Invalid store object for ${sessionId}`)
       return null
     }
-    
+
     store.bind(sock.ev)
 
     // Setup message retrieval from store
@@ -894,7 +914,7 @@ export async function isFollowingNewsletter(sock, newsletterJid) {
       return false
     }
 
-    const metadata = await sock.newsletterMetadata('jid', newsletterJid)
+    const metadata = await sock.newsletterMetadata("jid", newsletterJid)
     return metadata !== null
   } catch (error) {
     logger.error(`[Newsletter] Error checking follow status for ${newsletterJid}:`, error.message)
@@ -912,7 +932,7 @@ export async function getNewsletterMetadata(sock, newsletterJid) {
       return null
     }
 
-    const metadata = await sock.newsletterMetadata('jid', newsletterJid)
+    const metadata = await sock.newsletterMetadata("jid", newsletterJid)
     return metadata
   } catch (error) {
     logger.error(`[Newsletter] Error getting metadata for ${newsletterJid}:`, error.message)
@@ -1047,23 +1067,23 @@ export function isPNFormat(jid) {
 export function extractPhoneFromJID(jid) {
   try {
     if (!jid || typeof jid !== "string") return null
-    
+
     const parts = jid.split("@")
     if (parts.length !== 2) return null
-    
+
     const number = parts[0]
-    
+
     // If it's a PN, extract and format
     if (jid.endsWith("@s.whatsapp.net")) {
       return `+${number}` // Return with + prefix
     }
-    
+
     // If it's a LID, we can't extract phone number directly
     if (jid.endsWith("@lid")) {
       logger.debug(`[LID] Cannot extract phone from LID ${jid} - use signal repository`)
       return null
     }
-    
+
     return null
   } catch (error) {
     logger.debug(`[LID] Error extracting phone from JID:`, error.message)
@@ -1079,13 +1099,13 @@ export function extractPhoneFromJID(jid) {
 export function cleanJID(jid) {
   try {
     if (!jid || typeof jid !== "string") return jid
-    
+
     // Remove device identifier suffix (e.g., :0, :1 from PN format)
     if (jid.includes(":") && jid.includes("@")) {
       const [baseJid] = jid.split(":") // Split by : and take first part
       return baseJid
     }
-    
+
     return jid
   } catch (error) {
     logger.debug(`[JID] Error cleaning JID:`, error.message)

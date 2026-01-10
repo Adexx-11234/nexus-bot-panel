@@ -20,7 +20,7 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "github:nexustechpro/baileys",
+    "@nexustechpro/baileys": "latest",
     "axios": "latest",
     "bcryptjs": "latest",
     "canvas": "^3.2.0",

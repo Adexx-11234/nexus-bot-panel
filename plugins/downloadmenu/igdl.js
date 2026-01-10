@@ -1,7 +1,7 @@
 // plugins/download/instagram.js
 
 import downloader, { downloadMedia } from '../../lib/downloaders/index.js';
-import { generateWAMessageFromContent, WAProto as proto, prepareWAMessageMedia } from '@whiskeysockets/baileys';
+import { generateWAMessageFromContent, WAProto as proto, prepareWAMessageMedia } from '@nexustechpro/baileys';
 import fs from 'fs';
 
 export default {

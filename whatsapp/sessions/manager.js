@@ -621,7 +621,7 @@ export class SessionManager {
     try {
       logger.info(`🧹 In-memory cleanup for ${sessionId}`)
 
-      
+      const results = { messageStore: false }
       try {
         const { deleteSessionStore } = await import("../core/index.js")
         await deleteSessionStore(sessionId)

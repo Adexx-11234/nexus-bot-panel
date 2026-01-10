@@ -1,7 +1,7 @@
 import { createComponentLogger } from "../../utils/logger.js"
 import { GroupQueries } from "../../database/query.js"
 import AdminChecker from "../../whatsapp/utils/admin-checker.js"
-import { downloadMediaMessage } from "@whiskeysockets/baileys"
+import { downloadMediaMessage } from "@nexustechpro/baileys"
 
 const logger = createComponentLogger("SETGROUPPP")
 

@@ -1,7 +1,7 @@
 // plugins/download/spotify.js
 
 import downloader, { downloadMedia } from '../../lib/downloaders/index.js';
-import { prepareWAMessageMedia } from '@whiskeysockets/baileys';
+import { prepareWAMessageMedia } from '@nexustechpro/baileys';
 import fs from 'fs';
 
 export default {

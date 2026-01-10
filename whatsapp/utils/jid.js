@@ -1,5 +1,5 @@
 //UTILS/JID.JS
-import { jidDecode } from '@whiskeysockets/baileys'
+import { jidDecode } from '@nexustechpro/baileys'
 import { createComponentLogger } from '../../utils/logger.js'
 
 const logger = createComponentLogger('JID_UTILS')

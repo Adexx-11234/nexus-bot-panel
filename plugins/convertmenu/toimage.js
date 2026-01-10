@@ -1,6 +1,6 @@
 import { createComponentLogger } from "../../utils/logger.js"
 import { webp2png, getTempFilePath, cleanupTempFile } from "../../lib/converters/media-converter.js"
-import { downloadMediaMessage } from "@whiskeysockets/baileys"
+import { downloadMediaMessage } from "@nexustechpro/baileys"
 import fs from "fs"
 
 const logger = createComponentLogger("TO-IMAGE")

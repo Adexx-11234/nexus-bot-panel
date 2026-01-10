@@ -2554,6 +2554,31 @@ async updateUserActivity(groupJid, userJid, hasMedia = false) {
   }
 },
 
+/**
+ * Mark a user as having left the group
+ * Removes them from activity_data but keeps historical record
+ */
+async setUserLeftGroup(groupJid, userJid) {
+  if (!checkCircuitBreaker()) {
+    logger.debug(`Circuit open, skipping set user left`)
+    return
+  }
+
+  try {
+    await queryManager.execute(
+      `UPDATE group_activity
+       SET activity_data = activity_data - $2::text,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE group_jid = $1`,
+      [groupJid, userJid]
+    )
+    
+    logger.debug(`Marked ${userJid} as left from ${groupJid}`)
+  } catch (error) {
+    logger.error(`Error marking user as left: ${error.message}`)
+  }
+},
+
   /**
    * Get ALL activity data for a group
    * Returns JSON with all users who ever sent a message

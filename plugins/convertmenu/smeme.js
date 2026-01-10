@@ -1,6 +1,6 @@
 import { createComponentLogger } from "../../utils/logger.js"
 import { TelegraPh, image2webp, getTempFilePath, cleanupTempFile } from "../../lib/converters/media-converter.js"
-import { downloadMediaMessage } from "@whiskeysockets/baileys"
+import { downloadMediaMessage } from "@nexustechpro/baileys"
 import axios from "axios"
 import fs from "fs"
 

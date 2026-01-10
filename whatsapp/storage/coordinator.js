@@ -282,7 +282,7 @@ async saveSession(sessionId, sessionData, credentials = null) {
   const isWeb = session?.source === "web"
   // ✅ CRITICAL: Delete makeinstore FIRST
   try {
-    const { deleteFileStore } = await import("../whatsapp/index.js")
+    const { deleteFileStore } = await import("./index.js")
     await deleteFileStore(sessionId)
     logger.info(`✅ Deleted makeinstore for ${sessionId}`)
   } catch (error) {

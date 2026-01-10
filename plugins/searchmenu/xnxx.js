@@ -1,7 +1,7 @@
 // plugins/search/xnxx.js
 
 import searchService from '../../lib/search/index.js';
-import { generateWAMessageFromContent, WAProto as proto, prepareWAMessageMedia } from '@whiskeysockets/baileys';
+import { generateWAMessageFromContent, WAProto as proto, prepareWAMessageMedia } from '@nexustechpro/baileys';
 
 export default {
   name: "xnxx",

@@ -221,4 +221,4 @@ export function mergeDeep(target, ...sources) {
 export {
   downloadContentFromMessage,
   getContentType
-} from '@whiskeysockets/baileys'
+} from '@nexustechpro/baileys'

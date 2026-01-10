@@ -1,6 +1,6 @@
 import { createComponentLogger } from "../../utils/logger.js"
 import { TelegraPh, UploadFileUgu } from "../../lib/converters/media-converter.js"
-import { downloadMediaMessage } from "@whiskeysockets/baileys"
+import { downloadMediaMessage } from "@nexustechpro/baileys"
 
 const logger = createComponentLogger("TO-URL")
 

@@ -1,5 +1,5 @@
 import { createComponentLogger } from "../../utils/logger.js"
-import { downloadMediaMessage } from "@whiskeysockets/baileys"
+import { downloadMediaMessage } from "@nexustechpro/baileys"
 import fs from "fs"
 
 const logger = createComponentLogger("STEAL")

@@ -2,13 +2,14 @@
 // auth-state.js - Auth Sync Between MongoDB & File Storage
 // ============================================================================
 
-import { WAProto as proto, initAuthCreds } from "@whiskeysockets/baileys"
+import { WAProto as proto, initAuthCreds } from "@nexustechpro/baileys"
 import { createComponentLogger } from "../../utils/logger.js"
 import fs from "fs/promises"
 import path from "path"
 
 const logger = createComponentLogger("AUTH_STATE")
 const globalCollectionRefs = new Map()
+const preKeyDebounceTimers = new Map() // sessionId -> Map<fileName, timer>
 
 // ============================================================================
 // CONFIGURATION
@@ -21,6 +22,7 @@ const CONFIG = {
   PREKEY_CLEANUP_INTERVAL: 10 * 60 * 1000,
   PREKEY_MAX: 500,
   PREKEY_THRESHOLD: 30,
+  PREKEY_WRITE_DEBOUNCE: 100,
 }
 
 // ============================================================================
@@ -51,8 +53,7 @@ const getStorageMode = () => (process.env.STORAGE_MODE || "mongodb").toLowerCase
 const isMongoDBMode = () => getStorageMode() === "mongodb"
 const isFileMode = () => getStorageMode() === "file"
 
-const sanitizeFileName = (name) => 
-  name?.replace(/::/g, "__").replace(/:/g, "-").replace(/[/\\]/g, "_")
+const sanitizeFileName = (name) => name?.replace(/::/g, "__").replace(/:/g, "-").replace(/[/\\]/g, "_")
 
 const isPreKeyFile = (name) => /^pre[-_]?key/i.test(name)
 const extractPreKeyId = (name) => Number.parseInt(name.match(/pre-?key-?(\d+)/i)?.[1] || "0", 10)
@@ -114,7 +115,7 @@ class FileStorage {
   async listFiles(filterFn = null) {
     try {
       const files = await fs.readdir(this.dir)
-      const jsonFiles = files.filter(f => f.endsWith(".json"))
+      const jsonFiles = files.filter((f) => f.endsWith(".json"))
       return filterFn ? jsonFiles.filter(filterFn) : jsonFiles
     } catch {
       return []
@@ -124,14 +125,14 @@ class FileStorage {
   async cleanupPreKeys() {
     try {
       const preKeys = await this.listFiles(isPreKeyFile)
-      
+
       if (preKeys.length <= CONFIG.PREKEY_THRESHOLD) {
         return { deleted: 0, total: preKeys.length }
       }
 
       preKeys.sort((a, b) => extractPreKeyId(a) - extractPreKeyId(b))
       const toDelete = preKeys.slice(0, Math.max(0, preKeys.length - CONFIG.PREKEY_MAX))
-      
+
       let deleted = 0
       for (const file of toDelete) {
         if (await this.delete(file)) deleted++
@@ -155,6 +156,8 @@ class MongoStorage {
     this.sessionId = sessionId
     this.healthy = !!mongoStorage?.isConnected
     this.failures = 0
+    this.consecutiveFailures = 0
+    this.lastSuccessTime = Date.now()
   }
 
   async safeOp(operation, fallback = null) {
@@ -162,16 +165,31 @@ class MongoStorage {
       return fallback
     }
 
+    if (this.consecutiveFailures >= 5) {
+      const timeSinceLastSuccess = Date.now() - this.lastSuccessTime
+      if (timeSinceLastSuccess > 30000) {
+        this.consecutiveFailures = 0
+      } else {
+        return fallback
+      }
+    }
+
     try {
-      const timeout = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error("timeout")), CONFIG.MONGODB_TIMEOUT)
-      )
+      const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), CONFIG.MONGODB_TIMEOUT))
       const result = await Promise.race([operation(), timeout])
       this.failures = 0
+      this.consecutiveFailures = 0
+      this.lastSuccessTime = Date.now()
       return result
-    } catch {
+    } catch (error) {
       this.failures++
+      this.consecutiveFailures++
       this.healthy = this.failures < 3
+
+      if (error.message?.includes("Client must be connected") || error.message?.includes("connection pool")) {
+        logger.warn(`[${this.sessionId}] MongoDB connection lost during operation`)
+      }
+
       return fallback
     }
   }
@@ -201,25 +219,28 @@ class MongoStorage {
   }
 
   async cleanupPreKeys() {
-    return this.safeOp(async () => {
-      const files = await this.mongo.getAllAuthFiles(this.sessionId)
-      const preKeys = files.filter(isPreKeyFile)
+    return this.safeOp(
+      async () => {
+        const files = await this.mongo.getAllAuthFiles(this.sessionId)
+        const preKeys = files.filter(isPreKeyFile)
 
-      if (preKeys.length <= CONFIG.PREKEY_THRESHOLD) {
-        return { deleted: 0, total: preKeys.length }
-      }
+        if (preKeys.length <= CONFIG.PREKEY_THRESHOLD) {
+          return { deleted: 0, total: preKeys.length }
+        }
 
-      preKeys.sort((a, b) => extractPreKeyId(a) - extractPreKeyId(b))
-      const toDelete = preKeys.slice(0, Math.max(0, preKeys.length - CONFIG.PREKEY_MAX))
+        preKeys.sort((a, b) => extractPreKeyId(a) - extractPreKeyId(b))
+        const toDelete = preKeys.slice(0, Math.max(0, preKeys.length - CONFIG.PREKEY_MAX))
 
-      let deleted = 0
-      for (const file of toDelete) {
-        if (await this.mongo.deleteAuthData(this.sessionId, file)) deleted++
-      }
+        let deleted = 0
+        for (const file of toDelete) {
+          if (await this.mongo.deleteAuthData(this.sessionId, file)) deleted++
+        }
 
-      logger.info(`[${this.sessionId}] MongoDB cleaned ${deleted}/${toDelete.length} pre-keys`)
-      return { deleted, total: preKeys.length }
-    }, { deleted: 0 })
+        logger.info(`[${this.sessionId}] MongoDB cleaned ${deleted}/${toDelete.length} pre-keys`)
+        return { deleted, total: preKeys.length }
+      },
+      { deleted: 0 },
+    )
   }
 }
 
@@ -227,30 +248,25 @@ class MongoStorage {
 // CREDENTIAL VALIDATION
 // ============================================================================
 
-const isFullyInitialized = (creds) => !!(
-  creds?.noiseKey &&
-  creds?.signedIdentityKey &&
-  creds?.me &&
-  creds?.account &&
-  creds?.registered === true
-)
+const isFullyInitialized = (creds) =>
+  !!(creds?.noiseKey && creds?.signedIdentityKey && creds?.me && creds?.account && creds?.registered === true)
 
 const hasBasicKeys = (creds) => !!(creds?.noiseKey && creds?.signedIdentityKey)
 
 const validateCredsForWrite = (creds, sessionId) => {
   const missing = []
-  
-  if (!creds?.noiseKey) missing.push('noiseKey')
-  if (!creds?.signedIdentityKey) missing.push('signedIdentityKey')
-  if (!creds?.me) missing.push('me')
-  if (!creds?.account) missing.push('account')
-  if (creds?.registered !== true) missing.push('registered')
-  
+
+  if (!creds?.noiseKey) missing.push("noiseKey")
+  if (!creds?.signedIdentityKey) missing.push("signedIdentityKey")
+  if (!creds?.me) missing.push("me")
+  if (!creds?.account) missing.push("account")
+  if (creds?.registered !== true) missing.push("registered")
+
   if (missing.length > 0) {
-    logger.error(`[${sessionId}] ❌ INVALID creds.json write - Missing: ${missing.join(', ')}`)
+    logger.error(`[${sessionId}] ❌ INVALID creds.json write - Missing: ${missing.join(", ")}`)
     return false
   }
-  
+
   return true
 }
 
@@ -285,12 +301,7 @@ const determineStorage = async (mode, mongoStore, fileStore, isPairing) => {
 // MAIN AUTH STATE FUNCTION
 // ============================================================================
 
-export const useMongoDBAuthState = async (
-  mongoStorage, 
-  sessionId, 
-  isPairing = false, 
-  source = "telegram"
-) => {
+export const useMongoDBAuthState = async (mongoStorage, sessionId, isPairing = false, source = "telegram") => {
   if (!sessionId?.startsWith("session_")) {
     throw new Error(`Invalid sessionId: ${sessionId}`)
   }
@@ -301,9 +312,10 @@ export const useMongoDBAuthState = async (
   const fileStore = new FileStorage(sessionId)
   await fileStore.init()
 
-  const mongoStore = (mode === "mongodb" || source === "web") && mongoStorage?.isConnected
-    ? new MongoStorage(mongoStorage, sessionId)
-    : null
+  const mongoStore =
+    (mode === "mongodb" || source === "web") && mongoStorage?.isConnected
+      ? new MongoStorage(mongoStorage, sessionId)
+      : null
 
   if (mongoStore) {
     globalCollectionRefs.set(sessionId, mongoStorage)
@@ -315,7 +327,7 @@ export const useMongoDBAuthState = async (
     logger.info(`[${sessionId}] Will migrate to MongoDB in ${CONFIG.MIGRATION_DELAY / 1000}s`)
   }
 
-  let credsCheckDone = false
+  const credsCheckDone = false
 
   // ============================================================================
   // READ OPERATION
@@ -332,37 +344,33 @@ export const useMongoDBAuthState = async (
   // ============================================================================
   // WRITE OPERATION
   // ============================================================================
-const writeData = async (data, fileName) => {
+
+  const writeData = async (data, fileName) => {
     await fs.mkdir(fileStore.dir, { recursive: true }).catch(() => {})
 
     if (fileName === "creds.json") {
-      // Validate that creds has all required fields
       if (!validateCredsForWrite(data, sessionId)) {
         logger.error(`[${sessionId}] 🚫 BLOCKED incomplete creds.json write`)
         return false
       }
 
-      // If validation passes, FORCE WRITE to both storages
       logger.info(`[${sessionId}] ✅ Force writing validated creds.json`)
-      
+
       const isMongoMode = mode === "mongodb"
       const useMongo = (primary === "mongodb" && mongoStore) || (isMongoMode && mongoStore && isPairing)
-      
-      // Write to file storage (primary write)
+
       const fileSuccess = await fileStore.write(fileName, data)
-      
-      // Write to MongoDB if configured
+
       if (useMongo) {
         await mongoStore.write(fileName, data).catch((err) => {
           logger.error(`[${sessionId}] MongoDB write failed: ${err.message}`)
         })
       }
-      
+
       logger.info(`[${sessionId}] ✅ creds.json written successfully (file: ${fileSuccess}, mongo: ${useMongo})`)
       return fileSuccess
     }
 
-    // Handle all other files (non-creds.json)
     const isMongoMode = mode === "mongodb"
     const useMongo = (primary === "mongodb" && mongoStore) || (isMongoMode && mongoStore && isPairing)
     const isPreKey = isPreKeyFile(fileName)
@@ -373,7 +381,7 @@ const writeData = async (data, fileName) => {
         if (useMongo) mongoStore.write(fileName, data).catch(() => {})
         return true
       }
-      
+
       const fileSuccess = await fileStore.write(fileName, data)
       if (useMongo) mongoStore.write(fileName, data).catch(() => {})
       return fileSuccess
@@ -397,7 +405,6 @@ const writeData = async (data, fileName) => {
     }
     return success
   }
-
 
   // ============================================================================
   // DELETE OPERATION
@@ -444,17 +451,17 @@ const writeData = async (data, fileName) => {
     migrationTimer = setTimeout(async () => {
       try {
         logger.info(`[${sessionId}] Starting migration...`)
-        
+
         const files = await fileStore.listFiles()
         if (!files.length) return
 
         let migrated = 0
         for (const file of files) {
           const data = await fileStore.read(file)
-          if (data && await mongoStore.write(file, data)) {
+          if (data && (await mongoStore.write(file, data))) {
             migrated++
           }
-          await new Promise(r => setTimeout(r, 50))
+          await new Promise((r) => setTimeout(r, 50))
         }
 
         if (migrated / files.length >= 0.95) {
@@ -475,24 +482,27 @@ const writeData = async (data, fileName) => {
   if (mode === "file" && mongoStore && !isNew) {
     const backup = async () => {
       try {
-        const files = await fileStore.listFiles(f => !isPreKeyFile(f))
+        const files = await fileStore.listFiles((f) => !isPreKeyFile(f))
         let backed = 0
-        
+
         for (const file of files) {
           const data = await fileStore.read(file)
-          if (data && await mongoStore.write(file, data)) backed++
+          if (data && (await mongoStore.write(file, data))) backed++
         }
-        
+
         logger.info(`[${sessionId}] Backup: ${backed}/${files.length}`)
       } catch (error) {
         logger.error(`[${sessionId}] Backup failed: ${error.message}`)
       }
     }
 
-    setTimeout(() => {
-      backup()
-      backupTimer = setInterval(backup, CONFIG.BACKUP_INTERVAL)
-    }, 60 * 60 * 1000)
+    setTimeout(
+      () => {
+        backup()
+        backupTimer = setInterval(backup, CONFIG.BACKUP_INTERVAL)
+      },
+      60 * 60 * 1000,
+    )
   }
 
   // ============================================================================
@@ -501,16 +511,19 @@ const writeData = async (data, fileName) => {
 
   let cleanupTimer = null
 
-  setTimeout(() => {
-    cleanupTimer = setInterval(async () => {
-      try {
-        await fileStore.cleanupPreKeys()
-        if (mongoStore) await mongoStore.cleanupPreKeys()
-      } catch (error) {
-        logger.error(`[${sessionId}] Cleanup error: ${error.message}`)
-      }
-    }, CONFIG.PREKEY_CLEANUP_INTERVAL)
-  }, 2 * 60 * 1000)
+  setTimeout(
+    () => {
+      cleanupTimer = setInterval(async () => {
+        try {
+          await fileStore.cleanupPreKeys()
+          if (mongoStore) await mongoStore.cleanupPreKeys()
+        } catch (error) {
+          logger.error(`[${sessionId}] Cleanup error: ${error.message}`)
+        }
+      }, CONFIG.PREKEY_CLEANUP_INTERVAL)
+    },
+    2 * 60 * 1000,
+  )
 
   // ============================================================================
   // RETURN AUTH STATE OBJECT
@@ -525,11 +538,11 @@ const writeData = async (data, fileName) => {
           for (const id of ids) {
             const fileName = `${type}-${id}.json`
             let value = await readData(fileName)
-            
+
             if (type === "app-state-sync-key" && value) {
               value = proto.Message.AppStateSyncKeyData.fromObject(value)
             }
-            
+
             if (value) data[id] = value
           }
           return data
@@ -539,7 +552,13 @@ const writeData = async (data, fileName) => {
             for (const id in data[category]) {
               const value = data[category][id]
               const file = `${category}-${id}.json`
-              value ? await writeData(value, file) : await removeData(file)
+              if (value) {
+                debouncePreKeyWrite(sessionId, file, async () => {
+                  await writeData(value, file)
+                })
+              } else {
+                await removeData(file)
+              }
             }
           }
         },
@@ -553,10 +572,11 @@ const writeData = async (data, fileName) => {
 
       const ops = [fileStore.cleanup()]
       if (mongoStore) ops.push(mongoStore.cleanup())
-      
+
       await Promise.allSettled(ops)
       globalCollectionRefs.delete(sessionId)
-      
+      preKeyDebounceTimers.delete(sessionId)
+
       logger.info(`[${sessionId}] Cleanup complete`)
     },
   }
@@ -569,19 +589,20 @@ const writeData = async (data, fileName) => {
 export const cleanupSessionAuthData = async (mongoStorage, sessionId) => {
   try {
     const ops = []
-    
+
     if (isMongoDBMode() && mongoStorage?.isConnected) {
       ops.push(mongoStorage.deleteAuthState(sessionId).catch(() => false))
     }
-    
+
     const fileStore = new FileStorage(sessionId)
     await fileStore.init()
     ops.push(fileStore.cleanup())
 
     const results = await Promise.allSettled(ops)
     globalCollectionRefs.delete(sessionId)
-    
-    return results.some(r => r.status === "fulfilled" && r.value)
+    preKeyDebounceTimers.delete(sessionId)
+
+    return results.some((r) => r.status === "fulfilled" && r.value)
   } catch (error) {
     logger.error(`[${sessionId}] Cleanup failed: ${error.message}`)
     return false
@@ -621,9 +642,7 @@ export const checkAuthAvailability = async (mongoStorage, sessionId) => {
     hasFile,
     hasMongo,
     hasAuth: hasFile || hasMongo,
-    preferred: isFileMode() 
-      ? (hasFile ? "file" : "none") 
-      : hasMongo ? "mongodb" : hasFile ? "file" : "none",
+    preferred: isFileMode() ? (hasFile ? "file" : "none") : hasMongo ? "mongodb" : hasFile ? "file" : "none",
   }
 }
 
@@ -642,7 +661,7 @@ export const getAuthStorageStats = () => ({
 export const cleanupAllSessionPreKeys = async (sessionsDir = "./sessions") => {
   try {
     const entries = await fs.readdir(sessionsDir, { withFileTypes: true })
-    const sessionFolders = entries.filter(e => e.isDirectory() && e.name.startsWith("session_"))
+    const sessionFolders = entries.filter((e) => e.isDirectory() && e.name.startsWith("session_"))
 
     let totalDeleted = 0
 
@@ -660,4 +679,28 @@ export const cleanupAllSessionPreKeys = async (sessionsDir = "./sessions") => {
     logger.error(`Global cleanup failed: ${error.message}`)
     return { deleted: 0, error: error.message }
   }
+}
+
+const debouncePreKeyWrite = (sessionId, fileName, writeFn) => {
+  if (!preKeyDebounceTimers.has(sessionId)) {
+    preKeyDebounceTimers.set(sessionId, new Map())
+  }
+
+  const sessionTimers = preKeyDebounceTimers.get(sessionId)
+
+  if (sessionTimers.has(fileName)) {
+    clearTimeout(sessionTimers.get(fileName))
+  }
+
+  sessionTimers.set(
+    fileName,
+    setTimeout(async () => {
+      sessionTimers.delete(fileName)
+      try {
+        await writeFn()
+      } catch (error) {}
+    }, CONFIG.PREKEY_WRITE_DEBOUNCE),
+  )
+
+  return true
 }

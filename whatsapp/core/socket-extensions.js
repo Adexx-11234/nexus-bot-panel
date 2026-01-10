@@ -1,5 +1,5 @@
 import { createComponentLogger } from "../../utils/logger.js"
-import { downloadMediaMessage } from "@whiskeysockets/baileys"
+import { downloadMediaMessage } from "@nexustechpro/baileys"
 import { image2webp, video2webp, getTempFilePath, cleanupTempFile } from "../../lib/converters/media-converter.js"
 import { fileTypeFromBuffer } from "file-type"
 import axios from "axios"
@@ -37,12 +37,12 @@ async function loadBotLogoThumbnail() {
           .resize(200, 200, {
             fit: 'cover',
             position: 'center',
-            kernel: sharp.kernel.lanczos3 // Better quality scaling
+            kernel: sharp.kernel.lanczos3
           })
           .png({
-            quality: 100, // Max quality
-            compressionLevel: 0, // No compression
-            adaptiveFiltering: false, // Disable adaptive filtering for clarity
+            quality: 100,
+            compressionLevel: 0,
+            adaptiveFiltering: false,
             palette: false
           })
           .toBuffer()
@@ -361,7 +361,6 @@ function getFakeQuotedForContext(m, options = {}) {
     if (m.commandName) {
       const cmd = m.commandName.toLowerCase()
       
-      // Check if command name contains category hints
       if (cmd.includes('owner') || cmd.includes('eval') || cmd.includes('exec')) {
         return PRESETS.ownermenu
       }
@@ -390,7 +389,7 @@ function getFakeQuotedForContext(m, options = {}) {
       return PRESETS.ownermenu
     }
 
-    // Priority 5: Check if in group for group-related
+    // Priority 5: Check if in group
     if (m.isGroup) {
       return PRESETS.groupmenu
     }
@@ -405,6 +404,15 @@ function getFakeQuotedForContext(m, options = {}) {
 }
 
 /**
+ * Sleep/delay utility
+ */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// ==================== SOCKET EXTENSION ====================
+
+/**
  * Extend a Baileys socket with ALL helper methods and overrides
  */
 export function extendSocket(sock) {
@@ -414,197 +422,185 @@ export function extendSocket(sock) {
 
   logger.debug("Extending socket with dynamic fake quoted system")
 
-// ==================== SEND MESSAGE OVERRIDE ====================
-const originalSendMessage = sock.sendMessage.bind(sock)
+  // ==================== SEND MESSAGE OVERRIDE ====================
+  const originalSendMessage = sock.sendMessage.bind(sock)
 
-sock.sendMessage = async (jid, content, options = {}) => {
-  const maxRetries = 2
-  let lastError = null
+  sock.sendMessage = async (jid, content, options = {}) => {
+    const maxRetries = 2
+    let lastError = null
 
-  
-  // ========== DYNAMIC FAKE QUOTED MANAGEMENT ==========
-  const isGroup = jid.endsWith('@g.us')
-  let originalQuoted = options.quoted
+    // ========== DYNAMIC FAKE QUOTED MANAGEMENT ==========
+    const isGroup = jid.endsWith('@g.us')
+    let originalQuoted = options.quoted
 
-  // ✅ ADD NEWSLETTER FORWARDING INFO
-  const newsletterJid = process.env.WHATSAPP_CHANNEL_JID || '120363319098372999@newsletter'
-  const botName = '𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙'
+    // ✅ ADD NEWSLETTER FORWARDING INFO
+    const newsletterJid = process.env.WHATSAPP_CHANNEL_JID || '120363319098372999@newsletter'
+    const botName = '𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙'
     const forwardInfo = {
-    forwardingScore: 1,
-    isForwarded: true,
-    forwardedNewsletterMessageInfo: {
-      newsletterJid: newsletterJid,
-      newsletterName: botName,
-      serverMessageId: -1
+      forwardingScore: 1,
+      isForwarded: true,
+      forwardedNewsletterMessageInfo: {
+        newsletterJid: newsletterJid,
+        newsletterName: botName,
+        serverMessageId: -1
+      }
     }
-  }
-  
-  // Determine which fake quoted to use
-  const PRESETS = getFakeQuotedPresets()
-  let fakeQuoted = PRESETS.default
-  
-  if (originalQuoted) {
-    // Get context-aware fake quoted
-    fakeQuoted = getFakeQuotedForContext(originalQuoted, options)
     
-    logger.debug(`[SendMessage] Using fake quoted type: ${originalQuoted.pluginCategory || 'default'}`)
+    // Determine which fake quoted to use
+    const PRESETS = getFakeQuotedPresets()
+    let fakeQuoted = PRESETS.default
     
-    // ✅ FIXED: Only add mention if we already have participant info
-    // DO NOT fetch group metadata here to avoid rate limits
-    if (isGroup && originalQuoted.key?.participant) {
-      const senderJid = originalQuoted.key.participant
-      const pushName = originalQuoted.pushName || originalQuoted.verifiedBizName || 'User'
+    if (originalQuoted) {
+      // Get context-aware fake quoted
+      fakeQuoted = getFakeQuotedForContext(originalQuoted, options)
       
-      // Clone the fake quoted and enhance it for group replies
-      fakeQuoted = JSON.parse(JSON.stringify(fakeQuoted)) // Deep clone
+      logger.debug(`[SendMessage] Using fake quoted type: ${originalQuoted.pluginCategory || 'default'}`)
       
-      // Update the caption/conversation to show reply info
-      if (fakeQuoted.message.imageMessage) {
-        fakeQuoted.message.imageMessage.caption += `\n\n*Replied to ${pushName}*`
-      } else if (fakeQuoted.message.conversation) {
-        fakeQuoted.message.conversation += `\n\n*Replied to ${pushName}*`
+      // ✅ FIXED: Only add mention if we already have participant info
+      if (isGroup && originalQuoted.key?.participant) {
+        const senderJid = originalQuoted.key.participant
+        const pushName = originalQuoted.pushName || originalQuoted.verifiedBizName || 'User'
+        
+        // Clone the fake quoted and enhance it for group replies
+        fakeQuoted = JSON.parse(JSON.stringify(fakeQuoted))
+        
+        // Update the caption/conversation to show reply info
+        if (fakeQuoted.message.imageMessage) {
+          fakeQuoted.message.imageMessage.caption += `\n\n*Replied to ${pushName}*`
+        } else if (fakeQuoted.message.conversation) {
+          fakeQuoted.message.conversation += `\n\n*Replied to ${pushName}*`
+        }
+        
+        logger.debug(`[SendMessage] Enhanced group reply for ${pushName}`)
       }
       
-      // ✅ IMPORTANT: Don't add mentions here - let caller handle it
-      // This prevents double mentions and metadata calls
-      logger.debug(`[SendMessage] Enhanced group reply for ${pushName}`)
+      // Replace original quoted with our fake quoted
+      options.quoted = fakeQuoted
+    } else {
+      // No quoted provided, add default fake quoted
+      logger.debug(`[SendMessage] Adding default fake quoted to message for ${jid}`)
+      options.quoted = PRESETS.default
     }
     
-    // Replace original quoted with our fake quoted
-     options.quoted = fakeQuoted
-  } else {
-    // No quoted provided, add default fake quoted
-    logger.debug(`[SendMessage] Adding default fake quoted to message for ${jid}`)
-    options.quoted = PRESETS.default
-  }
-  
-  // ✅ ADD FORWARD INFO to all text messages (make them look forwarded from newsletter)
-  if (content.text || content.caption) {
-    // Add contextInfo with forward info
-    if (!content.contextInfo) {
-      content.contextInfo = {}
-    }
-    
-    // Merge forward info into contextInfo
-    content.contextInfo = {
-      ...content.contextInfo,
-      ...forwardInfo
-    }
-    
-    logger.debug(`[SendMessage] Added newsletter forward info to message`)
-  }
-  
-  // ✅ CRITICAL FIX: Convert mentions array to proper format if exists
-  // This prevents Baileys from calling groupMetadata internally
-  if (options.mentions && Array.isArray(options.mentions) && options.mentions.length > 0) {
-    // Keep mentions but ensure they're in the right format
-    options.mentions = options.mentions.map(m => {
-      if (typeof m === 'string') {
-        return m.includes('@') ? m : `${m}@s.whatsapp.net`
-      }
-      return m
-    })
-    logger.debug(`[SendMessage] Added ${options.mentions.length} mentions`)
-  }
-  
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      // Disable ephemeral messages by default
-      if (!options.ephemeralExpiration) {
-        options.ephemeralExpiration = 0
+    // ✅ ADD FORWARD INFO to all text messages
+    if (content.text || content.caption) {
+      if (!content.contextInfo) {
+        content.contextInfo = {}
       }
       
-      // Create send promise
-      const sendPromise = originalSendMessage(jid, content, options)
+      content.contextInfo = {
+        ...content.contextInfo,
+        ...forwardInfo
+      }
       
-      // Create timeout promise (40 seconds)
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('sendMessage timeout after 40s')), 40000)
-      )
-      
-      // Race between send and timeout
-      const result = await Promise.race([sendPromise, timeoutPromise])
+      logger.debug(`[SendMessage] Added newsletter forward info to message`)
+    }
+    
+    // ✅ CRITICAL FIX: Convert mentions array to proper format if exists
+    if (options.mentions && Array.isArray(options.mentions) && options.mentions.length > 0) {
+      options.mentions = options.mentions.map(m => {
+        if (typeof m === 'string') {
+          return m.includes('@') ? m : `${m}@s.whatsapp.net`
+        }
+        return m
+      })
+      logger.debug(`[SendMessage] Added ${options.mentions.length} mentions`)
+    }
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        // Disable ephemeral messages by default
+        if (!options.ephemeralExpiration) {
+          options.ephemeralExpiration = 0
+        }
+        
+        // Create send promise
+        const sendPromise = originalSendMessage(jid, content, options)
+        
+        // Create timeout promise (40 seconds)
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('sendMessage timeout after 40s')), 40000)
+        )
+        
+        // Race between send and timeout
+        const result = await Promise.race([sendPromise, timeoutPromise])
 
-            // ✅ MODIFY MESSAGE KEY ID - Add NEXUSBOT suffix AFTER message is sent
-      if (result && result.key && result.key.id) {
-        const originalId = result.key.id
-        // Only append if it doesn't already have NEXUSBOT
-        if (!originalId.endsWith('NEXUSBOT')) {
-          result.key.id = `${originalId}NEXUSBOT`
-          logger.debug(`Modified message ID: ${originalId} -> ${result.key.id}`)
-        }
-      }
-      // Update session activity on success
-      if (sock.sessionId) {
-        const { updateSessionLastMessage } = await import('../core/config.js')
-        updateSessionLastMessage(sock.sessionId)
-      }
-      
-      logger.debug(`[SendMessage] Message sent successfully to ${jid}`)
-      return result
-      
-    } catch (error) {
-      lastError = error
-      
-      // ✅ SPECIAL HANDLING: If rate-limited and has mentions, retry without mentions
-      if (error.message?.includes('rate-overlimit') && options.mentions) {
-        logger.warn(`[SendMessage] Rate limited with mentions, retrying without mentions for ${jid}`)
-        
-        // Remove mentions and retry immediately
-        delete options.mentions
-        
-        try {
-          const result = await originalSendMessage(jid, content, options)
-          
-          if (sock.sessionId) {
-            const { updateSessionLastMessage } = await import('../core/config.js')
-            updateSessionLastMessage(sock.sessionId)
+        // ✅ MODIFY MESSAGE KEY ID - Add NEXUSBOT suffix AFTER message is sent
+        if (result && result.key && result.key.id) {
+          const originalId = result.key.id
+          if (!originalId.endsWith('NEXUSBOT')) {
+            result.key.id = `${originalId}NEXUSBOT`
+            logger.debug(`Modified message ID: ${originalId} -> ${result.key.id}`)
           }
-          
-          logger.info(`[SendMessage] Successfully sent without mentions after rate limit`)
-          return result
-        } catch (fallbackError) {
-          logger.error(`[SendMessage] Fallback without mentions also failed: ${fallbackError.message}`)
-          lastError = fallbackError
-          // Continue to normal error handling below
         }
-      }
-      
-      // Don't retry on specific errors
-      const noRetryErrors = [
-        'forbidden',
-        'not-authorized',
-        'invalid-jid',
-        'recipient-not-found',
-        'rate-overlimit' // ✅ Don't retry rate limits (already tried fallback above)
-      ]
-      
-      const shouldNotRetry = noRetryErrors.some(err => 
-        error.message?.toLowerCase().includes(err)
-      )
-      
-      if (shouldNotRetry) {
-        logger.error(`[SendMessage] Non-retryable error sending to ${jid}: ${error.message}`)
+
+        // Update session activity on success
+        if (sock.sessionId) {
+          const { updateSessionLastMessage } = await import('../core/config.js')
+          updateSessionLastMessage(sock.sessionId)
+        }
+        
+        logger.debug(`[SendMessage] Message sent successfully to ${jid}`)
+        return result
+        
+      } catch (error) {
+        lastError = error
+        
+        // ✅ SPECIAL HANDLING: If rate-limited and has mentions, retry without mentions
+        if (error.message?.includes('rate-overlimit') && options.mentions) {
+          logger.warn(`[SendMessage] Rate limited with mentions, retrying without mentions for ${jid}`)
+          
+          delete options.mentions
+          
+          try {
+            const result = await originalSendMessage(jid, content, options)
+            
+            if (sock.sessionId) {
+              const { updateSessionLastMessage } = await import('../core/config.js')
+              updateSessionLastMessage(sock.sessionId)
+            }
+            
+            logger.info(`[SendMessage] Successfully sent without mentions after rate limit`)
+            return result
+          } catch (fallbackError) {
+            logger.error(`[SendMessage] Fallback without mentions also failed: ${fallbackError.message}`)
+            lastError = fallbackError
+          }
+        }
+        
+        // Don't retry on specific errors
+        const noRetryErrors = [
+          'forbidden',
+          'not-authorized',
+          'invalid-jid',
+          'recipient-not-found',
+          'rate-overlimit'
+        ]
+        
+        const shouldNotRetry = noRetryErrors.some(err => 
+          error.message?.toLowerCase().includes(err)
+        )
+        
+        if (shouldNotRetry) {
+          logger.error(`[SendMessage] Non-retryable error sending to ${jid}: ${error.message}`)
+          throw error
+        }
+        
+        // Retry on timeout or temporary errors
+        if (attempt < maxRetries) {
+          const delay = (attempt + 1) * 1000
+          logger.warn(`[SendMessage] Send failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms: ${error.message}`)
+          await sleep(delay)
+          continue
+        }
+        
+        logger.error(`[SendMessage] Failed to send message to ${jid} after ${maxRetries + 1} attempts: ${error.message}`)
         throw error
       }
-      
-      // Retry on timeout or temporary errors
-      if (attempt < maxRetries) {
-        const delay = (attempt + 1) * 1000 // 1s, 2s
-        logger.warn(`[SendMessage] Send failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms: ${error.message}`)
-        await sleep(delay)
-        continue
-      }
-      
-      // All retries exhausted
-      logger.error(`[SendMessage] Failed to send message to ${jid} after ${maxRetries + 1} attempts: ${error.message}`)
-      throw error
     }
+    
+    throw lastError || new Error('Unknown error in sendMessage')
   }
-  
-  // Should never reach here, but just in case
-  throw lastError || new Error('Unknown error in sendMessage')
-}
 
   // ==================== GROUP METADATA OVERRIDE ====================
   const originalGroupMetadata = sock.groupMetadata?.bind(sock)
@@ -637,7 +633,7 @@ sock.sendMessage = async (jid, content, options = {}) => {
     return lid
   }
 
-  // ==================== MEDIA HELPERS ====================
+  // ==================== MEDIA CONVERSION HELPERS ====================
   
   sock.sendImageAsSticker = async function (jid, source, options = {}) {
     let tempFilePath = null
@@ -743,20 +739,22 @@ sock.sendMessage = async (jid, content, options = {}) => {
     }
   }
 
+  // ==================== STICKER PACK SENDER ====================
+  
   sock.sendStickerPack = async function (jid, sources, options = {}) {
     const {
-      batchSize = 5,
-      batchDelay = 1000,
-      itemDelay = 300,
-      quoted = null,
-      onProgress = null
+      packName = "Custom Sticker Pack",
+      packPublisher = "𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙",
+      quoted = null
     } = options
 
-    const results = []
-    const total = sources.length
+    const stickers = []
     const tempFiles = []
 
     try {
+      const crypto = await import('crypto')
+      
+      // Step 1: Process all stickers and create metadata
       for (let i = 0; i < sources.length; i++) {
         let tempFilePath = null
         
@@ -764,6 +762,7 @@ sock.sendMessage = async (jid, content, options = {}) => {
           const source = sources[i]
           let buffer = source.buffer || source
 
+          // Handle URL sources
           if (source.url) {
             const response = await axios.get(source.url, { responseType: "arraybuffer" })
             buffer = Buffer.from(response.data)
@@ -776,6 +775,7 @@ sock.sendMessage = async (jid, content, options = {}) => {
           const mime = fileType?.mime || ""
           const isVideo = source.isVideo || mime.startsWith("video/") || mime === "image/gif"
 
+          // Convert to webp
           let stickerBuffer
           if (isVideo) {
             stickerBuffer = await video2webp(buffer)
@@ -783,44 +783,138 @@ sock.sendMessage = async (jid, content, options = {}) => {
             stickerBuffer = await image2webp(buffer)
           }
 
+          // Generate file hash for filename
+          const fileSha256 = crypto.createHash('sha256').update(stickerBuffer).digest('base64')
+          const fileName = `${fileSha256.replace(/[/+=]/g, '')}.webp`
+
+          stickers.push({
+            fileName: fileName,
+            isAnimated: isVideo,
+            emojis: source.emojis || ["😊"],
+            accessibilityLabel: source.label || "",
+            isLottie: false,
+            mimetype: "image/webp",
+            buffer: stickerBuffer
+          })
+
           tempFilePath = getTempFilePath('stickerPack', '.webp')
           fs.writeFileSync(tempFilePath, stickerBuffer)
           tempFiles.push(tempFilePath)
 
-          const result = await this.sendMessage(
-            jid,
-            { sticker: fs.readFileSync(tempFilePath) },
-            { quoted: i === 0 ? quoted : null }
-          )
-
-          results.push({ success: true, index: i, result })
-
-          if (onProgress) {
-            onProgress(i + 1, total)
-          }
-
-          if ((i + 1) % batchSize !== 0 && i < sources.length - 1) {
-            await sleep(itemDelay)
-          } else if ((i + 1) % batchSize === 0 && i < sources.length - 1) {
-            await sleep(batchDelay)
-          }
         } catch (error) {
-          logger.error(`sendStickerPack error at index ${i}:`, error.message)
-          results.push({ success: false, index: i, error: error.message })
-          
+          logger.error(`Error processing sticker ${i}:`, error.message)
           if (tempFilePath) {
             cleanupTempFile(tempFilePath)
           }
         }
       }
 
-      return results
+      if (stickers.length === 0) {
+        throw new Error("No stickers were successfully processed")
+      }
+
+      // Step 2: Create a combined buffer of all stickers
+      const packId = crypto.randomUUID()
+      const allStickersBuffers = stickers.map(s => s.buffer)
+      const combinedBuffer = Buffer.concat(allStickersBuffers)
+      
+      // Step 3: Generate thumbnail (use first sticker)
+      const thumbnailBuffer = await sharp(stickers[0].buffer)
+        .resize(252, 252, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+        .webp()
+        .toBuffer()
+
+      const thumbnailSha256 = crypto.createHash('sha256').update(thumbnailBuffer).digest('base64')
+      const trayIconFileName = `${packId}.png`
+
+      // Step 4: Upload the sticker pack to WhatsApp servers
+      const uploadResult = await this.waUploadToServer(
+        combinedBuffer,
+        { 
+          fileEncSha256: true, 
+          mediaType: 'sticker_pack' 
+        }
+      )
+
+      // Step 5: Calculate file hashes
+      const fileSha256 = crypto.createHash('sha256').update(combinedBuffer).digest('base64')
+      const imageDataHash = crypto.createHash('sha256').update(combinedBuffer).digest('hex')
+      const imageDataHashBase64 = Buffer.from(imageDataHash, 'hex').toString('base64')
+
+      // Step 6: Upload thumbnail
+      const thumbnailUploadResult = await this.waUploadToServer(
+        thumbnailBuffer,
+        { 
+          fileEncSha256: true, 
+          mediaType: 'thumbnail' 
+        }
+      )
+
+      const thumbnailEncSha256 = crypto.createHash('sha256')
+        .update(thumbnailBuffer)
+        .digest('base64')
+
+      // Step 7: Build the sticker pack message
+      const stickerPackMessage = {
+        stickerPackMessage: {
+          stickerPackId: packId,
+          name: packName,
+          publisher: packPublisher,
+          stickers: stickers.map(s => ({
+            fileName: s.fileName,
+            isAnimated: s.isAnimated,
+            emojis: s.emojis,
+            accessibilityLabel: s.accessibilityLabel,
+            isLottie: s.isLottie,
+            mimetype: s.mimetype
+          })),
+          fileLength: combinedBuffer.length.toString(),
+          fileSha256: fileSha256,
+          fileEncSha256: uploadResult.fileEncSha256,
+          mediaKey: uploadResult.mediaKey,
+          directPath: uploadResult.directPath,
+          contextInfo: {},
+          mediaKeyTimestamp: Math.floor(Date.now() / 1000).toString(),
+          trayIconFileName: trayIconFileName,
+          thumbnailDirectPath: thumbnailUploadResult.directPath,
+          thumbnailSha256: thumbnailSha256,
+          thumbnailEncSha256: thumbnailEncSha256,
+          thumbnailHeight: 252,
+          thumbnailWidth: 252,
+          imageDataHash: imageDataHashBase64,
+          stickerPackSize: combinedBuffer.length.toString(),
+          stickerPackOrigin: "USER_CREATED"
+        }
+      }
+
+      // Step 8: Send the message
+      const result = await this.sendMessage(
+        jid,
+        stickerPackMessage,
+        { quoted }
+      )
+
+      logger.info(`✅ Sticker pack sent successfully: ${stickers.length} stickers`)
+
+      return {
+        success: true,
+        packId,
+        stickerCount: stickers.length,
+        result
+      }
+
+    } catch (error) {
+      logger.error('Error sending sticker pack:', error)
+      throw error
     } finally {
+      // Cleanup temp files
       for (const tempFile of tempFiles) {
         cleanupTempFile(tempFile)
       }
     }
   }
+
+  // ==================== BASIC MEDIA SENDERS ====================
 
   sock.sendImage = async function (jid, source, caption = "", options = {}) {
     let tempFilePath = null
@@ -959,6 +1053,8 @@ sock.sendMessage = async (jid, content, options = {}) => {
     }
   }
 
+  // ==================== CONVENIENCE METHODS ====================
+
   sock.reply = async function (m, text) {
     return await this.sendMessage(
       m.chat || m.key.remoteJid,
@@ -977,59 +1073,52 @@ sock.sendMessage = async (jid, content, options = {}) => {
   }
 
   sock.downloadMedia = async (msg) => {
-  try {
-    // Auto-detect: if msg has quoted and no direct media, use quoted
-    let messageToDownload = msg;
-    
-    // Check if current message has media
-    const hasDirectMedia = msg.message?.imageMessage || 
-                          msg.message?.videoMessage || 
-                          msg.message?.audioMessage ||
-                          msg.message?.documentMessage ||
-                          msg.message?.stickerMessage;
-    
-    // If no direct media but has quoted with media, use quoted
-    if (!hasDirectMedia && msg.quoted?.message) {
-      const hasQuotedMedia = msg.quoted.message?.imageMessage || 
-                            msg.quoted.message?.videoMessage || 
-                            msg.quoted.message?.audioMessage ||
-                            msg.quoted.message?.documentMessage ||
-                            msg.quoted.message?.stickerMessage;
+    try {
+      // Auto-detect: if msg has quoted and no direct media, use quoted
+      let messageToDownload = msg
       
-      if (hasQuotedMedia) {
-        messageToDownload = msg.quoted;
+      // Check if current message has media
+      const hasDirectMedia = msg.message?.imageMessage || 
+                            msg.message?.videoMessage || 
+                            msg.message?.audioMessage ||
+                            msg.message?.documentMessage ||
+                            msg.message?.stickerMessage
+      
+      // If no direct media but has quoted with media, use quoted
+      if (!hasDirectMedia && msg.quoted?.message) {
+        const hasQuotedMedia = msg.quoted.message?.imageMessage || 
+                              msg.quoted.message?.videoMessage || 
+                              msg.quoted.message?.audioMessage ||
+                              msg.quoted.message?.documentMessage ||
+                              msg.quoted.message?.stickerMessage
+        
+        if (hasQuotedMedia) {
+          messageToDownload = msg.quoted
+        }
       }
+      
+      const buffer = await downloadMediaMessage(
+        messageToDownload,
+        "buffer",
+        {},
+        {
+          logger: console,
+          reuploadRequest: sock.updateMediaMessage
+        }
+      )
+      
+      return buffer
+    } catch (error) {
+      logger.error("downloadMedia error:", error.message)
+      throw error
     }
-    
-    const buffer = await downloadMediaMessage(
-      messageToDownload,
-      "buffer",
-      {},
-      {
-        logger: console,
-        reuploadRequest: sock.updateMediaMessage
-      }
-    );
-    
-    return buffer;
-  } catch (error) {
-    logger.error("downloadMedia error:", error.message);
-    throw error;
   }
-};
 
   // Mark socket as extended
   sock._extended = true
 
-  logger.info("✅ Socket fully extended with dynamic fake quoted system")
+  logger.info("✅ Socket fully extended with all helper methods")
   return sock
-}
-
-/**
- * Sleep/delay utility
- */
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 export default { extendSocket }
