@@ -15,7 +15,7 @@ const CONFIG = {
   CACHE_TTL: 300000,
   WRITE_FLUSH_INTERVAL: 500,
   ORPHAN_CLEANUP_INTERVAL: 1800000, // 30 min
-  PREKEY_CLEANUP_INTERVAL: 600000, // 10 min
+  //PREKEY_CLEANUP_INTERVAL: 600000, // 10 min
   BACKUP_INTERVAL: 14400000, // 4 hours
   BACKUP_JITTER_MAX: 1800000, // 30 min
   BATCH_SIZE: 4,
@@ -38,7 +38,7 @@ export class SessionStorage {
       health: null,
       orphan: null,
       cache: null,
-      prekey: null,
+      //prekey: null,
       backup: null,
     }
 
@@ -597,11 +597,11 @@ async saveSession(sessionId, sessionData, credentials = null) {
       await this.checkWebSessionsWithoutMongoAuth().catch(() => {})
     }, 120000)
 
-    this._startPreKeyCleanup()
+    //this._startPreKeyCleanup()
     this._startSessionBackup()
   }
 
-  _startPreKeyCleanup() {
+ /* _startPreKeyCleanup() {
     this.timers.prekey = setInterval(async () => {
       try {
         logger.info("🧹 Pre-key cleanup...")
@@ -635,7 +635,7 @@ async saveSession(sessionId, sessionData, credentials = null) {
         logger.debug("Initial pre-key cleanup:", error.message)
       }
     }, 300000)
-  }
+  }*/
 
   _startSessionBackup() {
     if (this.storageMode !== "file" || !this.mongoStorage.isConnected) {
