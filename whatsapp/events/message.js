@@ -46,12 +46,12 @@ export class MessageEventHandler {
 
       // Request retry for CIPHERTEXT messages
       if (ciphertextMessages.length > 0) {
-        await this._requestMessageRetries(sock, sessionId, ciphertextMessages)
+        //await this._requestMessageRetries(sock, sessionId, ciphertextMessages)
       }
 
       // Log filtering summary
       if (validMessages.length === 0) {
-        this._logFilterSummary(sessionId, messages.length, ciphertextMessages.length, filterStats)
+       // this._logFilterSummary(sessionId, messages.length, ciphertextMessages.length, filterStats)
         return
       }
 
