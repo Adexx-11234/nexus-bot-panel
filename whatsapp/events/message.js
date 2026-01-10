@@ -262,7 +262,7 @@ export class MessageEventHandler {
 
         // Retry on Bad MAC error
         if (this._isBadMacError(error) && message.key) {
-          await this._requestMessageRetries(sock, sessionId, [message])
+         // await this._requestMessageRetries(sock, sessionId, [message])
         }
       }
     }
