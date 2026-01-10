@@ -66,7 +66,7 @@ export class MongoDBStorage {
     try {
       await Promise.race([
         this.client.db("admin").command({ ping: 1 }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("ping timeout")), 3000)),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("ping timeout")), 30000)),
       ])
       this.lastVerifiedAt = now
       return true
