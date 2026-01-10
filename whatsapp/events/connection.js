@@ -125,6 +125,18 @@ export class ConnectionEventHandler {
       const statusCode = error instanceof Boom ? error.output?.statusCode : null
       const config = getDisconnectConfig(statusCode)
 
+      if (statusCode === 428) {
+        logger.error(`🔴 [428 DEBUG] Full Baileys Error:`, error)
+        logger.error(`[428 DEBUG] Error Stack:`, error?.stack)
+        logger.error(`[428 DEBUG] Error Output:`, error?.output)
+        logger.error(`[428 DEBUG] LastDisconnect Full:`, JSON.stringify(lastDisconnect, null, 2))
+        logger.error(`[428 DEBUG] Sock Info:`, {
+          hasEv: !!sock?.ev,
+          hasUser: !!sock?.user,
+          hasMtproto: !!sock?.ws,
+        })
+      }
+
       logger.warn(`📴 Session ${sessionId} disconnected`)
       logger.warn(`   Status Code: ${statusCode}`)
       logger.warn(`   Message: ${config.message}`)
