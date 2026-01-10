@@ -1,5 +1,6 @@
 // ============================================================================
 // auth-state.js - Auth Sync Between MongoDB & File Storage
+// PRE-KEY AUTO-CLEANUP DISABLED
 // ============================================================================
 
 import { WAProto as proto, initAuthCreds } from "@nexustechpro/baileys"
@@ -19,9 +20,10 @@ const CONFIG = {
   MONGODB_TIMEOUT: 5000,
   MIGRATION_DELAY: 15000,
   BACKUP_INTERVAL: 4 * 60 * 60 * 1000,
-  PREKEY_CLEANUP_INTERVAL: 10 * 60 * 1000,
-  PREKEY_MAX: 500,
-  PREKEY_THRESHOLD: 30,
+  // PRE-KEY CLEANUP DISABLED
+  // PREKEY_CLEANUP_INTERVAL: 10 * 60 * 1000,
+  // PREKEY_MAX: 500,
+  // PREKEY_THRESHOLD: 30,
   PREKEY_WRITE_DEBOUNCE: 100,
 }
 
@@ -122,6 +124,10 @@ class FileStorage {
     }
   }
 
+  // ============================================================================
+  // PRE-KEY CLEANUP - COMMENTED OUT
+  // ============================================================================
+  /*
   async cleanupPreKeys() {
     try {
       const preKeys = await this.listFiles(isPreKeyFile)
@@ -144,6 +150,7 @@ class FileStorage {
       return { deleted: 0, error: error.message }
     }
   }
+  */
 }
 
 // ============================================================================
@@ -218,6 +225,10 @@ class MongoStorage {
     return this.safeOp(() => this.mongo.getAllAuthFiles(this.sessionId), [])
   }
 
+  // ============================================================================
+  // PRE-KEY CLEANUP - COMMENTED OUT
+  // ============================================================================
+  /*
   async cleanupPreKeys() {
     return this.safeOp(
       async () => {
@@ -242,6 +253,7 @@ class MongoStorage {
       { deleted: 0 },
     )
   }
+  */
 }
 
 // ============================================================================
@@ -506,11 +518,12 @@ export const useMongoDBAuthState = async (mongoStorage, sessionId, isPairing = f
   }
 
   // ============================================================================
-  // PRE-KEY CLEANUP TIMER
+  // PRE-KEY CLEANUP TIMER - COMMENTED OUT
   // ============================================================================
 
   let cleanupTimer = null
 
+  /*
   setTimeout(
     () => {
       cleanupTimer = setInterval(async () => {
@@ -524,6 +537,7 @@ export const useMongoDBAuthState = async (mongoStorage, sessionId, isPairing = f
     },
     2 * 60 * 1000,
   )
+  */
 
   // ============================================================================
   // RETURN AUTH STATE OBJECT
@@ -652,12 +666,16 @@ export const getAuthStorageStats = () => ({
   isFileMode: isFileMode(),
   migrationDelay: `${CONFIG.MIGRATION_DELAY / 1000}s`,
   backupInterval: `${CONFIG.BACKUP_INTERVAL / 3600000}h`,
-  preKeyCleanupInterval: `${CONFIG.PREKEY_CLEANUP_INTERVAL / 60000}min`,
-  preKeyMaxCount: CONFIG.PREKEY_MAX,
-  preKeyCleanupThreshold: CONFIG.PREKEY_THRESHOLD,
+  // preKeyCleanupInterval: "DISABLED",
+  // preKeyMaxCount: "DISABLED",
+  // preKeyCleanupThreshold: "DISABLED",
   activeCollectionRefs: globalCollectionRefs.size,
 })
 
+// ============================================================================
+// GLOBAL PRE-KEY CLEANUP - COMMENTED OUT
+// ============================================================================
+/*
 export const cleanupAllSessionPreKeys = async (sessionsDir = "./sessions") => {
   try {
     const entries = await fs.readdir(sessionsDir, { withFileTypes: true })
@@ -680,6 +698,7 @@ export const cleanupAllSessionPreKeys = async (sessionsDir = "./sessions") => {
     return { deleted: 0, error: error.message }
   }
 }
+*/
 
 const debouncePreKeyWrite = (sessionId, fileName, writeFn) => {
   if (!preKeyDebounceTimers.has(sessionId)) {

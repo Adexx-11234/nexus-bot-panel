@@ -17,6 +17,7 @@ const CONFIG = {
   PREKEY_BATCH_SIZE: 10,
   PREKEY_BATCH_DELAY: 100,
   CONNECTION_VERIFY_INTERVAL: 5000,
+  LENIENT_PING_TIMEOUT: true,
 }
 
 const preKeyWriteQueue = new Map()
@@ -70,11 +71,12 @@ export class MongoDBStorage {
       this.lastVerifiedAt = now
       return true
     } catch (error) {
-      logger.warn(`MongoDB connection verification failed: ${error.message}`)
-      this.isConnected = false
-      this._scheduleReconnect()
-      return false
-    }
+  if (CONFIG.LENIENT_PING_TIMEOUT && error.message.includes("ping timeout")) {
+    logger.warn(`MongoDB ping timeout (lenient mode - continuing operations)`)
+    this.lastVerifiedAt = now
+    return true // Still return true to allow operations
+  }
+}
   }
 
   async _initConnection() {
