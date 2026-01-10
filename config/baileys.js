@@ -100,6 +100,7 @@ export const baileysConfig = {
   enableAutoSessionRecreation: true,
   enableRecentMessageCache: true,
   fireInitQueries: true,
+  enableAutoSessionRecreation: true,
 
   // ✅ CRITICAL FIX #5b: Better prekey handling
   // Prevent excessive session recreation from prekey updates
