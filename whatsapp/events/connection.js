@@ -125,38 +125,6 @@ export class ConnectionEventHandler {
       const statusCode = error instanceof Boom ? error.output?.statusCode : null
       const config = getDisconnectConfig(statusCode)
 
-      if (statusCode === 428) {
-        logger.error(`🔴 [428 DEBUG] Full Baileys Error:`, error)
-        logger.error(`[428 DEBUG] Error Stack:`, error?.stack)
-        logger.error(`[428 DEBUG] Error Output:`, error?.output)
-        logger.error(`[428 DEBUG] LastDisconnect Full:`, JSON.stringify(lastDisconnect, null, 2))
-            logger.error(`🔴 [DISCONNECT DETAILS]`)
-    logger.error(`   Status Code: ${statusCode}`)
-    logger.error(`   Error Message: ${error?.message}`)
-    logger.error(`   Error Data: ${JSON.stringify(error?.data)}`)
-    logger.error(`   Boom Output: ${JSON.stringify(error?.output)}`)
-        logger.error(`[428 DEBUG] Sock Info:`, {
-          hasEv: !!sock?.ev,
-          hasUser: !!sock?.user,
-          hasMtproto: !!sock?.ws,
-        })
-        if (lastDisconnect?.connection) {
-      logger.error(`   Connection State: ${lastDisconnect.connection}`)
-    }
-    
-    // ✅ Check reconnect info
-    if (lastDisconnect?.isClosing) {
-      logger.error(`   Socket Closing: true`)
-    }
-    
-    // ✅ Check if it's a clean close vs error close
-    if (error?.isBoom) {
-      logger.error(`   This is a Boom error (WhatsApp rejection)`)
-    } else {
-      logger.error(`   This is a network error`)
-    }
-      }
-
       logger.warn(`📴 Session ${sessionId} disconnected`)
       logger.warn(`   Status Code: ${statusCode}`)
       logger.warn(`   Message: ${config.message}`)

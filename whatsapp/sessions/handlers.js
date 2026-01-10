@@ -275,6 +275,8 @@ export class SessionEventHandlers {
   async _handleConnectionOpen(sock, sessionId, callbacks) {
     try {
       logger.info(`Session ${sessionId} connection opened`)
+      sock._connectedAt = Date.now()
+      this._setupPreDisconnectMonitoring(sock, sessionId)
 
       // Clear connection timeout
       this.sessionManager.connectionManager?.clearConnectionTimeout?.(sessionId)
@@ -506,6 +508,98 @@ export class SessionEventHandlers {
       logger.info(`Session ${sessionId} fully initialized`)
     } catch (error) {
       logger.error(`Connection open handler error for ${sessionId}:`, error)
+    }
+  }
+
+  /**
+   * ✅ NEW METHOD: Monitor for errors that precede 428
+   */
+  _setupPreDisconnectMonitoring(sock, sessionId) {
+    try {
+      // ============================================================
+      // Monitor stream errors - these come BEFORE 428
+      // ============================================================
+      sock.ws?.on('CB:stream:error', (node) => {
+        logger.error(`[PRE-428] 🔴 STREAM ERROR for ${sessionId}:`, {
+          node: node,
+          attrs: node?.attrs,
+          timestamp: new Date().toISOString(),
+          socketReady: {
+            hasUser: !!sock?.user,
+            wsOpen: sock?.ws?.socket?._readyState === 1,
+            evReady: !!sock?.ev
+          }
+        })
+      })
+
+      // ============================================================
+      // Monitor connection failures - these trigger 428
+      // ============================================================
+      sock.ws?.on('CB:failure', (node) => {
+        logger.error(`[PRE-428] 🔴 CB:FAILURE for ${sessionId}:`, {
+          reason: node?.attrs?.reason,
+          attrs: node?.attrs,
+          timestamp: new Date().toISOString(),
+          socketReady: {
+            hasUser: !!sock?.user,
+            wsOpen: sock?.ws?.socket?._readyState === 1,
+          }
+        })
+      })
+
+      // ============================================================
+      // Monitor xmlstreamend - server terminating connection
+      // ============================================================
+      sock.ws?.on('CB:xmlstreamend', () => {
+        logger.error(`[PRE-428] 🔴 XMLSTREAMEND for ${sessionId}:`, {
+          timestamp: new Date().toISOString(),
+          socketReady: {
+            hasUser: !!sock?.user,
+            wsOpen: sock?.ws?.socket?._readyState === 1,
+          }
+        })
+      })
+
+      // ============================================================
+      // Monitor keep-alive failures
+      // ============================================================
+      const originalOnUnexpectedError = sock.onUnexpectedError
+      sock.onUnexpectedError = (err, msg) => {
+        if (err?.message?.includes('bad mac') || err?.message?.includes('mac')) {
+          logger.error(`[PRE-428] 🔴 BAD MAC ERROR for ${sessionId}:`, {
+            error: err?.message,
+            msg: msg,
+            timestamp: new Date().toISOString()
+          })
+        }
+
+        if (err?.message?.includes('Connection was lost')) {
+          logger.error(`[PRE-428] 🔴 CONNECTION LOST for ${sessionId}:`, {
+            error: err?.message,
+            timestamp: new Date().toISOString()
+          })
+        }
+
+        // Call original if it exists
+        if (originalOnUnexpectedError) {
+          originalOnUnexpectedError(err, msg)
+        }
+      }
+
+      // ============================================================
+      // Monitor query timeouts (these can cause cipher mismatches)
+      // ============================================================
+      sock.ws?.on('error', (error) => {
+        logger.error(`[PRE-428] 🔴 WebSocket ERROR for ${sessionId}:`, {
+          message: error?.message,
+          code: error?.code,
+          timestamp: new Date().toISOString()
+        })
+      })
+
+      logger.info(`✅ Pre-disconnect monitoring set up for ${sessionId}`)
+    } catch (error) {
+      logger.error(`Failed to setup pre-disconnect monitoring for ${sessionId}:`, error)
     }
   }
 
@@ -899,6 +993,18 @@ async _sendWelcomeMessage(sock, sessionId) {
   async _handleConnectionClose(sock, sessionId, lastDisconnect, callbacks) {
     try {
       logger.warn(`Session ${sessionId} connection closed`)
+
+      // ✅ ADD THIS - Log the actual reason
+      const statusCode = lastDisconnect?.error?.output?.statusCode
+      const errorMessage = lastDisconnect?.error?.message
+      
+      logger.error(`[CONNECTION_CLOSE_DETAILS] ${sessionId}:`, {
+        statusCode: statusCode,
+        errorMessage: errorMessage,
+        isBoom: lastDisconnect?.error?.isBoom,
+        timestamp: lastDisconnect?.date,
+        timeSinceOpen: Date.now() - (sock._connectedAt || Date.now()),
+      })
 
       // Get session data to check source
       const sessionData = await this.sessionManager.storage.getSession(sessionId)
