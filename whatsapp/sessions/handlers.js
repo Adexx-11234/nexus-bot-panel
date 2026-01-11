@@ -514,92 +514,101 @@ export class SessionEventHandlers {
   /**
    * ✅ NEW METHOD: Monitor for errors that precede 428
    */
-  _setupPreDisconnectMonitoring(sock, sessionId) {
+ _setupPreDisconnectMonitoring(sock, sessionId) {
     try {
       // ============================================================
-      // Monitor stream errors - these come BEFORE 428
+      // Monitor EVERY incoming frame before it closes
       // ============================================================
-      sock.ws?.on('CB:stream:error', (node) => {
-        logger.error(`[PRE-428] 🔴 STREAM ERROR for ${sessionId}:`, {
-          node: node,
-          attrs: node?.attrs,
-          timestamp: new Date().toISOString(),
-          socketReady: {
-            hasUser: !!sock?.user,
-            wsOpen: sock?.ws?.socket?._readyState === 1,
-            evReady: !!sock?.ev
-          }
-        })
-      })
-
-      // ============================================================
-      // Monitor connection failures - these trigger 428
-      // ============================================================
-      sock.ws?.on('CB:failure', (node) => {
-        logger.error(`[PRE-428] 🔴 CB:FAILURE for ${sessionId}:`, {
-          reason: node?.attrs?.reason,
-          attrs: node?.attrs,
-          timestamp: new Date().toISOString(),
-          socketReady: {
-            hasUser: !!sock?.user,
-            wsOpen: sock?.ws?.socket?._readyState === 1,
-          }
-        })
-      })
-
-      // ============================================================
-      // Monitor xmlstreamend - server terminating connection
-      // ============================================================
-      sock.ws?.on('CB:xmlstreamend', () => {
-        logger.error(`[PRE-428] 🔴 XMLSTREAMEND for ${sessionId}:`, {
-          timestamp: new Date().toISOString(),
-          socketReady: {
-            hasUser: !!sock?.user,
-            wsOpen: sock?.ws?.socket?._readyState === 1,
-          }
-        })
-      })
-
-      // ============================================================
-      // Monitor keep-alive failures
-      // ============================================================
-      const originalOnUnexpectedError = sock.onUnexpectedError
-      sock.onUnexpectedError = (err, msg) => {
-        if (err?.message?.includes('bad mac') || err?.message?.includes('mac')) {
-          logger.error(`[PRE-428] 🔴 BAD MAC ERROR for ${sessionId}:`, {
-            error: err?.message,
-            msg: msg,
-            timestamp: new Date().toISOString()
-          })
-        }
-
-        if (err?.message?.includes('Connection was lost')) {
-          logger.error(`[PRE-428] 🔴 CONNECTION LOST for ${sessionId}:`, {
-            error: err?.message,
-            timestamp: new Date().toISOString()
-          })
-        }
-
-        // Call original if it exists
-        if (originalOnUnexpectedError) {
-          originalOnUnexpectedError(err, msg)
+      const originalOnMessageReceived = sock.onMessageReceived
+      
+      sock.onMessageReceived = (data) => {
+        logger.debug(`[FRAME_RECV] ${sessionId}: Frame received, size: ${data?.length}`)
+        
+        if (originalOnMessageReceived) {
+          return originalOnMessageReceived(data)
         }
       }
 
       // ============================================================
-      // Monitor query timeouts (these can cause cipher mismatches)
+      // Monitor outgoing queries
       // ============================================================
-      sock.ws?.on('error', (error) => {
-        logger.error(`[PRE-428] 🔴 WebSocket ERROR for ${sessionId}:`, {
-          message: error?.message,
-          code: error?.code,
+      const originalQuery = sock.query
+      sock.query = async (node, timeoutMs) => {
+        logger.debug(`[QUERY_OUT] ${sessionId}: Sending query`, {
+          tag: node?.tag,
+          attrs: node?.attrs,
+          timestamp: new Date().toISOString()
+        })
+
+        try {
+          const result = await originalQuery(node, timeoutMs)
+          logger.debug(`[QUERY_RESP] ${sessionId}: Got response for ${node?.attrs?.id}`)
+          return result
+        } catch (error) {
+          logger.error(`[QUERY_ERROR] ${sessionId}: Query failed`, {
+            tag: node?.tag,
+            error: error?.message,
+            timestamp: new Date().toISOString()
+          })
+          throw error
+        }
+      }
+
+      // ============================================================
+      // Monitor keep-alive specifically
+      // ============================================================
+      sock.ws?.on('CB:iq,type:result', (stanza) => {
+        if (stanza?.attrs?.xmlns === 'w:p') {
+          logger.debug(`[KEEPALIVE_RESP] ${sessionId}: Keep-alive response received`)
+        }
+      })
+
+      // ============================================================
+      // Monitor creds updates - these can trigger reconnect
+      // ============================================================
+      sock.ev?.on('creds.update', (update) => {
+        logger.debug(`[CREDS_UPDATE] ${sessionId}:`, {
+          hasNoiseKey: !!update?.noiseKey,
+          hasSignedIdentityKey: !!update?.signedIdentityKey,
+          hasMeId: !!update?.me?.id,
           timestamp: new Date().toISOString()
         })
       })
 
-      logger.info(`✅ Pre-disconnect monitoring set up for ${sessionId}`)
+      // ============================================================
+      // Monitor connection.update events (to catch early close signals)
+      // ============================================================
+      const originalEmit = sock.ev?.emit?.bind(sock.ev)
+      sock.ev.emit = (event, data) => {
+        if (event === 'connection.update') {
+          logger.debug(`[CONNECTION_UPDATE] ${sessionId}:`, {
+            connection: data?.connection,
+            qr: !!data?.qr,
+            isNewLogin: data?.isNewLogin,
+            timestamp: new Date().toISOString()
+          })
+        }
+        return originalEmit(event, data)
+      }
+
+      // ============================================================
+      // Monitor WebSocket state changes
+      // ============================================================
+      setInterval(() => {
+        const wsState = sock?.ws?.socket?._readyState
+        const stateNames = {0: 'CONNECTING', 1: 'OPEN', 2: 'CLOSING', 3: 'CLOSED'}
+        
+        if (wsState === 3) { // CLOSED
+          logger.error(`[WS_STATE] ${sessionId}: WebSocket is CLOSED!`, {
+            wasOpen: sock?._connectedAt ? 'yes' : 'no',
+            timestamp: new Date().toISOString()
+          })
+        }
+      }, 5000) // Check every 5 seconds
+
+      logger.info(`✅ Aggressive monitoring set up for ${sessionId}`)
     } catch (error) {
-      logger.error(`Failed to setup pre-disconnect monitoring for ${sessionId}:`, error)
+      logger.error(`Failed to setup monitoring for ${sessionId}:`, error)
     }
   }
 
