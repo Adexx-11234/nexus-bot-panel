@@ -42,13 +42,10 @@ const KEEPALIVE_INTERVAL = 5000 // 5 seconds
 const HEALTH_CHECK_TIMEOUT = 30 * 60 * 1000 // 30 minutes
 
 // ==================== BAILEYS DEFAULT CONFIGURATION ====================
-// ✅ FIX: Override DEFAULT_CONNECTION_CONFIG with proper filtering functions
-// These prevent messages from being silently dropped due to:
-// 1. shouldIgnoreJid returning true
-// 2. shouldSyncHistoryMessage filtering out valid messages
-// 3. getMessage failing silently
+
 export const baileysConfig = {
   ...DEFAULT_CONNECTION_CONFIG,
+  logger: pino({ level: 'fatal' }), 
   generateHighQualityLinkPreview: true,
 }
 
