@@ -49,9 +49,9 @@ export class ConnectionHealthMonitor {
   }
 
   /**
-   * ✅ NEW: Check all active sessions for stale/partial state
-   */
-  async _checkForStalePartialSessions() {
+ * ✅ NEW: Check all active sessions for stale/partial state
+ */
+async _checkForStalePartialSessions() {
   try {
     const activeSockets = Array.from(this.sessionManager.activeSockets.entries())
     
@@ -74,9 +74,29 @@ export class ConnectionHealthMonitor {
           healthyCount++
         } else if (!hasUserJid) {
           partialCount++
-          logger.warn(`⚠️ Partial session detected: ${sessionId} (no user JID)`)
-          // ✅ DON'T REINITIALIZE - Just log it
-          // Baileys will handle reconnection automatically
+          logger.warn(`⚠️ Partial session detected: ${sessionId} (no user JID) - triggering cleanup`)
+          
+          // ✅ Call _handlePermanentDisconnect from ConnectionEventHandler with LOGGED_OUT status
+          const eventDispatcher = this.sessionManager.getEventDispatcher()
+          const connectionHandler = eventDispatcher?.connectionHandler
+          
+          if (connectionHandler) {
+            // Use LOGGED_OUT (401) to trigger notification
+            const loggedOutConfig = {
+              statusCode: 401,
+              message: "Session disconnected - no user information available",
+              shouldReconnect: false,
+              isPermanent: true
+            }
+            
+            await connectionHandler._handlePermanentDisconnect(sessionId, 401, loggedOutConfig)
+            logger.info(`✅ Cleanup triggered for partial session: ${sessionId}`)
+          } else {
+            // Fallback: direct cleanup if handler not available
+            logger.warn(`⚠️ ConnectionHandler not available, performing direct cleanup for ${sessionId}`)
+            await this.sessionManager.performCompleteUserCleanup(sessionId)
+          }
+          
         } else if (!isOpen) {
           logger.debug(`🔌 ${sessionId} is closed (readyState: ${readyState}) - Baileys will reconnect`)
           // ✅ DON'T REINITIALIZE - Baileys socket.js handles this
@@ -87,7 +107,7 @@ export class ConnectionHealthMonitor {
       }
     }
 
-    logger.info(`✅ Health check: ${healthyCount} healthy, ${partialCount} partial - Baileys managing all`)
+    logger.info(`✅ Health check: ${healthyCount} healthy, ${partialCount} partial sessions cleaned`)
 
   } catch (error) {
     logger.error("Error in health checker:", error)
