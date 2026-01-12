@@ -82,7 +82,7 @@ export class EventDispatcher {
     }
   }
 
-  /**
+/**
  * Start health monitoring for a session
  * Detects if messages.upsert stops arriving and triggers self-ping test
  * @private
@@ -102,17 +102,23 @@ _startHealthCheck(sock, sessionId) {
         const lastMsg = this.lastMessageTime.get(sessionId)
         const timeSinceLastMsg = Date.now() - lastMsg
 
-        // ⚠️ ALERT: No messages in 10 minutes - trigger self-ping instead of reconnect
+        // ⚠️ ALERT: No messages in 10 minutes - trigger health check
         if (timeSinceLastMsg > 10 * 60 * 1000) {
           logger.warn(
-            `[HEALTH_CHECK] ${sessionId}: No messages.upsert received in ${Math.round(timeSinceLastMsg / 1000 / 60)} minutes - will be handled by ConnectionHealthMonitor`
+            `[HEALTH_CHECK] ${sessionId}: No messages.upsert received in ${Math.round(timeSinceLastMsg / 1000 / 60)} minutes - triggering health check`
           )
 
-          // ✅ Let ConnectionHealthMonitor handle this with self-ping
-          // Don't force reconnection here - just log it
-          const { recordSessionActivity } = await import("../utils/index.js")
-          // Mark as activity so ConnectionHealthMonitor knows we checked
-          recordSessionActivity(sessionId)
+          // ✅ Get the health monitor and trigger a manual health check
+          const { getHealthMonitor } = await import("../utils/index.js")
+          const healthMonitor = getHealthMonitor(this.sessionManager)
+          
+          if (healthMonitor) {
+            // Force a health check which will send self-ping if needed
+            const currentSock = this.sessionManager.activeSockets?.get(sessionId)
+            if (currentSock) {
+              await healthMonitor._checkHealth(sessionId, currentSock)
+            }
+          }
         }
       } catch (error) {
         logger.debug(`Health check error for ${sessionId}:`, error.message)
