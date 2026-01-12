@@ -154,7 +154,7 @@ async function initializePlatform() {
   // 2. Database Migrations
   logger.info("🔄 [2/9] Running database migrations...")
   try {
-    // await runMigrations()
+     await runMigrations()
     logger.info("⏭️  Migrations skipped Done")
   } catch (error) {
     logger.error("❌ Migration failed - continuing anyway")
