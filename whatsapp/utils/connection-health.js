@@ -52,69 +52,47 @@ export class ConnectionHealthMonitor {
    * ✅ NEW: Check all active sessions for stale/partial state
    */
   async _checkForStalePartialSessions() {
-    try {
-      const activeSockets = Array.from(this.sessionManager.activeSockets.entries())
-      
-      if (activeSockets.length === 0) {
-        return
-      }
-
-      logger.info(`🔍 Checking ${activeSockets.length} sessions for stale/partial state...`)
-
-      let partialCount = 0
-      let staleCount = 0
-
-      for (const [sessionId, sock] of activeSockets) {
   try {
-    // ✅ Skip if already reinitializing
-    if (this.reinitializingNow.has(sessionId)) {
-      logger.debug(`⏭️ Skipping ${sessionId} - already reinitializing`)
-      continue
-    }
-
-    // ✅ Skip if reconnection in progress
-    const eventDispatcher = this.sessionManager.getEventDispatcher()
-    const connectionHandler = eventDispatcher?.connectionEventHandler
+    const activeSockets = Array.from(this.sessionManager.activeSockets.entries())
     
-    if (connectionHandler && !connectionHandler.canReinitialize(sessionId)) {
-      logger.debug(`⏭️ Skipping ${sessionId} - reconnection handler active`)
-      continue
+    if (activeSockets.length === 0) {
+      return
     }
 
-    const hasUserJid = !!sock?.user?.id
-    const readyState = sock?.ws?.socket?._readyState
-    const isOpen = readyState === 1
+    logger.info(`🔍 Checking ${activeSockets.length} sessions...`)
 
-    // Only reinit if genuinely stale/partial
-    if (!hasUserJid) {
-      partialCount++
-      logger.warn(`🚨 Partial session detected: ${sessionId} (no user JID)`)
-      await this._reinitializeSession(sessionId)
-      continue
+    let healthyCount = 0
+    let partialCount = 0
+
+    for (const [sessionId, sock] of activeSockets) {
+      try {
+        const hasUserJid = !!sock?.user?.id
+        const readyState = sock?.ws?.socket?._readyState
+        const isOpen = readyState === 1
+
+        if (hasUserJid && isOpen) {
+          healthyCount++
+        } else if (!hasUserJid) {
+          partialCount++
+          logger.warn(`⚠️ Partial session detected: ${sessionId} (no user JID)`)
+          // ✅ DON'T REINITIALIZE - Just log it
+          // Baileys will handle reconnection automatically
+        } else if (!isOpen) {
+          logger.debug(`🔌 ${sessionId} is closed (readyState: ${readyState}) - Baileys will reconnect`)
+          // ✅ DON'T REINITIALIZE - Baileys socket.js handles this
+        }
+
+      } catch (error) {
+        logger.error(`Error checking ${sessionId}:`, error.message)
+      }
     }
 
-    if (hasUserJid && !isOpen) {
-      staleCount++
-      logger.warn(`🚨 Stale session detected: ${sessionId} (readyState: ${readyState})`)
-      await this._reinitializeSession(sessionId)
-      continue
-    }
+    logger.info(`✅ Health check: ${healthyCount} healthy, ${partialCount} partial - Baileys managing all`)
 
   } catch (error) {
-    logger.error(`Error checking ${sessionId}:`, error.message)
+    logger.error("Error in health checker:", error)
   }
 }
-
-      if (partialCount > 0 || staleCount > 0) {
-        logger.info(`✅ Stale check complete: ${partialCount} partial, ${staleCount} stale - triggered reinitialization`)
-      } else {
-        logger.info(`✅ Stale check complete: All ${activeSockets.length} sessions healthy`)
-      }
-
-    } catch (error) {
-      logger.error("Error in stale session checker:", error)
-    }
-  }
 
   /**
    * Start monitoring a session for inactivity

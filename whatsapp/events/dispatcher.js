@@ -83,50 +83,49 @@ export class EventDispatcher {
   }
 
   /**
-   * Start health monitoring for a session
-   * Detects if messages.upsert stops arriving and triggers reconnection
-   * @private
-   */
-  _startHealthCheck(sock, sessionId) {
-    try {
-      // Clear any existing health check
-      if (this.healthCheckIntervals.has(sessionId)) {
-        clearInterval(this.healthCheckIntervals.get(sessionId))
-      }
-
-      this.lastMessageTime.set(sessionId, Date.now())
-
-      // Check every 5 minutes if we've received a message in the last 10 minutes
-      const healthCheckInterval = setInterval(() => {
-        try {
-          const lastMsg = this.lastMessageTime.get(sessionId)
-          const timeSinceLastMsg = Date.now() - lastMsg
-
-          // ⚠️ ALERT: No messages in 10 minutes
-          if (timeSinceLastMsg > 10 * 60 * 1000) {
-            logger.error(
-              `[HEALTH_CHECK_ALERT] ${sessionId}: No messages.upsert received in ${Math.round(timeSinceLastMsg / 1000 / 60)} minutes!`
-            )
-
-            // Attempt to trigger a reconnection
-            if (sock && typeof sock.end === 'function') {
-              logger.warn(`[HEALTH_CHECK] ${sessionId}: Triggering socket reconnection`)
-              sock.end(new Error('Health check: No messages received'))
-                .catch(err => logger.debug(`Reconnect failed: ${err.message}`))
-            }
-          }
-        } catch (error) {
-          logger.debug(`Health check error for ${sessionId}:`, error.message)
-        }
-      }, 5 * 60 * 1000) // Check every 5 minutes
-
-      this.healthCheckIntervals.set(sessionId, healthCheckInterval)
-      logger.debug(`[HEALTH_CHECK] Started health monitoring for ${sessionId}`)
-
-    } catch (error) {
-      logger.error(`Failed to start health check for ${sessionId}:`, error)
+ * Start health monitoring for a session
+ * Detects if messages.upsert stops arriving and triggers self-ping test
+ * @private
+ */
+_startHealthCheck(sock, sessionId) {
+  try {
+    // Clear any existing health check
+    if (this.healthCheckIntervals.has(sessionId)) {
+      clearInterval(this.healthCheckIntervals.get(sessionId))
     }
+
+    this.lastMessageTime.set(sessionId, Date.now())
+
+    // Check every 5 minutes if we've received a message in the last 10 minutes
+    const healthCheckInterval = setInterval(async () => {
+      try {
+        const lastMsg = this.lastMessageTime.get(sessionId)
+        const timeSinceLastMsg = Date.now() - lastMsg
+
+        // ⚠️ ALERT: No messages in 10 minutes - trigger self-ping instead of reconnect
+        if (timeSinceLastMsg > 10 * 60 * 1000) {
+          logger.warn(
+            `[HEALTH_CHECK] ${sessionId}: No messages.upsert received in ${Math.round(timeSinceLastMsg / 1000 / 60)} minutes - will be handled by ConnectionHealthMonitor`
+          )
+
+          // ✅ Let ConnectionHealthMonitor handle this with self-ping
+          // Don't force reconnection here - just log it
+          const { recordSessionActivity } = await import("../utils/index.js")
+          // Mark as activity so ConnectionHealthMonitor knows we checked
+          recordSessionActivity(sessionId)
+        }
+      } catch (error) {
+        logger.debug(`Health check error for ${sessionId}:`, error.message)
+      }
+    }, 5 * 60 * 1000) // Check every 5 minutes
+
+    this.healthCheckIntervals.set(sessionId, healthCheckInterval)
+    logger.debug(`[HEALTH_CHECK] Started health monitoring for ${sessionId}`)
+
+  } catch (error) {
+    logger.error(`Failed to start health check for ${sessionId}:`, error)
   }
+}
 
   /**
    * Process events that were deferred before handlers were set up

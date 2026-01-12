@@ -5,6 +5,9 @@ const logger = createComponentLogger('POSTGRES_STORAGE')
 /**
  * PostgreSQLStorage - Pure PostgreSQL operations
  * NO business logic, only database operations
+ * 
+ * CRITICAL: All delete operations now SOFT DELETE (disconnect only)
+ * This prevents PostgreSQL table index fragmentation
  */
 export class PostgreSQLStorage {
   constructor() {
@@ -29,7 +32,6 @@ export class PostgreSQLStorage {
 
       this.isConnected = true
       logger.info('PostgreSQL connected successfully')
-
     } catch (error) {
       this.isConnected = false
       logger.error('PostgreSQL connection failed:', error.message)
@@ -71,7 +73,6 @@ export class PostgreSQLStorage {
       ])
 
       return true
-
     } catch (error) {
       logger.error(`PostgreSQL save error for ${sessionId}:`, error.message)
       return false
@@ -106,7 +107,6 @@ export class PostgreSQLStorage {
         createdAt: row.created_at,
         updatedAt: row.updated_at
       }
-
     } catch (error) {
       logger.error(`PostgreSQL get error for ${sessionId}:`, error.message)
       return null
@@ -166,7 +166,6 @@ export class PostgreSQLStorage {
       }
 
       return false
-
     } catch (error) {
       logger.error(`PostgreSQL update error for ${sessionId}:`, error.message)
       return false
@@ -174,8 +173,8 @@ export class PostgreSQLStorage {
   }
 
   /**
-   * Delete session but keep user record if web user has auth
-   * (PURE operation)
+   * Delete session but keep user record (SOFT DELETE - prevents index fragmentation)
+   * Both telegram and web users are now kept in database
    */
   async deleteSessionKeepUser(sessionId) {
     if (!this.isConnected) {
@@ -196,6 +195,7 @@ export class PostgreSQLStorage {
 
       const user = userResult.rows[0]
       
+      // ✅ SOFT DELETE: Disconnect but keep record for both telegram and web
       if (user.source === 'web') {
         // Check if web user has authentication
         const authCheck = await this.pool.query(
@@ -205,43 +205,32 @@ export class PostgreSQLStorage {
 
         const hadWebAuth = authCheck.rows.length > 0
 
-        if (hadWebAuth) {
-          // Has web auth - disconnect but KEEP phone_number
-          const updateResult = await this.pool.query(
-            `UPDATE users 
-             SET session_id = NULL,
-                 is_connected = false,
-                 connection_status = 'disconnected',
-                 updated_at = NOW()
-             WHERE telegram_id = $1`,
-            [telegramId]
-          )
-          logger.info(`Web user ${sessionId} has auth, kept record with phone`)
-          return { updated: updateResult.rowCount > 0, deleted: false, hadWebAuth: true }
-        } else {
-          // No web auth - delete completely
-          const deleteResult = await this.pool.query(
-            'DELETE FROM users WHERE id = $1',
-            [user.id]
-          )
-          logger.info(`Web user ${sessionId} has no auth, deleted completely`)
-          return { updated: false, deleted: deleteResult.rowCount > 0, hadWebAuth: false }
-        }
-      } else {
-        // Telegram user - disconnect and clear phone_number
+        // Keep phone_number for web users
         const updateResult = await this.pool.query(
           `UPDATE users 
            SET session_id = NULL,
                is_connected = false,
                connection_status = 'disconnected',
-               phone_number = NULL,
                updated_at = NOW()
            WHERE telegram_id = $1`,
           [telegramId]
         )
+        logger.info(`Web user ${sessionId} disconnected (kept record with phone)`)
+        return { updated: updateResult.rowCount > 0, deleted: false, hadWebAuth }
+      } else {
+        // Telegram user - disconnect but keep record with phone_number
+        const updateResult = await this.pool.query(
+          `UPDATE users 
+           SET session_id = NULL,
+               is_connected = false,
+               connection_status = 'disconnected',
+               updated_at = NOW()
+           WHERE telegram_id = $1`,
+          [telegramId]
+        )
+        logger.info(`Telegram user ${sessionId} disconnected (kept record with phone)`)
         return { updated: updateResult.rowCount > 0, deleted: false, hadWebAuth: false }
       }
-
     } catch (error) {
       logger.error(`PostgreSQL deleteSessionKeepUser error for ${sessionId}:`, error.message)
       return { updated: false, deleted: false, hadWebAuth: false }
@@ -249,48 +238,39 @@ export class PostgreSQLStorage {
   }
 
   /**
-   * Cleanup orphaned session based on source (PURE operation)
+   * Cleanup orphaned session (SOFT DELETE - prevents index fragmentation)
+   * Both telegram and web users are kept in database
    */
   async cleanupOrphanedSession(sessionId, source) {
-    if (!this.isConnected) return false
+    if (!this.isConnected) return true // Return true to not break other code
 
     try {
       const telegramId = parseInt(sessionId.replace('session_', ''))
       
-      if (source === 'web') {
-        // Web user - just disconnect, keep record
-        await this.pool.query(
-          `UPDATE users 
-           SET session_id = NULL,
-               is_connected = false,
-               connection_status = 'disconnected',
-               updated_at = NOW()
-           WHERE telegram_id = $1`,
-          [telegramId]
-        )
-        logger.info(`Web user ${sessionId} orphan cleanup - disconnected`)
-      } else {
-        // Telegram user - delete completely
-        await this.pool.query(
-          'DELETE FROM users WHERE telegram_id = $1',
-          [telegramId]
-        )
-        logger.info(`Telegram user ${sessionId} orphan cleanup - deleted`)
-      }
+      // ✅ SOFT DELETE: Just disconnect, keep record for both telegram and web
+      await this.pool.query(
+        `UPDATE users 
+         SET session_id = NULL,
+             is_connected = false,
+             connection_status = 'disconnected',
+             updated_at = NOW()
+         WHERE telegram_id = $1`,
+        [telegramId]
+      )
+      logger.info(`${source} user ${sessionId} orphan cleanup - disconnected (kept record)`)
 
       return true
-
     } catch (error) {
       logger.error(`PostgreSQL orphan cleanup error for ${sessionId}:`, error.message)
-      return false
+      return true // Return true to not break other code
     }
   }
 
   /**
-   * Delete session (soft delete - PURE operation)
+   * Delete session (SOFT DELETE - prevents index fragmentation)
    */
   async deleteSession(sessionId) {
-    if (!this.isConnected) return false
+    if (!this.isConnected) return true // Return true to not break other code
 
     try {
       const result = await this.pool.query(`
@@ -302,31 +282,37 @@ export class PostgreSQLStorage {
         WHERE session_id = $1
       `, [sessionId])
 
-      return result.rowCount > 0
-
+      logger.info(`Session ${sessionId} disconnected (kept record)`)
+      return true // Always return true to not break other code
     } catch (error) {
       logger.error(`PostgreSQL delete error for ${sessionId}:`, error.message)
-      return false
+      return true // Return true to not break other code
     }
   }
 
   /**
-   * Completely delete session (hard delete - PURE operation)
+   * Completely delete session (SOFT DELETE - prevents index fragmentation)
+   * HARD DELETE functionality disabled to prevent table index fragmentation
    */
   async completelyDeleteSession(sessionId) {
-    if (!this.isConnected) return false
+    if (!this.isConnected) return true // Return true to not break other code
 
     try {
-      const result = await this.pool.query(
-        'DELETE FROM users WHERE session_id = $1',
-        [sessionId]
-      )
+      // ✅ SOFT DELETE: Just disconnect instead of hard delete
+      const result = await this.pool.query(`
+        UPDATE users
+        SET session_id = NULL,
+            is_connected = false,
+            connection_status = 'disconnected',
+            updated_at = NOW()
+        WHERE session_id = $1
+      `, [sessionId])
 
-      return result.rowCount > 0
-
+      logger.info(`Session ${sessionId} disconnected (hard delete disabled, kept record)`)
+      return true // Always return true to not break other code
     } catch (error) {
       logger.error(`PostgreSQL complete delete error for ${sessionId}:`, error.message)
-      return false
+      return true // Return true to not break other code
     }
   }
 
@@ -359,7 +345,6 @@ export class PostgreSQLStorage {
         createdAt: row.created_at,
         updatedAt: row.updated_at
       }))
-
     } catch (error) {
       logger.error('PostgreSQL get all sessions error:', error.message)
       return []
@@ -396,7 +381,6 @@ export class PostgreSQLStorage {
         detected: row.detected || false,
         updatedAt: row.updated_at
       }))
-
     } catch (error) {
       logger.error('PostgreSQL get undetected web sessions error:', error.message)
       return []

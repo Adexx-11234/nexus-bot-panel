@@ -88,8 +88,15 @@ export class FileBasedStore {
       ])
 
       if (Array.isArray(messages)) {
-        this.buffer.messages = messages.slice(-MAX_MESSAGES_PER_SESSION)
-      }
+        this.buffer.messages = messages
+      
+      // ✅ Then cleanup old ones (by age, not count)
+      const now = Date.now()
+      this.buffer.messages = this.buffer.messages.filter((msg) => {
+        const msgTime = msg.messageTimestamp ? msg.messageTimestamp * 1000 : 0
+        return now - msgTime < MAX_MESSAGES_AGE
+      })
+    }
 
       if (contacts && typeof contacts === "object") {
         const entries = Object.entries(contacts).slice(-100)

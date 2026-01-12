@@ -130,6 +130,67 @@ export class ConnectionEventHandler {
       logger.warn(`   Message: ${config.message}`)
       logger.warn(`   Should Reconnect: ${config.shouldReconnect}`)
 
+      // ============================================================================
+      // DETAILED 408 LOGGING
+      // ============================================================================
+      if (statusCode === 408) {
+        logger.info(`\n${"=".repeat(80)}`)
+        logger.info(`🔍 DETAILED 408 ERROR ANALYSIS FOR ${sessionId}`)
+        logger.info(`${"=".repeat(80)}`)
+        
+        // Full lastDisconnect object
+        logger.info(`\n📦 FULL lastDisconnect OBJECT:`)
+        logger.info(JSON.stringify(lastDisconnect, null, 2))
+        
+        // Boom error details
+        if (error instanceof Boom) {
+          logger.info(`\n💥 BOOM ERROR DETAILS:`)
+          logger.info(`   Message: ${error.message}`)
+          logger.info(`   Status Code: ${error.output?.statusCode}`)
+          logger.info(`   Status Message: ${error.output?.statusMessage}`)
+          logger.info(`   Headers: ${JSON.stringify(error.output?.headers || {}, null, 2)}`)
+          logger.info(`   Payload: ${JSON.stringify(error.output?.payload || {}, null, 2)}`)
+          logger.info(`   Data: ${JSON.stringify(error.data || {}, null, 2)}`)
+          logger.info(`   isBoom: ${error.isBoom}`)
+          logger.info(`   isServer: ${error.isServer}`)
+          
+          // Stack trace
+          logger.info(`\n📚 STACK TRACE:`)
+          logger.info(error.stack || "No stack trace available")
+          
+          // Original error if wrapped
+          if (error.cause) {
+            logger.info(`\n🔗 ORIGINAL ERROR (cause):`)
+            logger.info(JSON.stringify(error.cause, null, 2))
+          }
+        } else {
+          logger.info(`\n⚠️  ERROR IS NOT A BOOM INSTANCE`)
+          logger.info(`   Error Type: ${error?.constructor?.name || typeof error}`)
+          logger.info(`   Error Message: ${error?.message || String(error)}`)
+          logger.info(`   Full Error: ${JSON.stringify(error, null, 2)}`)
+        }
+        
+        // lastDisconnect breakdown
+        logger.info(`\n📊 lastDisconnect BREAKDOWN:`)
+        logger.info(`   connection: ${lastDisconnect?.connection || "undefined"}`)
+        logger.info(`   date: ${lastDisconnect?.date || "undefined"}`)
+        logger.info(`   isHealthTriggered: ${lastDisconnect?.isHealthTriggered || false}`)
+        logger.info(`   error keys: ${Object.keys(error || {}).join(", ")}`)
+        
+        // Socket state if available
+        if (sock) {
+          logger.info(`\n🔌 SOCKET STATE:`)
+          logger.info(`   readyState: ${sock.ws?.readyState || "N/A"}`)
+          logger.info(`   isOpen: ${sock.ws?.readyState === 1}`)
+          logger.info(`   authState.creds exists: ${!!sock.authState?.creds}`)
+          logger.info(`   authState.keys exists: ${!!sock.authState?.keys}`)
+        }
+        
+        logger.info(`\n${"=".repeat(80)}`)
+        logger.info(`END 408 ERROR ANALYSIS`)
+        logger.info(`${"=".repeat(80)}\n`)
+      }
+
       // Skip 405 entirely
       if (statusCode === 405) {
         logger.info(`⏭️  Skipping 405 disconnect for ${sessionId} - no action taken`)

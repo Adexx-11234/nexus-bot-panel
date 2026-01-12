@@ -275,8 +275,6 @@ export class SessionEventHandlers {
   async _handleConnectionOpen(sock, sessionId, callbacks) {
     try {
       logger.info(`Session ${sessionId} connection opened`)
-      sock._connectedAt = Date.now()
-      this._setupPreDisconnectMonitoring(sock, sessionId)
 
       // Clear connection timeout
       this.sessionManager.connectionManager?.clearConnectionTimeout?.(sessionId)
@@ -508,107 +506,6 @@ export class SessionEventHandlers {
       logger.info(`Session ${sessionId} fully initialized`)
     } catch (error) {
       logger.error(`Connection open handler error for ${sessionId}:`, error)
-    }
-  }
-
-  /**
-   * ✅ NEW METHOD: Monitor for errors that precede 428
-   */
- _setupPreDisconnectMonitoring(sock, sessionId) {
-    try {
-      // ============================================================
-      // Monitor EVERY incoming frame before it closes
-      // ============================================================
-      const originalOnMessageReceived = sock.onMessageReceived
-      
-      sock.onMessageReceived = (data) => {
-        logger.debug(`[FRAME_RECV] ${sessionId}: Frame received, size: ${data?.length}`)
-        
-        if (originalOnMessageReceived) {
-          return originalOnMessageReceived(data)
-        }
-      }
-
-      // ============================================================
-      // Monitor outgoing queries
-      // ============================================================
-      const originalQuery = sock.query
-      sock.query = async (node, timeoutMs) => {
-        logger.debug(`[QUERY_OUT] ${sessionId}: Sending query`, {
-          tag: node?.tag,
-          attrs: node?.attrs,
-          timestamp: new Date().toISOString()
-        })
-
-        try {
-          const result = await originalQuery(node, timeoutMs)
-          logger.debug(`[QUERY_RESP] ${sessionId}: Got response for ${node?.attrs?.id}`)
-          return result
-        } catch (error) {
-          logger.error(`[QUERY_ERROR] ${sessionId}: Query failed`, {
-            tag: node?.tag,
-            error: error?.message,
-            timestamp: new Date().toISOString()
-          })
-          throw error
-        }
-      }
-
-      // ============================================================
-      // Monitor keep-alive specifically
-      // ============================================================
-      sock.ws?.on('CB:iq,type:result', (stanza) => {
-        if (stanza?.attrs?.xmlns === 'w:p') {
-          logger.debug(`[KEEPALIVE_RESP] ${sessionId}: Keep-alive response received`)
-        }
-      })
-
-      // ============================================================
-      // Monitor creds updates - these can trigger reconnect
-      // ============================================================
-      sock.ev?.on('creds.update', (update) => {
-        logger.debug(`[CREDS_UPDATE] ${sessionId}:`, {
-          hasNoiseKey: !!update?.noiseKey,
-          hasSignedIdentityKey: !!update?.signedIdentityKey,
-          hasMeId: !!update?.me?.id,
-          timestamp: new Date().toISOString()
-        })
-      })
-
-      // ============================================================
-      // Monitor connection.update events (to catch early close signals)
-      // ============================================================
-      const originalEmit = sock.ev?.emit?.bind(sock.ev)
-      sock.ev.emit = (event, data) => {
-        if (event === 'connection.update') {
-          logger.debug(`[CONNECTION_UPDATE] ${sessionId}:`, {
-            connection: data?.connection,
-            qr: !!data?.qr,
-            isNewLogin: data?.isNewLogin,
-            timestamp: new Date().toISOString()
-          })
-        }
-        return originalEmit(event, data)
-      }
-
-      // ============================================================
-      // Monitor WebSocket state changes
-      // ============================================================
-      setInterval(() => {
-        const wsState = sock?.ws?.socket?._readyState
-        const stateNames = {0: 'CONNECTING', 1: 'OPEN', 2: 'CLOSING', 3: 'CLOSED'}
-        
-        if (wsState === 3) { // CLOSED
-          logger.error(`[WS_STATE] ${sessionId}: WebSocket is CLOSED!`, {
-            wasOpen: sock?._connectedAt ? 'yes' : 'no',
-            timestamp: new Date().toISOString()
-          })
-        }
-      }, 5000) // Check every 5 seconds
-
-      logger.info(`✅ Aggressive monitoring set up for ${sessionId}`)
-    } catch (error) {
-      logger.error(`Failed to setup monitoring for ${sessionId}:`, error)
     }
   }
 
@@ -1002,18 +899,6 @@ async _sendWelcomeMessage(sock, sessionId) {
   async _handleConnectionClose(sock, sessionId, lastDisconnect, callbacks) {
     try {
       logger.warn(`Session ${sessionId} connection closed`)
-
-      // ✅ ADD THIS - Log the actual reason
-      const statusCode = lastDisconnect?.error?.output?.statusCode
-      const errorMessage = lastDisconnect?.error?.message
-      
-      logger.error(`[CONNECTION_CLOSE_DETAILS] ${sessionId}:`, {
-        statusCode: statusCode,
-        errorMessage: errorMessage,
-        isBoom: lastDisconnect?.error?.isBoom,
-        timestamp: lastDisconnect?.date,
-        timeSinceOpen: Date.now() - (sock._connectedAt || Date.now()),
-      })
 
       // Get session data to check source
       const sessionData = await this.sessionManager.storage.getSession(sessionId)
