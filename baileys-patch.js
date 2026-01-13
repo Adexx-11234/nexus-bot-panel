@@ -1,39 +1,64 @@
-// baileys-patch.js - Import this FIRST in your main file
-import { readFile } from 'fs/promises';
+// baileys-patch.js - Import this FIRST
+import axios from 'axios';
 
-// Patch global fetch to convert streams to buffers for WhatsApp uploads
 const originalFetch = global.fetch;
 
 global.fetch = async function(url, options = {}) {
   // Only patch WhatsApp media uploads
   if (url.includes('whatsapp.net') && options.method === 'POST') {
-    // If body is a ReadStream, convert to Buffer
-    if (options.body && typeof options.body.pipe === 'function') {
-      console.log('🔧 Converting stream to buffer for WhatsApp upload...');
-      
+    console.log('🔧 Using axios for WhatsApp upload instead of fetch...');
+    
+    let body = options.body;
+    
+    // Convert stream to buffer if needed
+    if (body && typeof body.pipe === 'function') {
       const chunks = [];
-      for await (const chunk of options.body) {
+      for await (const chunk of body) {
         chunks.push(chunk);
       }
+      body = Buffer.concat(chunks);
+      console.log(`✅ Buffer ready: ${body.length} bytes`);
+    }
+    
+    try {
+      // Use axios instead of fetch (more reliable for large uploads)
+      const response = await axios({
+        method: 'POST',
+        url: url,
+        data: body,
+        headers: {
+          ...options.headers,
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': body.length
+        },
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
+        timeout: 120000, // 2 minutes
+        validateStatus: () => true // Don't throw on any status
+      });
       
-      options.body = Buffer.concat(chunks);
+      console.log(`✅ Upload successful: ${response.status}`);
       
-      // Ensure Content-Length header is set
-      if (!options.headers) {
-        options.headers = {};
-      }
+      // Convert axios response to fetch-like Response
+      return {
+        ok: response.status >= 200 && response.status < 300,
+        status: response.status,
+        statusText: response.statusText,
+        headers: new Headers(response.headers),
+        json: async () => response.data,
+        text: async () => typeof response.data === 'string' ? response.data : JSON.stringify(response.data)
+      };
       
-      options.headers['Content-Length'] = options.body.length.toString();
-      
-      console.log(`✅ Buffer ready: ${options.body.length} bytes`);
+    } catch (error) {
+      console.error(`❌ Axios upload failed: ${error.message}`);
+      throw new TypeError(`fetch failed: ${error.message}`);
     }
   }
   
+  // For non-WhatsApp requests, use original fetch
   return originalFetch(url, options);
 };
 
-console.log('✅ Baileys upload patch loaded');
+console.log('✅ Baileys upload patch with axios loaded');
 
-export default {
-  patched: true
-};
+export default { patched: true };
