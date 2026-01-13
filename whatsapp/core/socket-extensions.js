@@ -747,13 +747,13 @@ sock.sendStickerPack = async function (jid, sources, options = {}) {
   const {
     packName = "Custom Sticker Pack",
     packPublisher = "𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙",
-    packDescription = "",
+    packDescription = "𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙",
     quoted = null,
-    concurrency = 10 // Process 5 stickers at a time
+    concurrency = 5 // Process 5 stickers at a time
   } = options
 
   try {
-    console.log(`\n📦 Processing ${sources.length} stickers in parallel...`)
+    //console.log(`\n📦 Processing ${sources.length} stickers in parallel...`)
 
     // Process all stickers concurrently with a limit
     const processSticker = async (source, index) => {
@@ -766,7 +766,7 @@ sock.sendStickerPack = async function (jid, sources, options = {}) {
           const url = source.url || buffer
           const response = await axios.get(url, { responseType: "arraybuffer", timeout: 30000 })
           buffer = Buffer.from(response.data)
-          console.log(`${progressText} ✓ Downloaded (${(buffer.length / 1024).toFixed(2)} KB)`)
+          //console.log(`${progressText} ✓ Downloaded (${(buffer.length / 1024).toFixed(2)} KB)`)
         }
 
         // Detect file type and convert
@@ -775,7 +775,7 @@ sock.sendStickerPack = async function (jid, sources, options = {}) {
         const isVideo = source.isVideo || mime.startsWith("video/") || mime === "image/gif"
 
         const stickerBuffer = isVideo ? await video2webp(buffer) : await image2webp(buffer)
-        console.log(`${progressText} ✓ ${isVideo ? 'Animated' : 'Static'} WebP (${(stickerBuffer.length / 1024).toFixed(2)} KB)`)
+        //console.log(`${progressText} ✓ ${isVideo ? 'Animated' : 'Static'} WebP (${(stickerBuffer.length / 1024).toFixed(2)} KB)`)
 
         return {
           buffer: stickerBuffer,
@@ -805,14 +805,14 @@ sock.sendStickerPack = async function (jid, sources, options = {}) {
     // Sort by original index to maintain order
     processedStickers.sort((a, b) => a.index - b.index)
 
-    console.log(`\n✓ Processing complete: ${processedStickers.length}/${sources.length} stickers`)
+    //console.log(`\n✓ Processing complete: ${processedStickers.length}/${sources.length} stickers`)
 
     if (processedStickers.length === 0) {
       throw new Error("No stickers were successfully processed")
     }
 
     // Send sticker pack
-    console.log(`\n📤 Sending sticker pack with ${processedStickers.length} stickers...`)
+    //console.log(`\n📤 Sending sticker pack with ${processedStickers.length} stickers...`)
 
     const stickerPackContent = {
       stickerPack: {
@@ -831,8 +831,8 @@ sock.sendStickerPack = async function (jid, sources, options = {}) {
 
     const result = await this.sendMessage(jid, stickerPackContent, { quoted })
     
-    console.log(`\n✅ Sent ${processedStickers.length}/${sources.length} stickers\n`)
-    logger?.info?.(`✅ Sticker pack sent: ${processedStickers.length} stickers`)
+    //console.log(`\n✅ Sent ${processedStickers.length}/${sources.length} stickers\n`)
+    //logger?.info?.(`✅ Sticker pack sent: ${processedStickers.length} stickers`)
 
     return {
       success: true,
