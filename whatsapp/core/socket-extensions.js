@@ -743,8 +743,9 @@ export function extendSocket(sock) {
   // ==================== STICKER PACK SENDER ====================
   
   // Real working fallback WebP URLs from LearningContainer
+
 const FALLBACK_WEBP_URLS = [
-  'https://www.learningcontainer.com/wp-content/uploads/2020/08/Small-Sample-Webp-Image-file-download.webp', // 57 KB
+  'https://www.learningcontainer.com/wp-content/uploads/2020/08/Small-Sample-Webp-Image-file-download.webp',
   'https://img-06.stickers.cloud/packs/5df297e3-a7f0-44e0-a6d1-43bdb09b793c/webp/8709a42d-0579-4314-b659-9c2cdb979305.webp'
 ];
 
@@ -761,7 +762,7 @@ sock.sendStickerPack = async function (jid, sources, options = {}) {
     try {
       console.log(`\n📦 Processing ${sources.length} stickers...`)
       
-      // Process all stickers - JUST VALIDATE URLs, NO CONVERSION
+      // Process all stickers - validate and format properly
       for (let i = 0; i < sources.length; i++) {
         try {
           const source = sources[i]
@@ -774,21 +775,23 @@ sock.sendStickerPack = async function (jid, sources, options = {}) {
           if (typeof stickerUrl === "string" && /^https?:\/\//.test(stickerUrl)) {
             console.log(`${progressText} ✓ Sticker URL: ${stickerUrl}`)
 
-            // Add sticker in correct format
+            // Add sticker in CORRECT format (use 'data' not 'sticker')
             stickers.push({
-              sticker: { url: stickerUrl },
+              data: { url: stickerUrl },          // ✅ CORRECT: 'data' key
               emojis: source.emojis || ["😊"],
               isLottie: source.isLottie || false,
-              isAnimated: source.isAnimated || false
+              isAnimated: source.isAnimated || false,
+              fileName: source.fileName,
+              accessibilityLabel: source.accessibilityLabel
             })
           } else {
             console.error(`${progressText} ❌ Invalid URL format`)
-            logger.error(`Sticker ${i} is not a valid URL`)
+            logger?.error?.(`Sticker ${i} is not a valid URL`)
           }
 
         } catch (error) {
           console.error(`[${i + 1}/${sources.length}] ❌ Error: ${error.message}`)
-          logger.error(`Error processing sticker ${i}: ${error.message}`)
+          logger?.error?.(`Error processing sticker ${i}: ${error.message}`)
         }
       }
 
@@ -798,22 +801,22 @@ sock.sendStickerPack = async function (jid, sources, options = {}) {
         throw new Error("No valid sticker URLs were provided")
       }
 
-      // Generate cover from fallback URLs - DOWNLOAD RAW BUFFER, NO CONVERSION
+      // Download cover from fallback URLs
       console.log(`📥 Generating cover image from fallback URLs...`)
       let coverBuffer = null
       
       for (const fallbackUrl of FALLBACK_WEBP_URLS) {
         try {
           console.log(`📥 Trying fallback: ${fallbackUrl}`)
-          const response = await axios.get(fallbackUrl, { 
-            responseType: "arraybuffer",
+          const response = await fetch(fallbackUrl, {  // Using native fetch
+            headers: { 'User-Agent': 'Mozilla/5.0' },
             timeout: 10000
-          })
-          coverBuffer = Buffer.from(response.data)
-          console.log(`✓ Cover downloaded (${coverBuffer.length} bytes)`)
+          });
           
-          // ⚠️ IMPORTANT: DO NOT CONVERT! Just use the raw WebP buffer
-          // Let the library (Baileys) handle the processing
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          
+          coverBuffer = Buffer.from(await response.arrayBuffer())
+          console.log(`✓ Cover downloaded (${coverBuffer.length} bytes)`)
           break
         } catch (fallbackError) {
           console.error(`⚠️ Fallback failed: ${fallbackError.message}`)
@@ -821,11 +824,11 @@ sock.sendStickerPack = async function (jid, sources, options = {}) {
         }
       }
 
-      if (!coverBuffer) {
+      if (!coverBuffer || coverBuffer.length === 0) {
         throw new Error(`Failed to download cover from any fallback URL`)
       }
 
-      // Send the sticker pack using correct format
+      // Send the sticker pack with CORRECT format
       console.log(`📤 Sending sticker pack with ${stickers.length} stickers...`)
       console.log(`📤 Cover buffer size: ${coverBuffer.length} bytes`)
       
@@ -834,15 +837,15 @@ sock.sendStickerPack = async function (jid, sources, options = {}) {
           name: packName,
           publisher: packPublisher,
           description: packDescription,
-          cover: coverBuffer, // Raw WebP buffer - library will process it
-          stickers: stickers
+          cover: coverBuffer,  // Raw WebP buffer
+          stickers: stickers   // Array of sticker objects with 'data' property
         }
       }
       
       const result = await this.sendMessage(jid, stickerPackContent, { quoted })
 
       console.log(`✓ Sticker pack sent successfully!\n`)
-      logger.info(`✅ Sticker pack sent: ${stickers.length} stickers`)
+      logger?.info?.(`✅ Sticker pack sent: ${stickers.length} stickers`)
 
       return {
         success: true,
@@ -853,7 +856,7 @@ sock.sendStickerPack = async function (jid, sources, options = {}) {
       }
 
     } catch (error) {
-      logger.error('Error sending sticker pack:', error)
+      logger?.error?.('Error sending sticker pack:', error)
       throw error
     }
   }
