@@ -747,17 +747,15 @@ export function extendSocket(sock) {
       packName = "Custom Sticker Pack",
       packPublisher = "𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙",
       packDescription = "",
-      coverUrl = null,
       quoted = null
     } = options
 
     const stickers = []
+    let coverBuffer = null
 
     try {
       console.log(`\n📦 Processing ${sources.length} stickers...`)
       
-      let firstStickerUrl = null
-
       // Process all stickers
       for (let i = 0; i < sources.length; i++) {
         try {
@@ -766,15 +764,16 @@ export function extendSocket(sock) {
           console.log(`${progressText} Processing sticker...`)
 
           let stickerUrl = source.url || source
+          let buffer = source.buffer
+
+          // If buffer provided, use it for cover
+          if (buffer && !coverBuffer) {
+            coverBuffer = buffer
+          }
 
           // Validate URL
           if (typeof stickerUrl === "string" && /^https?:\/\//.test(stickerUrl)) {
             console.log(`${progressText} ✓ Sticker URL: ${stickerUrl}`)
-            
-            // Save first sticker URL for cover
-            if (i === 0 && !firstStickerUrl) {
-              firstStickerUrl = stickerUrl
-            }
 
             // Add sticker in correct format
             stickers.push({
@@ -800,6 +799,38 @@ export function extendSocket(sock) {
         throw new Error("No valid sticker URLs were provided")
       }
 
+      // Download first sticker for cover if no buffer provided
+      if (!coverBuffer && stickers.length > 0) {
+        const firstUrl = stickers[0].sticker.url
+        console.log(`📥 Downloading cover from first sticker...`)
+        
+        try {
+          const response = await axios.get(firstUrl, { 
+            responseType: "arraybuffer",
+            timeout: 30000
+          })
+          let buffer = Buffer.from(response.data)
+          
+          // Check if it's a video format that needs conversion
+          const fileType = await fileTypeFromBuffer(buffer)
+          const mime = fileType?.mime || ""
+          
+          if (mime.startsWith("video/") || mime === "image/gif" || firstUrl.endsWith('.webm')) {
+            console.log(`🎬 Converting video to static webp for cover...`)
+            coverBuffer = await video2webp(buffer)
+          } else {
+            // Convert static image to webp
+            coverBuffer = await image2webp(buffer)
+          }
+          
+          console.log(`✓ Cover generated (${coverBuffer.length} bytes)`)
+        } catch (error) {
+          console.error(`❌ Failed to generate cover: ${error.message}`)
+          logger.error(`Cover generation error: ${error.message}`)
+          throw new Error(`Failed to generate cover for sticker pack: ${error.message}`)
+        }
+      }
+
       // Send the sticker pack using correct format
       console.log(`📤 Sending sticker pack...`)
       
@@ -808,7 +839,7 @@ export function extendSocket(sock) {
           name: packName,
           publisher: packPublisher,
           description: packDescription,
-          cover: { url: coverUrl || firstStickerUrl }, // Use provided cover or first sticker
+          cover: coverBuffer, // Must be a Buffer, not a URL
           stickers: stickers
         }
       }
