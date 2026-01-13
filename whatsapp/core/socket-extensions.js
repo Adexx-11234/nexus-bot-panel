@@ -518,7 +518,7 @@ export function extendSocket(sock) {
         // Create send promise
         const sendPromise = originalSendMessage(jid, content, options)
         
-        // Create timeout promise (200 seconds)
+        // Create timeout promise (20 seconds)
         const timeoutPromise = new Promise((_, reject) =>
           setTimeout(() => reject(new Error('sendMessage timeout after 200s')), 200000)
         )
@@ -742,208 +742,149 @@ export function extendSocket(sock) {
 
   // ==================== STICKER PACK SENDER ====================
   
-  // Real working fallback WebP URLs from LearningContainer
-
-const FALLBACK_WEBP_URLS = [
-  'https://www.learningcontainer.com/wp-content/uploads/2020/08/Small-Sample-Webp-Image-file-download.webp',
-  'https://img-06.stickers.cloud/packs/5df297e3-a7f0-44e0-a6d1-43bdb09b793c/webp/8709a42d-0579-4314-b659-9c2cdb979305.webp'
-];
-
-// Helper function to validate image format
-async function validateImageUrl(url) {
-  try {
-    const response = await fetch(url, {
-      method: 'HEAD',
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-      timeout: 5000
-    });
-    
-    if (!response.ok) return false;
-    
-    const contentType = response.headers.get('content-type');
-    // Check if it's a supported image format
-    const supportedTypes = ['image/webp', 'image/png', 'image/jpeg', 'image/jpg'];
-    return supportedTypes.some(type => contentType?.includes(type));
-  } catch (error) {
-    console.error(`Failed to validate URL: ${error.message}`);
-    return false;
-  }
-}
-
-// Helper function to download and validate image buffer
-async function downloadAndValidateImage(url) {
-  try {
-    const response = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-      timeout: 10000
-    });
-    
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    
-    const buffer = Buffer.from(await response.arrayBuffer());
-    
-    if (!buffer || buffer.length === 0) {
-      throw new Error('Empty buffer received');
-    }
-    
-    // Validate buffer is an image by checking magic bytes
-    const isWebP = buffer.length >= 12 &&
-      buffer[0] === 0x52 && buffer[1] === 0x49 && 
-      buffer[2] === 0x46 && buffer[3] === 0x46 &&
-      buffer[8] === 0x57 && buffer[9] === 0x45 && 
-      buffer[10] === 0x42 && buffer[11] === 0x50;
-    
-    const isPNG = buffer.length >= 8 &&
-      buffer[0] === 0x89 && buffer[1] === 0x50 && 
-      buffer[2] === 0x4E && buffer[3] === 0x47;
-    
-    const isJPEG = buffer.length >= 3 &&
-      buffer[0] === 0xFF && buffer[1] === 0xD8 && 
-      buffer[2] === 0xFF;
-    
-    if (!isWebP && !isPNG && !isJPEG) {
-      throw new Error('Unsupported image format (not WebP, PNG, or JPEG)');
-    }
-    
-    return { buffer, isValid: true };
-  } catch (error) {
-    return { buffer: null, isValid: false, error: error.message };
-  }
-}
-
-sock.sendStickerPack = async function (jid, sources, options = {}) {
+  sock.sendStickerPack = async function (jid, sources, options = {}) {
   const {
     packName = "Custom Sticker Pack",
     packPublisher = "𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙",
     packDescription = "",
     quoted = null
-  } = options;
+  } = options
 
-  const stickers = [];
-  const failedStickers = [];
+  const stickers = []
+  const tempFiles = []
+  let coverBuffer = null
 
   try {
-    console.log(`\n📦 Processing ${sources.length} stickers...`);
+    console.log(`\n📦 Processing ${sources.length} stickers...`)
     
-    // Process all stickers with validation
+    // Step 1: Process all stickers
     for (let i = 0; i < sources.length; i++) {
+      let tempFilePath = null
+      
       try {
-        const source = sources[i];
-        const progressText = `[${i + 1}/${sources.length}]`;
-        console.log(`${progressText} Processing sticker...`);
+        const source = sources[i]
+        let buffer = source.buffer || source
+        const progressText = `[${i + 1}/${sources.length}]`
+        console.log(`${progressText} Processing sticker...`)
 
-        let stickerUrl = source.url || source;
-
-        // Validate URL format
-        if (typeof stickerUrl !== "string" || !/^https?:\/\//.test(stickerUrl)) {
-          console.error(`${progressText} ❌ Invalid URL format`);
-          failedStickers.push({ index: i, url: stickerUrl, reason: 'Invalid URL format' });
-          continue;
+        // Handle URL sources
+        if (source.url) {
+          console.log(`${progressText} Downloading sticker from URL...`)
+          const response = await axios.get(source.url, { 
+            responseType: "arraybuffer",
+            timeout: 30000
+          })
+          buffer = Buffer.from(response.data)
+          console.log(`${progressText} ✓ Downloaded (${buffer.length} bytes)`)
+        } else if (typeof buffer === "string" && /^https?:\/\//.test(buffer)) {
+          console.log(`${progressText} Downloading sticker from URL...`)
+          const response = await axios.get(buffer, { 
+            responseType: "arraybuffer",
+            timeout: 30000
+          })
+          buffer = Buffer.from(response.data)
+          console.log(`${progressText} ✓ Downloaded (${buffer.length} bytes)`)
         }
 
-        // Validate image format (HEAD request first for efficiency)
-        console.log(`${progressText} 🔍 Validating image format...`);
-        const isValidFormat = await validateImageUrl(stickerUrl);
-        
-        if (!isValidFormat) {
-          console.error(`${progressText} ❌ Unsupported image format or unreachable URL`);
-          failedStickers.push({ index: i, url: stickerUrl, reason: 'Unsupported format or unreachable' });
-          continue;
+        const fileType = await fileTypeFromBuffer(buffer)
+        const mime = fileType?.mime || ""
+        const isVideo = source.isVideo || mime.startsWith("video/") || mime === "image/gif"
+
+        // Convert to webp
+        let stickerBuffer
+        if (isVideo) {
+          stickerBuffer = await video2webp(buffer)
+          console.log(`${progressText} ✓ Animated WebP (${stickerBuffer.length} bytes)`)
+        } else {
+          stickerBuffer = await image2webp(buffer)
+          console.log(`${progressText} ✓ Static WebP (${stickerBuffer.length} bytes)`)
         }
 
-        console.log(`${progressText} ✓ Valid sticker URL: ${stickerUrl}`);
+        // Save first sticker as cover if not set
+        if (i === 0 && !coverBuffer) {
+          coverBuffer = stickerBuffer
+        }
 
-        // Add sticker in correct format
+        // Validate WebP buffer size (max 1MB for WhatsApp)
+        if (stickerBuffer.length > 1024 * 1024) {
+          console.warn(`${progressText} ⚠️  Sticker exceeds 1MB, may fail`)
+        }
+
+        // Add sticker in CORRECT format - use 'data' property with buffer/URL
         stickers.push({
-          data: { url: stickerUrl },
+          data: stickerBuffer,  // ✅ CORRECT: Use buffer directly in 'data' property
           emojis: source.emojis || ["😊"],
-          isLottie: source.isLottie || false,
-          isAnimated: source.isAnimated || false,
-          fileName: source.fileName,
+          isLottie: false,
+          isAnimated: isVideo,
+          fileName: source.fileName || `sticker_${i}.webp`,
           accessibilityLabel: source.accessibilityLabel
-        });
+        })
+
+        console.log(`${progressText} ✓ Added to pack`)
 
       } catch (error) {
-        console.error(`[${i + 1}/${sources.length}] ❌ Error: ${error.message}`);
-        failedStickers.push({ index: i, url: sources[i], reason: error.message });
+        console.error(`[${i + 1}/${sources.length}] ❌ Error: ${error.message}`)
+        if (error.stack) console.error(error.stack)
+        logger?.error?.(`Error processing sticker ${i}: ${error.message}`)
       }
     }
 
-    console.log(`\n✓ Processing complete: ${stickers.length}/${sources.length} stickers valid`);
-    
-    if (failedStickers.length > 0) {
-      console.log(`\n⚠️ Failed stickers (${failedStickers.length}):`);
-      failedStickers.forEach(({ index, url, reason }) => {
-        console.log(`  - Index ${index}: ${reason}`);
-        console.log(`    URL: ${typeof url === 'string' ? url.substring(0, 80) : url}`);
-      });
-    }
+    console.log(`\n✓ Processing complete: ${stickers.length}/${sources.length} stickers converted`)
 
     if (stickers.length === 0) {
-      throw new Error("No valid sticker URLs were provided");
+      throw new Error("No stickers were successfully processed")
     }
 
-    // Download cover from fallback URLs with validation
-    console.log(`\n📥 Generating cover image from fallback URLs...`);
-    let coverBuffer = null;
-    
-    for (const fallbackUrl of FALLBACK_WEBP_URLS) {
-      try {
-        console.log(`📥 Trying fallback: ${fallbackUrl}`);
-        const { buffer, isValid, error } = await downloadAndValidateImage(fallbackUrl);
-        
-        if (isValid && buffer) {
-          coverBuffer = buffer;
-          console.log(`✓ Cover downloaded and validated (${coverBuffer.length} bytes)`);
-          break;
-        } else {
-          console.error(`⚠️ Fallback failed: ${error}`);
-        }
-      } catch (fallbackError) {
-        console.error(`⚠️ Fallback error: ${fallbackError.message}`);
-        continue;
-      }
+    // Ensure cover is set
+    if (!coverBuffer) {
+      console.log(`⚠️  No cover set, using first sticker`)
+      coverBuffer = stickers[0].data
     }
 
-    if (!coverBuffer || coverBuffer.length === 0) {
-      throw new Error('Failed to download valid cover from any fallback URL');
-    }
-
-    // Send the sticker pack
-    console.log(`\n📤 Sending sticker pack with ${stickers.length} stickers...`);
-    console.log(`📤 Cover buffer size: ${coverBuffer.length} bytes`);
+    // Step 2: Send the sticker pack using correct format
+    console.log(`\n📤 Sending sticker pack with ${stickers.length} stickers...`)
+    console.log(`📤 Cover buffer size: ${coverBuffer.length} bytes`)
     
     const stickerPackContent = {
       stickerPack: {
         name: packName,
         publisher: packPublisher,
         description: packDescription,
-        cover: coverBuffer,
-        stickers: stickers
+        cover: coverBuffer,  // Must be a WebP buffer
+        stickers: stickers   // Array with 'data' property containing buffers
       }
-    };
+    }
     
-    const result = await this.sendMessage(jid, stickerPackContent, { quoted });
+    const result = await this.sendMessage(jid, stickerPackContent, { quoted })
 
-    console.log(`✓ Sticker pack sent successfully!\n`);
+    console.log(`✓ Sticker pack sent successfully!\n`)
+    logger?.info?.(`✅ Sticker pack sent: ${stickers.length} stickers`)
 
     return {
       success: true,
       packName,
       stickerCount: stickers.length,
       totalCount: sources.length,
-      failedCount: failedStickers.length,
-      failedStickers: failedStickers,
       result
-    };
+    }
 
   } catch (error) {
-    console.error('❌ Error sending sticker pack:', error);
-    throw error;
+    console.error('❌ Error sending sticker pack:', error)
+    logger?.error?.('Error sending sticker pack:', error)
+    throw error
+  } finally {
+    // Cleanup temp files if any were created
+    for (const tempFile of tempFiles) {
+      try {
+        if (fs.existsSync(tempFile)) {
+          fs.unlinkSync(tempFile)
+        }
+      } catch (cleanupError) {
+        console.warn(`Failed to cleanup temp file: ${tempFile}`)
+      }
+    }
   }
-};
+}
 
   // ==================== BASIC MEDIA SENDERS ====================
 
