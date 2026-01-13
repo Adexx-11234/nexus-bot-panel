@@ -518,9 +518,9 @@ export function extendSocket(sock) {
         // Create send promise
         const sendPromise = originalSendMessage(jid, content, options)
         
-        // Create timeout promise (40 seconds)
+        // Create timeout promise (200 seconds)
         const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('sendMessage timeout after 40s')), 40000)
+          setTimeout(() => reject(new Error('sendMessage timeout after 200s')), 200000)
         )
         
         // Race between send and timeout
