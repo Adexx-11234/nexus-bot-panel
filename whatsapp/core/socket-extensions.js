@@ -7,6 +7,7 @@ import fs from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
 import sharp from "sharp"
+import crypto from "crypto"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -832,7 +833,6 @@ export function extendSocket(sock) {
       }
 
       // Step 2: Create a combined buffer of all stickers
-      const crypto = await import('crypto')
       const packId = crypto.randomUUID()
       const allStickersBuffers = stickers.map(s => s.buffer)
       const combinedBuffer = Buffer.concat(allStickersBuffers)
