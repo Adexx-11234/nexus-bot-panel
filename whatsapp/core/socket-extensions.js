@@ -880,7 +880,7 @@ export function extendSocket(sock) {
           // Use base64-encoded hash (not hex)
           imageDataHash: imageDataHash,
           stickerPackSize: totalFileSize,
-          stickerPackOrigin: 1, // USER_CREATED
+          stickerPackOrigin: 2, // USER_CREATED (enum value: 0=UNKNOWN, 1=THIRD_PARTY, 2=USER_CREATED)
           // ✅ IMPORTANT: Keep contextInfo empty for new pack sends (not quoted/replied)
           contextInfo: {}
         }
