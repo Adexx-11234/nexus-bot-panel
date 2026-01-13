@@ -5,6 +5,7 @@ import { fileTypeFromBuffer } from "file-type"
 import axios from "axios"
 import fs from "fs"
 import path from "path"
+import os from "os"
 import { fileURLToPath } from "url"
 import sharp from "sharp"
 import crypto from "crypto"
@@ -751,13 +752,13 @@ export function extendSocket(sock) {
   } = options
 
   const stickers = []
+  let coverFilePath = null
   const tempFiles = []
-  let coverBuffer = null
 
   try {
     console.log(`\n📦 Processing ${sources.length} stickers...`)
     
-    // Step 1: Process all stickers
+    // Process all stickers
     for (let i = 0; i < sources.length; i++) {
       let tempFilePath = null
       
@@ -800,23 +801,28 @@ export function extendSocket(sock) {
           console.log(`${progressText} ✓ Static WebP (${stickerBuffer.length} bytes)`)
         }
 
-        // Save first sticker as cover if not set
-        if (i === 0 && !coverBuffer) {
-          coverBuffer = stickerBuffer
-        }
-
-        // Validate WebP buffer size (max 1MB for WhatsApp)
+        // Validate size
         if (stickerBuffer.length > 1024 * 1024) {
           console.warn(`${progressText} ⚠️  Sticker exceeds 1MB, may fail`)
         }
 
-        // Add sticker in CORRECT format - use 'data' property with buffer/URL
+        // Save to temp file (Baileys reads files better than buffers)
+        tempFilePath = path.join(os.tmpdir(), `sticker_${Date.now()}_${i}.webp`)
+        fs.writeFileSync(tempFilePath, stickerBuffer)
+        tempFiles.push(tempFilePath)
+
+        // Save first sticker as cover
+        if (i === 0 && !coverFilePath) {
+          coverFilePath = path.join(os.tmpdir(), `cover_${Date.now()}.webp`)
+          fs.writeFileSync(coverFilePath, stickerBuffer)
+          tempFiles.push(coverFilePath)
+        }
+
+        // ✅ KEY FIX: Use file URL format that Baileys expects
         stickers.push({
-          data: stickerBuffer,  // ✅ CORRECT: Use buffer directly in 'data' property
+          data: { url: tempFilePath },  // File path as URL object property
           emojis: source.emojis || ["😊"],
-          isLottie: false,
           isAnimated: isVideo,
-          fileName: source.fileName || `sticker_${i}.webp`,
           accessibilityLabel: source.accessibilityLabel
         })
 
@@ -824,34 +830,33 @@ export function extendSocket(sock) {
 
       } catch (error) {
         console.error(`[${i + 1}/${sources.length}] ❌ Error: ${error.message}`)
-        if (error.stack) console.error(error.stack)
+        if (tempFilePath && fs.existsSync(tempFilePath)) {
+          fs.unlinkSync(tempFilePath)
+        }
         logger?.error?.(`Error processing sticker ${i}: ${error.message}`)
       }
     }
 
-    console.log(`\n✓ Processing complete: ${stickers.length}/${sources.length} stickers converted`)
+    console.log(`\n✓ Processing complete: ${stickers.length}/${sources.length} stickers`)
 
     if (stickers.length === 0) {
       throw new Error("No stickers were successfully processed")
     }
 
-    // Ensure cover is set
-    if (!coverBuffer) {
-      console.log(`⚠️  No cover set, using first sticker`)
-      coverBuffer = stickers[0].data
+    if (!coverFilePath) {
+      throw new Error("No cover file available")
     }
 
-    // Step 2: Send the sticker pack using correct format
+    // ✅ Send sticker pack with file paths (Baileys handles file reading internally)
     console.log(`\n📤 Sending sticker pack with ${stickers.length} stickers...`)
-    console.log(`📤 Cover buffer size: ${coverBuffer.length} bytes`)
     
     const stickerPackContent = {
       stickerPack: {
         name: packName,
         publisher: packPublisher,
         description: packDescription,
-        cover: coverBuffer,  // Must be a WebP buffer
-        stickers: stickers   // Array with 'data' property containing buffers
+        cover: { url: coverFilePath },  // ✅ File path as URL
+        stickers: stickers
       }
     }
     
@@ -873,16 +878,19 @@ export function extendSocket(sock) {
     logger?.error?.('Error sending sticker pack:', error)
     throw error
   } finally {
-    // Cleanup temp files if any were created
-    for (const tempFile of tempFiles) {
-      try {
-        if (fs.existsSync(tempFile)) {
-          fs.unlinkSync(tempFile)
+    // Cleanup temp files after a delay (let Baileys finish reading them)
+    setTimeout(() => {
+      for (const tempFile of tempFiles) {
+        try {
+          if (fs.existsSync(tempFile)) {
+            fs.unlinkSync(tempFile)
+            console.log(`🗑️  Cleaned up: ${path.basename(tempFile)}`)
+          }
+        } catch (cleanupError) {
+          console.warn(`Failed to cleanup: ${tempFile}`)
         }
-      } catch (cleanupError) {
-        console.warn(`Failed to cleanup temp file: ${tempFile}`)
       }
-    }
+    }, 5000) // 5 second delay to ensure Baileys is done
   }
 }
 
