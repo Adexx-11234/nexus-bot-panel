@@ -758,6 +758,7 @@ sock.sendStickerPack = async function (jid, sources, options = {}) {
     console.log(`\n📦 Processing ${sources.length} stickers...`)
     const processedStickers = []
 
+    // STEP 1: Convert all stickers to WebP
     for (let i = 0; i < sources.length; i++) {
       try {
         const source = sources[i]
@@ -808,6 +809,7 @@ sock.sendStickerPack = async function (jid, sources, options = {}) {
       throw new Error("No stickers were successfully processed")
     }
 
+    // STEP 2: Split into batches (60 max per pack)
     const batches = []
     for (let i = 0; i < processedStickers.length; i += MAX_STICKERS_PER_PACK) {
       batches.push(processedStickers.slice(i, i + MAX_STICKERS_PER_PACK))
@@ -820,6 +822,7 @@ sock.sendStickerPack = async function (jid, sources, options = {}) {
       await new Promise(resolve => setTimeout(resolve, 800))
     }
 
+    // STEP 3: Compress oversized stickers
     const oversizedStickers = processedStickers.filter(s => s.oversized)
     if (oversizedStickers.length > 0) {
       console.log(`\n⚠️ Compressing ${oversizedStickers.length} oversized sticker(s)...`)
@@ -836,6 +839,7 @@ sock.sendStickerPack = async function (jid, sources, options = {}) {
       }
     }
 
+    // STEP 4: Send batches
     console.log(`\n📤 Sending ${batches.length} batch(es)...`)
     const results = []
 
