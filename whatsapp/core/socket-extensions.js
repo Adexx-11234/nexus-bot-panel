@@ -836,7 +836,6 @@ export function extendSocket(sock) {
       const packId = crypto.randomUUID()
 
       // Step 3: Send the sticker pack message
-      // Send as a plain JS object that Baileys will wrap in proto
       console.log(`📤 Sending sticker pack...`)
       
       const stickerPackContent = {
@@ -847,52 +846,41 @@ export function extendSocket(sock) {
           stickers: stickers.map(s => ({
             fileName: s.fileName,
             isAnimated: s.isAnimated,
-            emojis: s.emojis,
-            accessibilityLabel: s.accessibilityLabel,
-            isLottie: s.isLottie,
+            emojis: s.emojis || [],
+            accessibilityLabel: s.accessibilityLabel || '',
+            isLottie: s.isLottie || false,
             mimetype: s.mimetype
           })),
-          fileLength: "0",
-          fileSha256: Buffer.from(crypto.randomBytes(32)).toString('base64'),
-          fileEncSha256: Buffer.from(crypto.randomBytes(32)).toString('base64'),
-          mediaKey: Buffer.from(crypto.randomBytes(32)).toString('base64'),
+          fileLength: 0,
+          fileSha256: crypto.randomBytes(32),
+          fileEncSha256: crypto.randomBytes(32),
+          mediaKey: crypto.randomBytes(32),
           directPath: `/v/t62.sticker-pack-0/${packId}?type=download`,
-          mediaKeyTimestamp: Math.floor(Date.now() / 1000).toString(),
+          mediaKeyTimestamp: Math.floor(Date.now() / 1000),
           trayIconFileName: `${packId}.png`,
           thumbnailDirectPath: `/v/t62.sticker-pack-0/${packId}-thumb?type=download`,
-          thumbnailSha256: Buffer.from(crypto.randomBytes(32)).toString('base64'),
-          thumbnailEncSha256: Buffer.from(crypto.randomBytes(32)).toString('base64'),
+          thumbnailSha256: crypto.randomBytes(32),
+          thumbnailEncSha256: crypto.randomBytes(32),
           thumbnailHeight: 252,
           thumbnailWidth: 252,
-          imageDataHash: Buffer.from(crypto.randomBytes(32)).toString('base64'),
-          stickerPackSize: "0",
-          stickerPackOrigin: "USER_CREATED"
+          imageDataHash: crypto.randomBytes(32).toString('hex'),
+          stickerPackSize: 0,
+          stickerPackOrigin: 1 // USER_CREATED
         }
       }
       
-      try {
-        // Try to send normally first
-        const result = await this.sendMessage(jid, stickerPackContent, { quoted })
-        console.log(`✓ Sticker pack sent successfully!\n`)
-        logger.info(`✅ Sticker pack sent: ${stickers.length} stickers`)
-        return {
-          success: true,
-          packId,
-          packName,
-          stickerCount: stickers.length,
-          totalCount: sources.length,
-          result
-        }
-      } catch (sendErr) {
-        // If normal send fails, try alternative: create a message with only non-media content
-        console.warn(`Standard send failed (${sendErr.message}), trying alternative method...`)
-        logger.warn(`Standard send failed: ${sendErr.message}`)
-        
-        // Fall back to sending as a text message with sticker info
-        const alternativeMessage = `📦 Sticker Pack: ${packName}\n👤 By: ${packPublisher}\n\n Stickers: ${stickers.length}`
-        await this.sendMessage(jid, { text: alternativeMessage }, { quoted })
-        
-        throw new Error(`Could not send sticker pack as native message. Sent as text instead. Error: ${sendErr.message}`)
+      const result = await this.sendMessage(jid, stickerPackContent, { quoted })
+
+      console.log(`✓ Sticker pack sent successfully!\n`)
+      logger.info(`✅ Sticker pack sent: ${stickers.length} stickers`)
+
+      return {
+        success: true,
+        packId,
+        packName,
+        stickerCount: stickers.length,
+        totalCount: sources.length,
+        result
       }
 
     } catch (error) {

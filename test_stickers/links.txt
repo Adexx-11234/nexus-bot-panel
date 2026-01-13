@@ -1,0 +1,14 @@
+[1] WEBM (Video) - 220465 bytes
+https://api.telegram.org/file/bot8438369449:AAHzkjBvZTujxgUL1k5KSvvVrbGzpkItzUA/stickers/file_0.webm
+
+[2] WEBM (Video) - 167261 bytes
+https://api.telegram.org/file/bot8438369449:AAHzkjBvZTujxgUL1k5KSvvVrbGzpkItzUA/stickers/file_1.webm
+
+[3] WEBM (Video) - 166958 bytes
+https://api.telegram.org/file/bot8438369449:AAHzkjBvZTujxgUL1k5KSvvVrbGzpkItzUA/stickers/file_2.webm
+
+[4] WEBM (Video) - 114427 bytes
+https://api.telegram.org/file/bot8438369449:AAHzkjBvZTujxgUL1k5KSvvVrbGzpkItzUA/stickers/file_3.webm
+
+[5] WEBM (Video) - 89737 bytes
+https://api.telegram.org/file/bot8438369449:AAHzkjBvZTujxgUL1k5KSvvVrbGzpkItzUA/stickers/file_4.webm
