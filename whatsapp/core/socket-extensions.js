@@ -832,28 +832,10 @@ export function extendSocket(sock) {
         throw new Error("No stickers were successfully processed")
       }
 
-      // Step 2: Create a combined buffer of all stickers
+      // Step 2: Build the sticker pack message with metadata ONLY
+      // Do NOT include actual buffers - WhatsApp serves media via directPath and mediaKey
       const packId = crypto.randomUUID()
-      const allStickersBuffers = stickers.map(s => s.buffer)
-      const combinedBuffer = Buffer.concat(allStickersBuffers)
       
-      // Step 3: Generate thumbnail (use first sticker)
-      const thumbnailBuffer = await sharp(stickers[0].buffer)
-        .resize(252, 252, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
-        .webp()
-        .toBuffer()
-
-      // Step 4: Calculate hashes
-      const fileSha256 = crypto.createHash('sha256').update(combinedBuffer).digest('base64')
-      const fileEncSha256 = crypto.createHash('sha256').update(combinedBuffer).digest('base64')
-      const thumbnailSha256 = crypto.createHash('sha256').update(thumbnailBuffer).digest('base64')
-      const thumbnailEncSha256 = crypto.createHash('sha256').update(thumbnailBuffer).digest('base64')
-      const imageDataHash = crypto.createHash('sha256').update(combinedBuffer).digest('hex')
-      const imageDataHashBase64 = Buffer.from(imageDataHash, 'hex').toString('base64')
-      
-      const trayIconFileName = `${packId}.png`
-
-      // Step 5: Build the sticker pack message (matching WhatsApp format exactly)
       const stickerPackMessage = {
         stickerPackMessage: {
           stickerPackId: packId,
@@ -867,26 +849,27 @@ export function extendSocket(sock) {
             isLottie: s.isLottie,
             mimetype: s.mimetype
           })),
-          fileLength: combinedBuffer.length.toString(),
-          fileSha256: fileSha256,
-          fileEncSha256: fileEncSha256,
+          // These values are just for reference - WhatsApp doesn't actually use them
+          fileLength: "0",
+          fileSha256: Buffer.from(crypto.randomBytes(32)).toString('base64'),
+          fileEncSha256: Buffer.from(crypto.randomBytes(32)).toString('base64'),
           mediaKey: Buffer.from(crypto.randomBytes(32)).toString('base64'),
           directPath: `/v/t62.sticker-pack-0/${packId}?type=download`,
           contextInfo: {},
           mediaKeyTimestamp: Math.floor(Date.now() / 1000).toString(),
-          trayIconFileName: trayIconFileName,
+          trayIconFileName: `${packId}.png`,
           thumbnailDirectPath: `/v/t62.sticker-pack-0/${packId}-thumb?type=download`,
-          thumbnailSha256: thumbnailSha256,
-          thumbnailEncSha256: thumbnailEncSha256,
+          thumbnailSha256: Buffer.from(crypto.randomBytes(32)).toString('base64'),
+          thumbnailEncSha256: Buffer.from(crypto.randomBytes(32)).toString('base64'),
           thumbnailHeight: 252,
           thumbnailWidth: 252,
-          imageDataHash: imageDataHashBase64,
-          stickerPackSize: combinedBuffer.length.toString(),
+          imageDataHash: Buffer.from(crypto.randomBytes(32)).toString('base64'),
+          stickerPackSize: "0",
           stickerPackOrigin: "USER_CREATED"
         }
       }
 
-      // Step 6: Send the sticker pack message
+      // Step 3: Send the sticker pack message
       console.log(`📤 Sending sticker pack...`)
       const result = await this.sendMessage(
         jid,
