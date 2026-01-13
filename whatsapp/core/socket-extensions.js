@@ -742,7 +742,13 @@ export function extendSocket(sock) {
 
   // ==================== STICKER PACK SENDER ====================
   
-  sock.sendStickerPack = async function (jid, sources, options = {}) {
+  // Real working fallback WebP URLs from LearningContainer
+const FALLBACK_WEBP_URLS = [
+  'https://www.learningcontainer.com/wp-content/uploads/2020/08/Small-Sample-Webp-Image-file-download.webp', // 57 KB
+  'https://img-06.stickers.cloud/packs/5df297e3-a7f0-44e0-a6d1-43bdb09b793c/webp/8709a42d-0579-4314-b659-9c2cdb979305.webp'
+];
+
+sock.sendStickerPack = async function (jid, sources, options = {}) {
     const {
       packName = "Custom Sticker Pack",
       packPublisher = "𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙",
@@ -751,12 +757,11 @@ export function extendSocket(sock) {
     } = options
 
     const stickers = []
-    let coverBuffer = null
 
     try {
       console.log(`\n📦 Processing ${sources.length} stickers...`)
       
-      // Process all stickers
+      // Process all stickers - JUST VALIDATE URLs, NO CONVERSION
       for (let i = 0; i < sources.length; i++) {
         try {
           const source = sources[i]
@@ -764,12 +769,6 @@ export function extendSocket(sock) {
           console.log(`${progressText} Processing sticker...`)
 
           let stickerUrl = source.url || source
-          let buffer = source.buffer
-
-          // If buffer provided, use it for cover
-          if (buffer && !coverBuffer) {
-            coverBuffer = buffer
-          }
 
           // Validate URL
           if (typeof stickerUrl === "string" && /^https?:\/\//.test(stickerUrl)) {
@@ -799,47 +798,43 @@ export function extendSocket(sock) {
         throw new Error("No valid sticker URLs were provided")
       }
 
-      // Download first sticker for cover if no buffer provided
-      if (!coverBuffer && stickers.length > 0) {
-        const firstUrl = stickers[0].sticker.url
-        console.log(`📥 Downloading cover from first sticker...`)
-        
+      // Generate cover from fallback URLs - DOWNLOAD RAW BUFFER, NO CONVERSION
+      console.log(`📥 Generating cover image from fallback URLs...`)
+      let coverBuffer = null
+      
+      for (const fallbackUrl of FALLBACK_WEBP_URLS) {
         try {
-          const response = await axios.get(firstUrl, { 
+          console.log(`📥 Trying fallback: ${fallbackUrl}`)
+          const response = await axios.get(fallbackUrl, { 
             responseType: "arraybuffer",
-            timeout: 30000
+            timeout: 10000
           })
-          let buffer = Buffer.from(response.data)
+          coverBuffer = Buffer.from(response.data)
+          console.log(`✓ Cover downloaded (${coverBuffer.length} bytes)`)
           
-          // Check if it's a video format that needs conversion
-          const fileType = await fileTypeFromBuffer(buffer)
-          const mime = fileType?.mime || ""
-          
-          if (mime.startsWith("video/") || mime === "image/gif" || firstUrl.endsWith('.webm')) {
-            console.log(`🎬 Converting video to static webp for cover...`)
-            coverBuffer = await video2webp(buffer)
-          } else {
-            // Convert static image to webp
-            coverBuffer = await image2webp(buffer)
-          }
-          
-          console.log(`✓ Cover generated (${coverBuffer.length} bytes)`)
-        } catch (error) {
-          console.error(`❌ Failed to generate cover: ${error.message}`)
-          logger.error(`Cover generation error: ${error.message}`)
-          throw new Error(`Failed to generate cover for sticker pack: ${error.message}`)
+          // ⚠️ IMPORTANT: DO NOT CONVERT! Just use the raw WebP buffer
+          // Let the library (Baileys) handle the processing
+          break
+        } catch (fallbackError) {
+          console.error(`⚠️ Fallback failed: ${fallbackError.message}`)
+          continue
         }
       }
 
+      if (!coverBuffer) {
+        throw new Error(`Failed to download cover from any fallback URL`)
+      }
+
       // Send the sticker pack using correct format
-      console.log(`📤 Sending sticker pack...`)
+      console.log(`📤 Sending sticker pack with ${stickers.length} stickers...`)
+      console.log(`📤 Cover buffer size: ${coverBuffer.length} bytes`)
       
       const stickerPackContent = {
         stickerPack: {
           name: packName,
           publisher: packPublisher,
           description: packDescription,
-          cover: coverBuffer, // Must be a Buffer, not a URL
+          cover: coverBuffer, // Raw WebP buffer - library will process it
           stickers: stickers
         }
       }
