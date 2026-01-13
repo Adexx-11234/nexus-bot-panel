@@ -816,8 +816,9 @@ export function extendSocket(sock) {
           tempFiles.push(tempFilePath)
 
         } catch (error) {
-          console.error(`[${i + 1}/${sources.length}] ❌ Error:`, error.message)
-          logger.error(`Error processing sticker ${i}:`, error.message)
+          console.error(`[${i + 1}/${sources.length}] ❌ Error: ${error.message}`)
+          if (error.stack) console.error(error.stack)
+          logger.error(`Error processing sticker ${i}: ${error.message}`)
           if (tempFilePath) {
             cleanupTempFile(tempFilePath)
           }
