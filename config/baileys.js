@@ -38,13 +38,13 @@ const sessionLastMessage = new Map()
 // Session cleanup intervals
 const SESSION_CLEANUP_INTERVAL = 60 * 1000 // Clean every 1 minute
 const SESSION_INACTIVITY_TIMEOUT = 10 * 60 * 1000 // 10 minutes inactivity
-const KEEPALIVE_INTERVAL = 5000 // 5 seconds
 const HEALTH_CHECK_TIMEOUT = 30 * 60 * 1000 // 30 minutes
 
 // ==================== BAILEYS DEFAULT CONFIGURATION ====================
 
 export const baileysConfig = {
   ...DEFAULT_CONNECTION_CONFIG, 
+  version,
   generateHighQualityLinkPreview: true,
 }
 

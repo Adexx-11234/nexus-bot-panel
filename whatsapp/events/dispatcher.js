@@ -5,7 +5,6 @@ import { GroupEventHandler } from "./group.js"
 import { ConnectionEventHandler } from "./connection.js"
 import { UtilityEventHandler } from "./utility.js"
 import { recordSessionActivity } from "../utils/index.js"
-import { logReceivedMessage } from "../utils/message-logger.js"
 
 const logger = createComponentLogger("EVENT_DISPATCHER")
 
@@ -187,11 +186,6 @@ sock.ev.on(EventTypes.MESSAGES_UPSERT, async (messageUpdate) => {
     
     // ✅ HEALTH CHECK: Update last message time when we receive messages.upsert
     this.lastMessageTime.set(sessionId, Date.now())
-
-    // 📝 LOG INCOMING MESSAGES to JSON files
-    logReceivedMessage(messageUpdate).catch((err) => {
-      logger.debug(`Message logging error:`, err.message)
-    })
 
     // Fire and forget - process without blocking
     this.messageHandler

@@ -5,24 +5,32 @@ import { fileTypeFromBuffer } from "file-type"
 import axios from "axios"
 import fs from "fs"
 import path from "path"
-import os from "os"
 import { fileURLToPath } from "url"
 import sharp from "sharp"
-import crypto from "crypto"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const logger = createComponentLogger("SOCKET_EXTENSIONS")
 
-// ==================== DYNAMIC FAKE QUOTED SYSTEM ====================
+const PRESET_CAPTIONS = {
+  ownermenu: '*👑 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Owner Panel*',
+  vipmenu: '*💎 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - VIP Access*',
+  groupmenu: '*🛡️ 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Group Control*',
+  downloadmenu: '*📥 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Media Downloader*',
+  aimenu: '*🤖 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - AI Assistant*',
+  toolmenu: '*🔧 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Tool Center*',
+  searchmenu: '*🔍 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Search Hub*',
+  gamemenu: '*🎮 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Game Center*',
+  convertmenu: '*🔄 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Media Converter*',
+  mainmenu: '*✨ 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙*',
+  default: '*🤖 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙*'
+}
 
-/**
- * Load and process bot logo as thumbnail
- * Uses sharp to resize to 200x200 for WhatsApp thumbnails (higher quality)
- */
+let BOT_LOGO_THUMBNAIL = null
+
 async function loadBotLogoThumbnail() {
   try {
-    const possiblePaths = [
+    const paths = [
       path.resolve(process.cwd(), "Defaults", "images", "menu.png"),
       path.resolve(process.cwd(), "defaults", "images", "menu.png"),
       path.resolve(process.cwd(), "assets", "images", "menu.png"),
@@ -30,581 +38,215 @@ async function loadBotLogoThumbnail() {
       path.resolve(process.cwd(), "assets", "logo.png")
     ]
 
-    for (const imagePath of possiblePaths) {
+    for (const imagePath of paths) {
       if (fs.existsSync(imagePath)) {
         logger.debug(`Loading bot logo from: ${imagePath}`)
-        
-        // Resize to 200x200 for higher quality thumbnail
         const thumbnail = await sharp(imagePath)
-          .resize(200, 200, {
-            fit: 'cover',
-            position: 'center',
-            kernel: sharp.kernel.lanczos3
-          })
-          .png({
-            quality: 100,
-            compressionLevel: 0,
-            adaptiveFiltering: false,
-            palette: false
-          })
+          .resize(200, 200, { fit: 'cover', position: 'center', kernel: sharp.kernel.lanczos3 })
+          .png({ quality: 100, compressionLevel: 0, adaptiveFiltering: false, palette: false })
           .toBuffer()
-        
-        // Convert to base64
-        const base64Thumbnail = thumbnail.toString('base64')
-        logger.info("✅ Bot logo thumbnail loaded and processed successfully")
-        return base64Thumbnail
+        BOT_LOGO_THUMBNAIL = thumbnail.toString('base64')
+        logger.info("✅ Bot logo thumbnail loaded")
+        return BOT_LOGO_THUMBNAIL
       }
     }
-    
-    logger.warn("⚠️ No bot logo found, using text-only fake quoted")
+    logger.warn("⚠️ No bot logo found")
     return null
   } catch (error) {
-    logger.error("Error loading bot logo thumbnail:", error.message)
+    logger.error("Error loading bot logo:", error.message)
     return null
   }
 }
 
-// Load thumbnail on module initialization
-let BOT_LOGO_THUMBNAIL = null
-loadBotLogoThumbnail().then(thumb => {
-  BOT_LOGO_THUMBNAIL = thumb
-}).catch(err => {
-  logger.error("Failed to load bot logo:", err)
-})
+loadBotLogoThumbnail().catch(err => logger.error("Failed to load bot logo:", err))
 
-/**
- * Fake quoted presets for different categories
- */
-function getFakeQuotedPresets() {
-  const hasLogo = !!BOT_LOGO_THUMBNAIL
-  
-  // If we have a logo, use imageMessage style with thumbnail
-  if (hasLogo) {
-    return {
-      ownermenu: {
-        key: {
-          participant: '0@s.whatsapp.net',
-          remoteJid: '0@s.whatsapp.net'
-        },
-        message: {
-          imageMessage: {
-            caption: '*👑 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Owner Panel*',
-            jpegThumbnail: BOT_LOGO_THUMBNAIL
-          }
-        }
-      },
-
-      vipmenu: {
-        key: {
-          participant: '0@s.whatsapp.net',
-          remoteJid: '0@s.whatsapp.net'
-        },
-        message: {
-          imageMessage: {
-            caption: '*💎 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - VIP Access*',
-            jpegThumbnail: BOT_LOGO_THUMBNAIL
-          }
-        }
-      },
-
-      groupmenu: {
-        key: {
-          participant: '0@s.whatsapp.net',
-          remoteJid: '0@s.whatsapp.net'
-        },
-        message: {
-          imageMessage: {
-            caption: '*🛡️ 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Group Control*',
-            jpegThumbnail: BOT_LOGO_THUMBNAIL
-          }
-        }
-      },
-
-      downloadmenu: {
-        key: {
-          participant: '0@s.whatsapp.net',
-          remoteJid: '0@s.whatsapp.net'
-        },
-        message: {
-          imageMessage: {
-            caption: '*📥 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Media Downloader*',
-            jpegThumbnail: BOT_LOGO_THUMBNAIL
-          }
-        }
-      },
-
-      aimenu: {
-        key: {
-          participant: '0@s.whatsapp.net',
-          remoteJid: '0@s.whatsapp.net'
-        },
-        message: {
-          imageMessage: {
-            caption: '*🤖 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - AI Assistant*',
-            jpegThumbnail: BOT_LOGO_THUMBNAIL
-          }
-        }
-      },
-
-      toolmenu: {
-        key: {
-          participant: '0@s.whatsapp.net',
-          remoteJid: '0@s.whatsapp.net'
-        },
-        message: {
-          imageMessage: {
-            caption: '*🔧 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Tool Center*',
-            jpegThumbnail: BOT_LOGO_THUMBNAIL
-          }
-        }
-      },
-
-      searchmenu: {
-        key: {
-          participant: '0@s.whatsapp.net',
-          remoteJid: '0@s.whatsapp.net'
-        },
-        message: {
-          imageMessage: {
-            caption: '*🔍 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Search Hub*',
-            jpegThumbnail: BOT_LOGO_THUMBNAIL
-          }
-        }
-      },
-
-      gamemenu: {
-        key: {
-          participant: '0@s.whatsapp.net',
-          remoteJid: '0@s.whatsapp.net'
-        },
-        message: {
-          imageMessage: {
-            caption: '*🎮 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Game Center*',
-            jpegThumbnail: BOT_LOGO_THUMBNAIL
-          }
-        }
-      },
-
-      convertmenu: {
-        key: {
-          participant: '0@s.whatsapp.net',
-          remoteJid: '0@s.whatsapp.net'
-        },
-        message: {
-          imageMessage: {
-            caption: '*🔄 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Media Converter*',
-            jpegThumbnail: BOT_LOGO_THUMBNAIL
-          }
-        }
-      },
-
-      mainmenu: {
-        key: {
-          participant: '0@s.whatsapp.net',
-          remoteJid: '0@s.whatsapp.net'
-        },
-        message: {
-          imageMessage: {
-            caption: '*✨ 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙*',
-            jpegThumbnail: BOT_LOGO_THUMBNAIL
-          }
-        }
-      },
-
-      default: {
-        key: {
-          participant: '0@s.whatsapp.net',
-          remoteJid: '0@s.whatsapp.net'
-        },
-        message: {
-          imageMessage: {
-            caption: '*🤖 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙*',
-            jpegThumbnail: BOT_LOGO_THUMBNAIL
-          }
-        }
-      }
-    }
+const createFakeQuoted = (type = 'default', additional = {}) => {
+  const caption = PRESET_CAPTIONS[type] || PRESET_CAPTIONS.default
+  const base = {
+    key: { participant: '0@s.whatsapp.net', remoteJid: '0@s.whatsapp.net' },
+    message: BOT_LOGO_THUMBNAIL
+      ? { imageMessage: { caption, jpegThumbnail: BOT_LOGO_THUMBNAIL } }
+      : { conversation: caption }
   }
-  
-  // Fallback to text-only if no logo
-  return {
-    ownermenu: {
-      key: {
-        participant: '0@s.whatsapp.net',
-        remoteJid: '0@s.whatsapp.net'
-      },
-      message: {
-        conversation: '*👑 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Owner Panel*'
-      }
-    },
-
-    vipmenu: {
-      key: {
-        participant: '0@s.whatsapp.net',
-        remoteJid: '0@s.whatsapp.net'
-      },
-      message: {
-        conversation: '*💎 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - VIP Access*'
-      }
-    },
-
-    groupmenu: {
-      key: {
-        participant: '0@s.whatsapp.net',
-        remoteJid: '0@s.whatsapp.net'
-      },
-      message: {
-        conversation: '*🛡️ 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Group Control*'
-      }
-    },
-
-    downloadmenu: {
-      key: {
-        participant: '0@s.whatsapp.net',
-        remoteJid: '0@s.whatsapp.net'
-      },
-      message: {
-        conversation: '*📥 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Media Downloader*'
-      }
-    },
-
-    aimenu: {
-      key: {
-        participant: '0@s.whatsapp.net',
-        remoteJid: '0@s.whatsapp.net'
-      },
-      message: {
-        conversation: '*🤖 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - AI Assistant*'
-      }
-    },
-
-    toolmenu: {
-      key: {
-        participant: '0@s.whatsapp.net',
-        remoteJid: '0@s.whatsapp.net'
-      },
-      message: {
-        conversation: '*🔧 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Tool Center*'
-      }
-    },
-
-    searchmenu: {
-      key: {
-        participant: '0@s.whatsapp.net',
-        remoteJid: '0@s.whatsapp.net'
-      },
-      message: {
-        conversation: '*🔍 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Search Hub*'
-      }
-    },
-
-    gamemenu: {
-      key: {
-        participant: '0@s.whatsapp.net',
-        remoteJid: '0@s.whatsapp.net'
-      },
-      message: {
-        conversation: '*🎮 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Game Center*'
-      }
-    },
-
-    convertmenu: {
-      key: {
-        participant: '0@s.whatsapp.net',
-        remoteJid: '0@s.whatsapp.net'
-      },
-      message: {
-        conversation: '*🔄 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Media Converter*'
-      }
-    },
-
-    mainmenu: {
-      key: {
-        participant: '0@s.whatsapp.net',
-        remoteJid: '0@s.whatsapp.net'
-      },
-      message: {
-        conversation: '*✨ 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙*'
-      }
-    },
-
-    default: {
-      key: {
-        participant: '0@s.whatsapp.net',
-        remoteJid: '0@s.whatsapp.net'
-      },
-      message: {
-        conversation: '*🤖 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙*'
-      }
-    }
-  }
+  return { ...base, ...additional }
 }
 
-/**
- * Determine which fake quoted preset to use based on message context
- */
-function getFakeQuotedForContext(m, options = {}) {
+const getFakeQuotedForContext = (m, options = {}) => {
   try {
-    const PRESETS = getFakeQuotedPresets()
+    if (options.fakeQuotedType) return createFakeQuoted(options.fakeQuotedType)
+    if (m.pluginCategory) return createFakeQuoted(m.pluginCategory)
     
-    // Priority 1: Manual override via options
-    if (options.fakeQuotedType && PRESETS[options.fakeQuotedType]) {
-      logger.debug(`Using manual fake quoted type: ${options.fakeQuotedType}`)
-      return PRESETS[options.fakeQuotedType]
-    }
-
-    // Priority 2: Use plugin category from message object
-    if (m.pluginCategory && PRESETS[m.pluginCategory]) {
-      logger.debug(`Using fake quoted for category: ${m.pluginCategory}`)
-      return PRESETS[m.pluginCategory]
-    }
-
-    // Priority 3: Detect from command name if available
     if (m.commandName) {
       const cmd = m.commandName.toLowerCase()
-      
-      if (cmd.includes('owner') || cmd.includes('eval') || cmd.includes('exec')) {
-        return PRESETS.ownermenu
-      }
-      if (cmd.includes('vip')) {
-        return PRESETS.vipmenu
-      }
-      if (cmd.includes('group') || cmd.includes('anti') || cmd.includes('kick') || cmd.includes('promote')) {
-        return PRESETS.groupmenu
-      }
-      if (cmd.includes('download') || cmd.includes('dl') || cmd.includes('video') || cmd.includes('song')) {
-        return PRESETS.downloadmenu
-      }
-      if (cmd.includes('ai') || cmd.includes('gpt') || cmd.includes('chat')) {
-        return PRESETS.aimenu
-      }
-      if (cmd.includes('game') || cmd.includes('play')) {
-        return PRESETS.gamemenu
-      }
-      if (cmd.includes('sticker') || cmd.includes('convert')) {
-        return PRESETS.convertmenu
-      }
+      if (cmd.includes('owner') || cmd.includes('eval')) return createFakeQuoted('ownermenu')
+      if (cmd.includes('vip')) return createFakeQuoted('vipmenu')
+      if (cmd.includes('group') || cmd.includes('anti') || cmd.includes('kick')) return createFakeQuoted('groupmenu')
+      if (cmd.includes('download') || cmd.includes('dl') || cmd.includes('video')) return createFakeQuoted('downloadmenu')
+      if (cmd.includes('ai') || cmd.includes('gpt') || cmd.includes('chat')) return createFakeQuoted('aimenu')
+      if (cmd.includes('game')) return createFakeQuoted('gamemenu')
+      if (cmd.includes('sticker') || cmd.includes('convert')) return createFakeQuoted('convertmenu')
     }
 
-    // Priority 4: Use user role
-    if (m.isCreator || m.isOwner) {
-      return PRESETS.ownermenu
-    }
-
-    // Priority 5: Check if in group
-    if (m.isGroup) {
-      return PRESETS.groupmenu
-    }
-
-    // Fallback to default
-    return PRESETS.default
-
+    if (m.isCreator || m.isOwner) return createFakeQuoted('ownermenu')
+    if (m.isGroup) return createFakeQuoted('groupmenu')
+    
+    return createFakeQuoted('default')
   } catch (error) {
     logger.error('Error determining fake quoted preset:', error)
-    return getFakeQuotedPresets().default
+    return createFakeQuoted('default')
   }
 }
 
-/**
- * Sleep/delay utility
- */
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+
+const addForwardInfo = (content) => {
+  const newsletterJid = process.env.WHATSAPP_CHANNEL_JID || '120363319098372999@newsletter'
+  const botName = '𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙'
+  
+  return {
+    forwardingScore: 1,
+    isForwarded: true,
+    forwardedNewsletterMessageInfo: {
+      newsletterJid, newsletterName: botName, serverMessageId: -1
+    }
+  }
 }
 
-// ==================== SOCKET EXTENSION ====================
+const processSticker = async (source, index, total) => {
+  try {
+    let buffer = source.buffer || source
 
-/**
- * Extend a Baileys socket with ALL helper methods and overrides
- */
+    if (source.url || (typeof buffer === "string" && /^https?:\/\//.test(buffer))) {
+      const response = await axios.get(source.url || buffer, { responseType: "arraybuffer", timeout: 30000 })
+      buffer = Buffer.from(response.data)
+    }
+
+    const fileType = await fileTypeFromBuffer(buffer)
+    const mime = fileType?.mime || ""
+    const isVideo = source.isVideo || mime.startsWith("video/") || mime === "image/gif"
+    const stickerBuffer = isVideo ? await video2webp(buffer) : await image2webp(buffer)
+
+    return { buffer: stickerBuffer, emojis: source.emojis || ["😊"], isAnimated: isVideo, accessibilityLabel: source.accessibilityLabel, index }
+  } catch (error) {
+    logger.error(`Error processing sticker ${index}/${total}: ${error.message}`)
+    return null
+  }
+}
+
+const processStickersConcurrently = async (sources, concurrency = 5) => {
+  const processed = []
+  for (let i = 0; i < sources.length; i += concurrency) {
+    const batch = sources.slice(i, i + concurrency)
+    const promises = batch.map((s, idx) => processSticker(s, i + idx, sources.length))
+    const results = await Promise.all(promises)
+    processed.push(...results.filter(Boolean))
+  }
+  processed.sort((a, b) => a.index - b.index)
+  return processed
+}
+
 export function extendSocket(sock) {
-  if (!sock || sock._extended) {
-    return sock
-  }
+  if (!sock || sock._extended) return sock
 
-  logger.debug("Extending socket with dynamic fake quoted system")
+  logger.debug("Extending socket with optimized fake quoted system")
 
-  // ==================== SEND MESSAGE OVERRIDE ====================
   const originalSendMessage = sock.sendMessage.bind(sock)
+  const maxRetries = 2
 
   sock.sendMessage = async (jid, content, options = {}) => {
-    const maxRetries = 2
     let lastError = null
-
-    // ========== DYNAMIC FAKE QUOTED MANAGEMENT ==========
     const isGroup = jid.endsWith('@g.us')
-    let originalQuoted = options.quoted
-
-    // ✅ ADD NEWSLETTER FORWARDING INFO
-    const newsletterJid = process.env.WHATSAPP_CHANNEL_JID || '120363319098372999@newsletter'
-    const botName = '𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙'
-    const forwardInfo = {
-      forwardingScore: 1,
-      isForwarded: true,
-      forwardedNewsletterMessageInfo: {
-        newsletterJid: newsletterJid,
-        newsletterName: botName,
-        serverMessageId: -1
-      }
-    }
+    const forwardInfo = addForwardInfo()
     
-    // Determine which fake quoted to use
-    const PRESETS = getFakeQuotedPresets()
-    let fakeQuoted = PRESETS.default
+    let fakeQuoted = createFakeQuoted('default')
     
-    if (originalQuoted) {
-      // Get context-aware fake quoted
-      fakeQuoted = getFakeQuotedForContext(originalQuoted, options)
+    if (options.quoted) {
+      fakeQuoted = getFakeQuotedForContext(options.quoted, options)
       
-      logger.debug(`[SendMessage] Using fake quoted type: ${originalQuoted.pluginCategory || 'default'}`)
-      
-      // ✅ FIXED: Only add mention if we already have participant info
-      if (isGroup && originalQuoted.key?.participant) {
-        const senderJid = originalQuoted.key.participant
-        const pushName = originalQuoted.pushName || originalQuoted.verifiedBizName || 'User'
-        
-        // Clone the fake quoted and enhance it for group replies
+      if (isGroup && options.quoted.key?.participant) {
+        const senderJid = options.quoted.key.participant
+        const pushName = options.quoted.pushName || 'User'
         fakeQuoted = JSON.parse(JSON.stringify(fakeQuoted))
         
-        // Update the caption/conversation to show reply info
         if (fakeQuoted.message.imageMessage) {
           fakeQuoted.message.imageMessage.caption += `\n\n*Replied to ${pushName}*`
         } else if (fakeQuoted.message.conversation) {
           fakeQuoted.message.conversation += `\n\n*Replied to ${pushName}*`
         }
-        
-        logger.debug(`[SendMessage] Enhanced group reply for ${pushName}`)
       }
-      
-      // Replace original quoted with our fake quoted
       options.quoted = fakeQuoted
     } else {
-      // No quoted provided, add default fake quoted
-      logger.debug(`[SendMessage] Adding default fake quoted to message for ${jid}`)
-      options.quoted = PRESETS.default
+      options.quoted = createFakeQuoted('default')
     }
     
-    // ✅ ADD FORWARD INFO to all text messages
     if (content.text || content.caption) {
-      if (!content.contextInfo) {
-        content.contextInfo = {}
-      }
-      
-      content.contextInfo = {
-        ...content.contextInfo,
-        ...forwardInfo
-      }
-      
-      logger.debug(`[SendMessage] Added newsletter forward info to message`)
+      if (!content.contextInfo) content.contextInfo = {}
+      content.contextInfo = { ...content.contextInfo, ...forwardInfo }
     }
     
-    // ✅ CRITICAL FIX: Convert mentions array to proper format if exists
-    if (options.mentions && Array.isArray(options.mentions) && options.mentions.length > 0) {
-      options.mentions = options.mentions.map(m => {
-        if (typeof m === 'string') {
-          return m.includes('@') ? m : `${m}@s.whatsapp.net`
-        }
-        return m
-      })
-      logger.debug(`[SendMessage] Added ${options.mentions.length} mentions`)
+    if (options.mentions && Array.isArray(options.mentions)) {
+      options.mentions = options.mentions.map(m => typeof m === 'string' && !m.includes('@') ? `${m}@s.whatsapp.net` : m)
     }
     
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        // Disable ephemeral messages by default
-        if (!options.ephemeralExpiration) {
-          options.ephemeralExpiration = 0
-        }
+        options.ephemeralExpiration ||= 0
         
-        // Create send promise
         const sendPromise = originalSendMessage(jid, content, options)
-        
-        // Create timeout promise (20 seconds)
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('sendMessage timeout after 200s')), 200000)
-        )
-        
-        // Race between send and timeout
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('sendMessage timeout')), 200000))
         const result = await Promise.race([sendPromise, timeoutPromise])
 
-        // ✅ MODIFY MESSAGE KEY ID - Add NEXUSBOT suffix AFTER message is sent
-        if (result && result.key && result.key.id) {
-          const originalId = result.key.id
-          if (!originalId.endsWith('NEXUSBOT')) {
-            result.key.id = `${originalId}NEXUSBOT`
-            logger.debug(`Modified message ID: ${originalId} -> ${result.key.id}`)
-          }
+        if (result?.key?.id && !result.key.id.endsWith('NEXUSBOT')) {
+          result.key.id = `${result.key.id}NEXUSBOT`
         }
 
-        // Update session activity on success
         if (sock.sessionId) {
-          const { updateSessionLastMessage } = await import('../core/config.js')
-          updateSessionLastMessage(sock.sessionId)
+          try { const { updateSessionLastMessage } = await import('../core/config.js'); updateSessionLastMessage(sock.sessionId) } catch {}
         }
         
-        logger.debug(`[SendMessage] Message sent successfully to ${jid}`)
+        logger.debug(`Message sent to ${jid}`)
         return result
         
       } catch (error) {
         lastError = error
         
-        // ✅ SPECIAL HANDLING: If rate-limited and has mentions, retry without mentions
         if (error.message?.includes('rate-overlimit') && options.mentions) {
-          logger.warn(`[SendMessage] Rate limited with mentions, retrying without mentions for ${jid}`)
-          
+          logger.warn(`Rate limited, retrying without mentions for ${jid}`)
           delete options.mentions
           
           try {
             const result = await originalSendMessage(jid, content, options)
-            
             if (sock.sessionId) {
-              const { updateSessionLastMessage } = await import('../core/config.js')
-              updateSessionLastMessage(sock.sessionId)
+              try { const { updateSessionLastMessage } = await import('../core/config.js'); updateSessionLastMessage(sock.sessionId) } catch {}
             }
-            
-            logger.info(`[SendMessage] Successfully sent without mentions after rate limit`)
             return result
           } catch (fallbackError) {
-            logger.error(`[SendMessage] Fallback without mentions also failed: ${fallbackError.message}`)
             lastError = fallbackError
           }
         }
         
-        // Don't retry on specific errors
-        const noRetryErrors = [
-          'forbidden',
-          'not-authorized',
-          'invalid-jid',
-          'recipient-not-found',
-          'rate-overlimit'
-        ]
-        
-        const shouldNotRetry = noRetryErrors.some(err => 
-          error.message?.toLowerCase().includes(err)
-        )
+        const noRetryErrors = ['forbidden', 'not-authorized', 'invalid-jid', 'recipient-not-found', 'rate-overlimit']
+        const shouldNotRetry = noRetryErrors.some(err => error.message?.toLowerCase().includes(err))
         
         if (shouldNotRetry) {
-          logger.error(`[SendMessage] Non-retryable error sending to ${jid}: ${error.message}`)
+          logger.error(`Non-retryable error: ${error.message}`)
           throw error
         }
         
-        // Retry on timeout or temporary errors
         if (attempt < maxRetries) {
           const delay = (attempt + 1) * 1000
-          logger.warn(`[SendMessage] Send failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms: ${error.message}`)
+          logger.warn(`Send failed (attempt ${attempt + 1}), retrying in ${delay}ms`)
           await sleep(delay)
           continue
         }
         
-        logger.error(`[SendMessage] Failed to send message to ${jid} after ${maxRetries + 1} attempts: ${error.message}`)
+        logger.error(`Failed after ${maxRetries + 1} attempts: ${error.message}`)
         throw error
       }
     }
-    
-    throw lastError || new Error('Unknown error in sendMessage')
+    throw lastError || new Error('Unknown sendMessage error')
   }
 
-  // ==================== GROUP METADATA OVERRIDE ====================
   const originalGroupMetadata = sock.groupMetadata?.bind(sock)
   sock._originalGroupMetadata = originalGroupMetadata
   
@@ -613,446 +255,153 @@ export function extendSocket(sock) {
       const { getGroupMetadata } = await import('../core/config.js')
       return await getGroupMetadata(sock, jid, false)
     }
-
     sock.groupMetadataRefresh = async (jid) => {
       const { getGroupMetadata } = await import('../core/config.js')
       return await getGroupMetadata(sock, jid, true)
     }
   }
 
-  // ==================== LID HELPER METHODS ====================
-  sock.getLidForPn = async (phoneNumber) => {
-    if (sock.signalRepository?.lidMapping?.getLIDForPN) {
-      return await sock.signalRepository.lidMapping.getLIDForPN(phoneNumber)
-    }
-    return phoneNumber
-  }
+  sock.getLidForPn = async (phoneNumber) => sock.signalRepository?.lidMapping?.getLIDForPN?.(phoneNumber) || phoneNumber
+  sock.getPnForLid = async (lid) => sock.signalRepository?.lidMapping?.getPNForLID?.(lid) || lid
 
-  sock.getPnForLid = async (lid) => {
-    if (sock.signalRepository?.lidMapping?.getPNForLID) {
-      return await sock.signalRepository.lidMapping.getPNForLID(lid)
-    }
-    return lid
-  }
-
-  // ==================== MEDIA CONVERSION HELPERS ====================
-  
-  sock.sendImageAsSticker = async function (jid, source, options = {}) {
-    let tempFilePath = null
+  const createMediaSender = (mediaKey, ext, mimeType, options = {}) => async function (jid, source, caption = "", opts = {}) {
+    let tempFile = null
     try {
       let buffer = source
-
       if (typeof source === "string" && /^https?:\/\//.test(source)) {
         const response = await axios.get(source, { responseType: "arraybuffer" })
         buffer = Buffer.from(response.data)
       }
-
-      const stickerBuffer = await image2webp(buffer)
-      
-      tempFilePath = getTempFilePath('sendImageAsSticker', '.webp')
-      fs.writeFileSync(tempFilePath, stickerBuffer)
-
-      const result = await this.sendMessage(
-        jid,
-        { sticker: fs.readFileSync(tempFilePath) },
-        { quoted: options.quoted }
-      )
-      
-      return result
+      tempFile = getTempFilePath(mediaKey, ext)
+      fs.writeFileSync(tempFile, buffer)
+      return await this.sendMessage(jid, { [mediaKey]: fs.readFileSync(tempFile), caption, ...options }, { quoted: opts.quoted })
     } catch (error) {
-      logger.error("sendImageAsSticker error:", error.message)
+      logger.error(`${mediaKey} error:`, error.message)
       throw error
     } finally {
-      if (tempFilePath) {
-        cleanupTempFile(tempFilePath)
-      }
+      if (tempFile) cleanupTempFile(tempFile)
     }
   }
 
-  sock.sendVideoAsSticker = async function (jid, source, options = {}) {
-    let tempFilePath = null
-    try {
-      let buffer = source
-
-      if (typeof source === "string" && /^https?:\/\//.test(source)) {
-        const response = await axios.get(source, { responseType: "arraybuffer" })
-        buffer = Buffer.from(response.data)
-      }
-
-      const stickerBuffer = await video2webp(buffer)
-      
-      tempFilePath = getTempFilePath('sendVideoAsSticker', '.webp')
-      fs.writeFileSync(tempFilePath, stickerBuffer)
-
-      const result = await this.sendMessage(
-        jid,
-        { sticker: fs.readFileSync(tempFilePath) },
-        { quoted: options.quoted }
-      )
-      
-      return result
-    } catch (error) {
-      logger.error("sendVideoAsSticker error:", error.message)
-      throw error
-    } finally {
-      if (tempFilePath) {
-        cleanupTempFile(tempFilePath)
-      }
-    }
-  }
-
-  sock.sendMediaAsSticker = async function (jid, source, options = {}) {
-    let tempFilePath = null
-    try {
-      let buffer = source
-
-      if (typeof source === "string" && /^https?:\/\//.test(source)) {
-        const response = await axios.get(source, { responseType: "arraybuffer" })
-        buffer = Buffer.from(response.data)
-      }
-
-      const fileType = await fileTypeFromBuffer(buffer)
-      const mime = fileType?.mime || ""
-
-      let stickerBuffer
-      if (mime.startsWith("video/") || mime === "image/gif") {
-        stickerBuffer = await video2webp(buffer)
-      } else {
-        stickerBuffer = await image2webp(buffer)
-      }
-
-      tempFilePath = getTempFilePath('sendMediaAsSticker', '.webp')
-      fs.writeFileSync(tempFilePath, stickerBuffer)
-
-      const result = await this.sendMessage(
-        jid,
-        { sticker: fs.readFileSync(tempFilePath) },
-        { quoted: options.quoted }
-      )
-      
-      return result
-    } catch (error) {
-      logger.error("sendMediaAsSticker error:", error.message)
-      throw error
-    } finally {
-      if (tempFilePath) {
-        cleanupTempFile(tempFilePath)
-      }
-    }
-  }
-
-  // ==================== STICKER PACK SENDER ====================
-  
-sock.sendStickerPack = async function (jid, sources, options = {}) {
-  const {
-    packName = "Custom Sticker Pack",
-    packPublisher = "𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙",
-    packDescription = "𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙",
-    quoted = null,
-    concurrency = 5 // Process 5 stickers at a time
-  } = options
-
-  try {
-    //console.log(`\n📦 Processing ${sources.length} stickers in parallel...`)
-
-    // Process all stickers concurrently with a limit
-    const processSticker = async (source, index) => {
-      try {
-        let buffer = source.buffer || source
-        const progressText = `[${index + 1}/${sources.length}]`
-
-        // Download if URL
-        if (source.url || (typeof buffer === "string" && /^https?:\/\//.test(buffer))) {
-          const url = source.url || buffer
-          const response = await axios.get(url, { responseType: "arraybuffer", timeout: 30000 })
-          buffer = Buffer.from(response.data)
-          //console.log(`${progressText} ✓ Downloaded (${(buffer.length / 1024).toFixed(2)} KB)`)
-        }
-
-        // Detect file type and convert
-        const fileType = await fileTypeFromBuffer(buffer)
-        const mime = fileType?.mime || ""
-        const isVideo = source.isVideo || mime.startsWith("video/") || mime === "image/gif"
-
-        const stickerBuffer = isVideo ? await video2webp(buffer) : await image2webp(buffer)
-        //console.log(`${progressText} ✓ ${isVideo ? 'Animated' : 'Static'} WebP (${(stickerBuffer.length / 1024).toFixed(2)} KB)`)
-
-        return {
-          buffer: stickerBuffer,
-          emojis: source.emojis || ["😊"],
-          isAnimated: isVideo,
-          accessibilityLabel: source.accessibilityLabel,
-          index
-        }
-      } catch (error) {
-        console.error(`[${index + 1}/${sources.length}] ❌ Error: ${error.message}`)
-        logger?.error?.(`Error processing sticker ${index}: ${error.message}`)
-        return null
-      }
-    }
-
-    // Process stickers with concurrency limit
-    const processedStickers = []
-    for (let i = 0; i < sources.length; i += concurrency) {
-      const batch = sources.slice(i, i + concurrency)
-      const batchPromises = batch.map((source, batchIndex) => 
-        processSticker(source, i + batchIndex)
-      )
-      const results = await Promise.all(batchPromises)
-      processedStickers.push(...results.filter(Boolean))
-    }
-
-    // Sort by original index to maintain order
-    processedStickers.sort((a, b) => a.index - b.index)
-
-    //console.log(`\n✓ Processing complete: ${processedStickers.length}/${sources.length} stickers`)
-
-    if (processedStickers.length === 0) {
-      throw new Error("No stickers were successfully processed")
-    }
-
-    // Send sticker pack
-    //console.log(`\n📤 Sending sticker pack with ${processedStickers.length} stickers...`)
-
-    const stickerPackContent = {
-      stickerPack: {
-        name: packName,
-        publisher: packPublisher,
-        description: packDescription,
-        cover: processedStickers[0].buffer,
-        stickers: processedStickers.map(sticker => ({
-          data: sticker.buffer,
-          emojis: sticker.emojis,
-          isAnimated: sticker.isAnimated,
-          accessibilityLabel: sticker.accessibilityLabel
-        }))
-      }
-    }
-
-    const result = await this.sendMessage(jid, stickerPackContent, { quoted })
-    
-    //console.log(`\n✅ Sent ${processedStickers.length}/${sources.length} stickers\n`)
-    //logger?.info?.(`✅ Sticker pack sent: ${processedStickers.length} stickers`)
-
-    return {
-      success: true,
-      packName,
-      totalStickersSent: processedStickers.length,
-      totalStickersRequested: sources.length,
-      result
-    }
-
-  } catch (error) {
-    console.error('❌ Error sending sticker pack:', error)
-    logger?.error?.('Error sending sticker pack:', error)
-    throw error
-  }
-}
-
-  // ==================== BASIC MEDIA SENDERS ====================
-
-  sock.sendImage = async function (jid, source, caption = "", options = {}) {
-    let tempFilePath = null
-    try {
-      let buffer = source
-
-      if (typeof source === "string" && /^https?:\/\//.test(source)) {
-        const response = await axios.get(source, { responseType: "arraybuffer" })
-        buffer = Buffer.from(response.data)
-      }
-
-      tempFilePath = getTempFilePath('sendImage', '.jpg')
-      fs.writeFileSync(tempFilePath, buffer)
-
-      const result = await this.sendMessage(
-        jid,
-        {
-          image: fs.readFileSync(tempFilePath),
-          caption: caption,
-        },
-        { quoted: options.quoted }
-      )
-      
-      return result
-    } catch (error) {
-      logger.error("sendImage error:", error.message)
-      throw error
-    } finally {
-      if (tempFilePath) {
-        cleanupTempFile(tempFilePath)
-      }
-    }
-  }
-
-  sock.sendVideo = async function (jid, source, caption = "", options = {}) {
-    let tempFilePath = null
-    try {
-      let buffer = source
-
-      if (typeof source === "string" && /^https?:\/\//.test(source)) {
-        const response = await axios.get(source, { responseType: "arraybuffer" })
-        buffer = Buffer.from(response.data)
-      }
-
-      tempFilePath = getTempFilePath('sendVideo', '.mp4')
-      fs.writeFileSync(tempFilePath, buffer)
-
-      const result = await this.sendMessage(
-        jid,
-        {
-          video: fs.readFileSync(tempFilePath),
-          caption: caption,
-          gifPlayback: options.gifPlayback || false,
-        },
-        { quoted: options.quoted }
-      )
-      
-      return result
-    } catch (error) {
-      logger.error("sendVideo error:", error.message)
-      throw error
-    } finally {
-      if (tempFilePath) {
-        cleanupTempFile(tempFilePath)
-      }
-    }
-  }
-
-  sock.sendAudio = async function (jid, source, options = {}) {
-    let tempFilePath = null
-    try {
-      let buffer = source
-
-      if (typeof source === "string" && /^https?:\/\//.test(source)) {
-        const response = await axios.get(source, { responseType: "arraybuffer" })
-        buffer = Buffer.from(response.data)
-      }
-
-      tempFilePath = getTempFilePath('sendAudio', '.mp3')
-      fs.writeFileSync(tempFilePath, buffer)
-
-      const result = await this.sendMessage(
-        jid,
-        {
-          audio: fs.readFileSync(tempFilePath),
-          mimetype: "audio/mpeg",
-          ptt: options.ptt || false,
-        },
-        { quoted: options.quoted }
-      )
-      
-      return result
-    } catch (error) {
-      logger.error("sendAudio error:", error.message)
-      throw error
-    } finally {
-      if (tempFilePath) {
-        cleanupTempFile(tempFilePath)
-      }
-    }
-  }
+  sock.sendImage = createMediaSender('image', '.jpg', 'image/jpeg')
+  sock.sendVideo = createMediaSender('video', '.mp4', 'video/mp4', { gifPlayback: false })
+  sock.sendAudio = createMediaSender('audio', '.mp3', 'audio/mpeg', { mimetype: 'audio/mpeg', ptt: false })
 
   sock.sendDocument = async function (jid, source, filename, options = {}) {
-    let tempFilePath = null
+    let tempFile = null
     try {
       let buffer = source
-
       if (typeof source === "string" && /^https?:\/\//.test(source)) {
         const response = await axios.get(source, { responseType: "arraybuffer" })
         buffer = Buffer.from(response.data)
       }
-
       const fileType = await fileTypeFromBuffer(buffer)
-      
-      tempFilePath = getTempFilePath('sendDocument', `.${fileType?.ext || 'bin'}`)
-      fs.writeFileSync(tempFilePath, buffer)
-
-      const result = await this.sendMessage(
-        jid,
-        {
-          document: fs.readFileSync(tempFilePath),
-          mimetype: options.mimetype || fileType?.mime || "application/octet-stream",
-          fileName: filename,
-        },
-        { quoted: options.quoted }
-      )
-      
-      return result
+      tempFile = getTempFilePath('sendDocument', `.${fileType?.ext || 'bin'}`)
+      fs.writeFileSync(tempFile, buffer)
+      return await this.sendMessage(jid, { document: fs.readFileSync(tempFile), mimetype: options.mimetype || fileType?.mime || "application/octet-stream", fileName: filename }, { quoted: options.quoted })
     } catch (error) {
       logger.error("sendDocument error:", error.message)
       throw error
     } finally {
-      if (tempFilePath) {
-        cleanupTempFile(tempFilePath)
-      }
+      if (tempFile) cleanupTempFile(tempFile)
     }
   }
 
-  // ==================== CONVENIENCE METHODS ====================
+  const createStickerSender = (converter) => async function (jid, source, options = {}) {
+    let tempFile = null
+    try {
+      let buffer = source
+      if (typeof source === "string" && /^https?:\/\//.test(source)) {
+        const response = await axios.get(source, { responseType: "arraybuffer" })
+        buffer = Buffer.from(response.data)
+      }
+      const stickerBuffer = await converter(buffer)
+      tempFile = getTempFilePath('sticker', '.webp')
+      fs.writeFileSync(tempFile, stickerBuffer)
+      return await this.sendMessage(jid, { sticker: fs.readFileSync(tempFile) }, { quoted: options.quoted })
+    } catch (error) {
+      logger.error("Sticker sender error:", error.message)
+      throw error
+    } finally {
+      if (tempFile) cleanupTempFile(tempFile)
+    }
+  }
+
+  sock.sendImageAsSticker = createStickerSender(image2webp)
+  sock.sendVideoAsSticker = createStickerSender(video2webp)
+
+  sock.sendMediaAsSticker = async function (jid, source, options = {}) {
+    let tempFile = null
+    try {
+      let buffer = source
+      if (typeof source === "string" && /^https?:\/\//.test(source)) {
+        const response = await axios.get(source, { responseType: "arraybuffer" })
+        buffer = Buffer.from(response.data)
+      }
+      const fileType = await fileTypeFromBuffer(buffer)
+      const mime = fileType?.mime || ""
+      const stickerBuffer = mime.startsWith("video/") || mime === "image/gif" ? await video2webp(buffer) : await image2webp(buffer)
+      tempFile = getTempFilePath('sticker', '.webp')
+      fs.writeFileSync(tempFile, stickerBuffer)
+      return await this.sendMessage(jid, { sticker: fs.readFileSync(tempFile) }, { quoted: options.quoted })
+    } catch (error) {
+      logger.error("sendMediaAsSticker error:", error.message)
+      throw error
+    } finally {
+      if (tempFile) cleanupTempFile(tempFile)
+    }
+  }
+
+  sock.sendStickerPack = async function (jid, sources, options = {}) {
+    const { packName = "Custom Sticker Pack", packPublisher = "𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙", packDescription = "𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙", quoted = null, concurrency = 5 } = options
+    try {
+      const processedStickers = await processStickersConcurrently(sources, concurrency)
+      if (!processedStickers.length) throw new Error("No stickers processed")
+      
+      const stickerPackContent = {
+        stickerPack: {
+          name: packName, publisher: packPublisher, description: packDescription,
+          cover: processedStickers[0].buffer,
+          stickers: processedStickers.map(s => ({ data: s.buffer, emojis: s.emojis, isAnimated: s.isAnimated, accessibilityLabel: s.accessibilityLabel }))
+        }
+      }
+      
+      const result = await this.sendMessage(jid, stickerPackContent, { quoted })
+      logger.info(`✅ Sent ${processedStickers.length} stickers`)
+      return { success: true, packName, totalStickersSent: processedStickers.length, totalStickersRequested: sources.length, result }
+    } catch (error) {
+      logger.error('Error sending sticker pack:', error)
+      throw error
+    }
+  }
 
   sock.reply = async function (m, text) {
-    return await this.sendMessage(
-      m.chat || m.key.remoteJid,
-      { text: text },
-      { quoted: m }
-    )
+    return await this.sendMessage(m.chat || m.key.remoteJid, { text }, { quoted: m })
   }
 
   sock.react = async function (m, emoji) {
-    return await this.sendMessage(m.chat || m.key.remoteJid, {
-      react: {
-        text: emoji,
-        key: m.key,
-      },
-    })
+    return await this.sendMessage(m.chat || m.key.remoteJid, { react: { text: emoji, key: m.key } })
   }
 
   sock.downloadMedia = async (msg) => {
     try {
-      // Auto-detect: if msg has quoted and no direct media, use quoted
       let messageToDownload = msg
+      const hasDirectMedia = msg.message?.imageMessage || msg.message?.videoMessage || msg.message?.audioMessage || msg.message?.documentMessage || msg.message?.stickerMessage
       
-      // Check if current message has media
-      const hasDirectMedia = msg.message?.imageMessage || 
-                            msg.message?.videoMessage || 
-                            msg.message?.audioMessage ||
-                            msg.message?.documentMessage ||
-                            msg.message?.stickerMessage
-      
-      // If no direct media but has quoted with media, use quoted
       if (!hasDirectMedia && msg.quoted?.message) {
-        const hasQuotedMedia = msg.quoted.message?.imageMessage || 
-                              msg.quoted.message?.videoMessage || 
-                              msg.quoted.message?.audioMessage ||
-                              msg.quoted.message?.documentMessage ||
-                              msg.quoted.message?.stickerMessage
-        
-        if (hasQuotedMedia) {
-          messageToDownload = msg.quoted
-        }
+        const hasQuotedMedia = msg.quoted.message?.imageMessage || msg.quoted.message?.videoMessage || msg.quoted.message?.audioMessage || msg.quoted.message?.documentMessage || msg.quoted.message?.stickerMessage
+        if (hasQuotedMedia) messageToDownload = msg.quoted
       }
       
-      const buffer = await downloadMediaMessage(
-        messageToDownload,
-        "buffer",
-        {},
-        {
-          logger: console,
-          reuploadRequest: sock.updateMediaMessage
-        }
-      )
-      
-      return buffer
+      return await downloadMediaMessage(messageToDownload, "buffer", {}, { logger: console, reuploadRequest: sock.updateMediaMessage })
     } catch (error) {
       logger.error("downloadMedia error:", error.message)
       throw error
     }
   }
 
-  // Mark socket as extended
   sock._extended = true
-
-  logger.info("✅ Socket fully extended with all helper methods")
+  logger.info("✅ Socket fully extended")
   return sock
 }
 
