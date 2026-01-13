@@ -748,60 +748,62 @@ sock.sendStickerPack = async function (jid, sources, options = {}) {
     packName = "Custom Sticker Pack",
     packPublisher = "𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙",
     packDescription = "",
-    quoted = null
+    quoted = null,
+    concurrency = 10 // Process 5 stickers at a time
   } = options
 
-  const MAX_STICKERS_PER_PACK = 60
-  const MAX_STICKER_SIZE = 1024 * 1024
-
   try {
-    console.log(`\n📦 Processing ${sources.length} stickers...`)
-    const processedStickers = []
+    console.log(`\n📦 Processing ${sources.length} stickers in parallel...`)
 
-    // STEP 1: Convert all stickers to WebP
-    for (let i = 0; i < sources.length; i++) {
+    // Process all stickers concurrently with a limit
+    const processSticker = async (source, index) => {
       try {
-        const source = sources[i]
         let buffer = source.buffer || source
-        const progressText = `[${i + 1}/${sources.length}]`
-        console.log(`${progressText} Processing sticker...`)
+        const progressText = `[${index + 1}/${sources.length}]`
 
-        if (source.url) {
-          console.log(`${progressText} Downloading from URL...`)
-          const response = await axios.get(source.url, { responseType: "arraybuffer", timeout: 30000 })
-          buffer = Buffer.from(response.data)
-          console.log(`${progressText} ✓ Downloaded (${(buffer.length / 1024).toFixed(2)} KB)`)
-        } else if (typeof buffer === "string" && /^https?:\/\//.test(buffer)) {
-          console.log(`${progressText} Downloading from URL...`)
-          const response = await axios.get(buffer, { responseType: "arraybuffer", timeout: 30000 })
+        // Download if URL
+        if (source.url || (typeof buffer === "string" && /^https?:\/\//.test(buffer))) {
+          const url = source.url || buffer
+          const response = await axios.get(url, { responseType: "arraybuffer", timeout: 30000 })
           buffer = Buffer.from(response.data)
           console.log(`${progressText} ✓ Downloaded (${(buffer.length / 1024).toFixed(2)} KB)`)
         }
 
+        // Detect file type and convert
         const fileType = await fileTypeFromBuffer(buffer)
         const mime = fileType?.mime || ""
         const isVideo = source.isVideo || mime.startsWith("video/") || mime === "image/gif"
 
-        let stickerBuffer = isVideo ? await video2webp(buffer) : await image2webp(buffer)
+        const stickerBuffer = isVideo ? await video2webp(buffer) : await image2webp(buffer)
         console.log(`${progressText} ✓ ${isVideo ? 'Animated' : 'Static'} WebP (${(stickerBuffer.length / 1024).toFixed(2)} KB)`)
 
-        processedStickers.push({
+        return {
           buffer: stickerBuffer,
-          originalBuffer: buffer,
           emojis: source.emojis || ["😊"],
           isAnimated: isVideo,
           accessibilityLabel: source.accessibilityLabel,
-          oversized: stickerBuffer.length > MAX_STICKER_SIZE,
-          index: i,
-          progressText
-        })
-
-        console.log(`${progressText} ✓ Added to queue`)
+          index
+        }
       } catch (error) {
-        console.error(`[${i + 1}/${sources.length}] ❌ Error: ${error.message}`)
-        logger?.error?.(`Error processing sticker ${i}: ${error.message}`)
+        console.error(`[${index + 1}/${sources.length}] ❌ Error: ${error.message}`)
+        logger?.error?.(`Error processing sticker ${index}: ${error.message}`)
+        return null
       }
     }
+
+    // Process stickers with concurrency limit
+    const processedStickers = []
+    for (let i = 0; i < sources.length; i += concurrency) {
+      const batch = sources.slice(i, i + concurrency)
+      const batchPromises = batch.map((source, batchIndex) => 
+        processSticker(source, i + batchIndex)
+      )
+      const results = await Promise.all(batchPromises)
+      processedStickers.push(...results.filter(Boolean))
+    }
+
+    // Sort by original index to maintain order
+    processedStickers.sort((a, b) => a.index - b.index)
 
     console.log(`\n✓ Processing complete: ${processedStickers.length}/${sources.length} stickers`)
 
@@ -809,87 +811,35 @@ sock.sendStickerPack = async function (jid, sources, options = {}) {
       throw new Error("No stickers were successfully processed")
     }
 
-    // STEP 2: Split into batches (60 max per pack)
-    const batches = []
-    for (let i = 0; i < processedStickers.length; i += MAX_STICKERS_PER_PACK) {
-      batches.push(processedStickers.slice(i, i + MAX_STICKERS_PER_PACK))
-    }
+    // Send sticker pack
+    console.log(`\n📤 Sending sticker pack with ${processedStickers.length} stickers...`)
 
-    if (batches.length > 1) {
-      const msg = `⚠️ Your sticker pack (${processedStickers.length}) exceeds the 60 limit.\n\n🔄 Will be sent in ${batches.length} separate packs`
-      console.log(`\n📨 Sending notification...`)
-      await this.sendMessage(jid, { text: msg }, { quoted })
-      await new Promise(resolve => setTimeout(resolve, 800))
-    }
-
-    // STEP 3: Compress oversized stickers
-    const oversizedStickers = processedStickers.filter(s => s.oversized)
-    if (oversizedStickers.length > 0) {
-      console.log(`\n⚠️ Compressing ${oversizedStickers.length} oversized sticker(s)...`)
-      for (const sticker of oversizedStickers) {
-        try {
-          const compressed = sticker.isAnimated ? 
-            await video2webp(sticker.originalBuffer, 70) : 
-            await image2webp(sticker.originalBuffer, 70)
-          console.log(`${sticker.progressText} ✓ Compressed to ${(compressed.length / 1024).toFixed(2)} KB`)
-          sticker.buffer = compressed
-        } catch (error) {
-          console.error(`${sticker.progressText} ❌ Compression failed: ${error.message}`)
-        }
+    const stickerPackContent = {
+      stickerPack: {
+        name: packName,
+        publisher: packPublisher,
+        description: packDescription,
+        cover: processedStickers[0].buffer,
+        stickers: processedStickers.map(sticker => ({
+          data: sticker.buffer,
+          emojis: sticker.emojis,
+          isAnimated: sticker.isAnimated,
+          accessibilityLabel: sticker.accessibilityLabel
+        }))
       }
     }
 
-    // STEP 4: Send batches
-    console.log(`\n📤 Sending ${batches.length} batch(es)...`)
-    const results = []
-
-    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-      const batch = batches[batchIndex]
-      const batchLabel = `Batch ${batchIndex + 1}/${batches.length}`
-      console.log(`\n${batchLabel}: Sending ${batch.length} stickers...`)
-
-      const stickerPackContent = {
-        stickerPack: {
-          name: batches.length > 1 ? `${packName} (${batchIndex + 1}/${batches.length})` : packName,
-          publisher: packPublisher,
-          description: packDescription,
-          cover: batch[0].buffer,
-          stickers: batch.map(sticker => ({
-            data: sticker.buffer,
-            emojis: sticker.emojis,
-            isAnimated: sticker.isAnimated,
-            accessibilityLabel: sticker.accessibilityLabel
-          }))
-        }
-      }
-
-      try {
-        const result = await this.sendMessage(jid, stickerPackContent, { quoted })
-        results.push({ batch: batchIndex + 1, stickerCount: batch.length, result })
-        console.log(`✓ ${batchLabel}: Sent successfully!`)
-
-        if (batchIndex < batches.length - 1) {
-          console.log(`⏳ Waiting 2 seconds before next batch...`)
-          await new Promise(resolve => setTimeout(resolve, 2000))
-        }
-      } catch (batchError) {
-        console.error(`❌ ${batchLabel}: Failed - ${batchError.message}`)
-        logger?.error?.(`Error sending batch ${batchIndex + 1}: ${batchError.message}`)
-        throw batchError
-      }
-    }
-
-    const totalSent = results.reduce((sum, r) => sum + r.stickerCount, 0)
-    console.log(`\n✅ Sent ${totalSent}/${sources.length} stickers\n`)
-    logger?.info?.(`✅ Sticker packs: ${totalSent} stickers in ${batches.length} pack(s)`)
+    const result = await this.sendMessage(jid, stickerPackContent, { quoted })
+    
+    console.log(`\n✅ Sent ${processedStickers.length}/${sources.length} stickers\n`)
+    logger?.info?.(`✅ Sticker pack sent: ${processedStickers.length} stickers`)
 
     return {
       success: true,
       packName,
-      batchCount: batches.length,
-      totalStickersSent: totalSent,
+      totalStickersSent: processedStickers.length,
       totalStickersRequested: sources.length,
-      results
+      result
     }
 
   } catch (error) {
