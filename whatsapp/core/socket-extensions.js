@@ -751,146 +751,148 @@ export function extendSocket(sock) {
     quoted = null
   } = options
 
-  const stickers = []
-  let coverFilePath = null
-  const tempFiles = []
+  const MAX_STICKERS_PER_PACK = 60
+  const MAX_STICKER_SIZE = 1024 * 1024
 
   try {
     console.log(`\n📦 Processing ${sources.length} stickers...`)
-    
-    // Process all stickers
+    const processedStickers = []
+
     for (let i = 0; i < sources.length; i++) {
-      let tempFilePath = null
-      
       try {
         const source = sources[i]
         let buffer = source.buffer || source
         const progressText = `[${i + 1}/${sources.length}]`
         console.log(`${progressText} Processing sticker...`)
 
-        // Handle URL sources
         if (source.url) {
-          console.log(`${progressText} Downloading sticker from URL...`)
-          const response = await axios.get(source.url, { 
-            responseType: "arraybuffer",
-            timeout: 30000
-          })
+          console.log(`${progressText} Downloading from URL...`)
+          const response = await axios.get(source.url, { responseType: "arraybuffer", timeout: 30000 })
           buffer = Buffer.from(response.data)
-          console.log(`${progressText} ✓ Downloaded (${buffer.length} bytes)`)
+          console.log(`${progressText} ✓ Downloaded (${(buffer.length / 1024).toFixed(2)} KB)`)
         } else if (typeof buffer === "string" && /^https?:\/\//.test(buffer)) {
-          console.log(`${progressText} Downloading sticker from URL...`)
-          const response = await axios.get(buffer, { 
-            responseType: "arraybuffer",
-            timeout: 30000
-          })
+          console.log(`${progressText} Downloading from URL...`)
+          const response = await axios.get(buffer, { responseType: "arraybuffer", timeout: 30000 })
           buffer = Buffer.from(response.data)
-          console.log(`${progressText} ✓ Downloaded (${buffer.length} bytes)`)
+          console.log(`${progressText} ✓ Downloaded (${(buffer.length / 1024).toFixed(2)} KB)`)
         }
 
         const fileType = await fileTypeFromBuffer(buffer)
         const mime = fileType?.mime || ""
         const isVideo = source.isVideo || mime.startsWith("video/") || mime === "image/gif"
 
-        // Convert to webp
-        let stickerBuffer
-        if (isVideo) {
-          stickerBuffer = await video2webp(buffer)
-          console.log(`${progressText} ✓ Animated WebP (${stickerBuffer.length} bytes)`)
-        } else {
-          stickerBuffer = await image2webp(buffer)
-          console.log(`${progressText} ✓ Static WebP (${stickerBuffer.length} bytes)`)
-        }
+        let stickerBuffer = isVideo ? await video2webp(buffer) : await image2webp(buffer)
+        console.log(`${progressText} ✓ ${isVideo ? 'Animated' : 'Static'} WebP (${(stickerBuffer.length / 1024).toFixed(2)} KB)`)
 
-        // Validate size
-        if (stickerBuffer.length > 1024 * 1024) {
-          console.warn(`${progressText} ⚠️  Sticker exceeds 1MB, may fail`)
-        }
-
-        // Save to temp file (Baileys reads files better than buffers)
-        tempFilePath = path.join(os.tmpdir(), `sticker_${Date.now()}_${i}.webp`)
-        fs.writeFileSync(tempFilePath, stickerBuffer)
-        tempFiles.push(tempFilePath)
-
-        // Save first sticker as cover
-        if (i === 0 && !coverFilePath) {
-          coverFilePath = path.join(os.tmpdir(), `cover_${Date.now()}.webp`)
-          fs.writeFileSync(coverFilePath, stickerBuffer)
-          tempFiles.push(coverFilePath)
-        }
-
-        // ✅ KEY FIX: Use file URL format that Baileys expects
-        stickers.push({
-          data: { url: tempFilePath },  // File path as URL object property
+        processedStickers.push({
+          buffer: stickerBuffer,
+          originalBuffer: buffer,
           emojis: source.emojis || ["😊"],
           isAnimated: isVideo,
-          accessibilityLabel: source.accessibilityLabel
+          accessibilityLabel: source.accessibilityLabel,
+          oversized: stickerBuffer.length > MAX_STICKER_SIZE,
+          index: i,
+          progressText
         })
 
-        console.log(`${progressText} ✓ Added to pack`)
-
+        console.log(`${progressText} ✓ Added to queue`)
       } catch (error) {
         console.error(`[${i + 1}/${sources.length}] ❌ Error: ${error.message}`)
-        if (tempFilePath && fs.existsSync(tempFilePath)) {
-          fs.unlinkSync(tempFilePath)
-        }
         logger?.error?.(`Error processing sticker ${i}: ${error.message}`)
       }
     }
 
-    console.log(`\n✓ Processing complete: ${stickers.length}/${sources.length} stickers`)
+    console.log(`\n✓ Processing complete: ${processedStickers.length}/${sources.length} stickers`)
 
-    if (stickers.length === 0) {
+    if (processedStickers.length === 0) {
       throw new Error("No stickers were successfully processed")
     }
 
-    if (!coverFilePath) {
-      throw new Error("No cover file available")
+    const batches = []
+    for (let i = 0; i < processedStickers.length; i += MAX_STICKERS_PER_PACK) {
+      batches.push(processedStickers.slice(i, i + MAX_STICKERS_PER_PACK))
     }
 
-    // ✅ Send sticker pack with file paths (Baileys handles file reading internally)
-    console.log(`\n📤 Sending sticker pack with ${stickers.length} stickers...`)
-    
-    const stickerPackContent = {
-      stickerPack: {
-        name: packName,
-        publisher: packPublisher,
-        description: packDescription,
-        cover: { url: coverFilePath },  // ✅ File path as URL
-        stickers: stickers
+    if (batches.length > 1) {
+      const msg = `⚠️ Your sticker pack (${processedStickers.length}) exceeds the 60 limit.\n\n🔄 Will be sent in ${batches.length} separate packs`
+      console.log(`\n📨 Sending notification...`)
+      await this.sendMessage(jid, { text: msg }, { quoted })
+      await new Promise(resolve => setTimeout(resolve, 800))
+    }
+
+    const oversizedStickers = processedStickers.filter(s => s.oversized)
+    if (oversizedStickers.length > 0) {
+      console.log(`\n⚠️ Compressing ${oversizedStickers.length} oversized sticker(s)...`)
+      for (const sticker of oversizedStickers) {
+        try {
+          const compressed = sticker.isAnimated ? 
+            await video2webp(sticker.originalBuffer, 70) : 
+            await image2webp(sticker.originalBuffer, 70)
+          console.log(`${sticker.progressText} ✓ Compressed to ${(compressed.length / 1024).toFixed(2)} KB`)
+          sticker.buffer = compressed
+        } catch (error) {
+          console.error(`${sticker.progressText} ❌ Compression failed: ${error.message}`)
+        }
       }
     }
-    
-    const result = await this.sendMessage(jid, stickerPackContent, { quoted })
 
-    console.log(`✓ Sticker pack sent successfully!\n`)
-    logger?.info?.(`✅ Sticker pack sent: ${stickers.length} stickers`)
+    console.log(`\n📤 Sending ${batches.length} batch(es)...`)
+    const results = []
+
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+      const batch = batches[batchIndex]
+      const batchLabel = `Batch ${batchIndex + 1}/${batches.length}`
+      console.log(`\n${batchLabel}: Sending ${batch.length} stickers...`)
+
+      const coverBuffer = batch[0].buffer
+      const stickerPackContent = {
+        stickerPack: {
+          name: batches.length > 1 ? `${packName} (${batchIndex + 1}/${batches.length})` : packName,
+          publisher: packPublisher,
+          description: packDescription,
+          cover: { url: coverBuffer },
+          stickers: batch.map(sticker => ({
+            data: { url: sticker.buffer },
+            emojis: sticker.emojis,
+            isAnimated: sticker.isAnimated,
+            accessibilityLabel: sticker.accessibilityLabel
+          }))
+        }
+      }
+
+      try {
+        const result = await this.sendMessage(jid, stickerPackContent, { quoted })
+        results.push({ batch: batchIndex + 1, stickerCount: batch.length, result })
+        console.log(`✓ ${batchLabel}: Sent successfully!`)
+
+        if (batchIndex < batches.length - 1) {
+          console.log(`⏳ Waiting 2 seconds before next batch...`)
+          await new Promise(resolve => setTimeout(resolve, 2000))
+        }
+      } catch (batchError) {
+        console.error(`❌ ${batchLabel}: Failed - ${batchError.message}`)
+        logger?.error?.(`Error sending batch ${batchIndex + 1}: ${batchError.message}`)
+        throw batchError
+      }
+    }
+
+    const totalSent = results.reduce((sum, r) => sum + r.stickerCount, 0)
+    console.log(`\n✅ Sent ${totalSent}/${sources.length} stickers\n`)
+    logger?.info?.(`✅ Sticker packs: ${totalSent} stickers in ${batches.length} pack(s)`)
 
     return {
       success: true,
       packName,
-      stickerCount: stickers.length,
-      totalCount: sources.length,
-      result
+      batchCount: batches.length,
+      totalStickersSent: totalSent,
+      totalStickersRequested: sources.length,
+      results
     }
 
   } catch (error) {
     console.error('❌ Error sending sticker pack:', error)
     logger?.error?.('Error sending sticker pack:', error)
     throw error
-  } finally {
-    // Cleanup temp files after a delay (let Baileys finish reading them)
-    setTimeout(() => {
-      for (const tempFile of tempFiles) {
-        try {
-          if (fs.existsSync(tempFile)) {
-            fs.unlinkSync(tempFile)
-            console.log(`🗑️  Cleaned up: ${path.basename(tempFile)}`)
-          }
-        } catch (cleanupError) {
-          console.warn(`Failed to cleanup: ${tempFile}`)
-        }
-      }
-    }, 5000) // 5 second delay to ensure Baileys is done
   }
 }
 

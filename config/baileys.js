@@ -1,4 +1,3 @@
-//import '../baileys-patch.js';
 import NodeCache from "node-cache"
 import {
   makeWASocket as originalMakeWASocket,
