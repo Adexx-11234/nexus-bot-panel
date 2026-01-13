@@ -349,7 +349,24 @@ async _reinitializeSession(sessionId) {
         logger.warn(`No user JID for ${sessionId} - will be caught on next 5min stale check`)
         return
       }
+      
+    // ✅ CRITICAL: Clean device ID from Baileys v7 format (e.g., :7)
+    if (userJid) {
+      // Remove device ID suffix if present (e.g., :0, :1, :7, etc)
+      userJid = userJid.split(':')[0]
+      logger.debug(`Cleaned user JID (removed device ID): ${userJid}`)
+    }
 
+    // ✅ Ensure JID is properly formatted
+    if (userJid && userJid.includes('@')) {
+      logger.debug(`User JID already has @suffix: ${userJid}`)
+    } else if (userJid) {
+      userJid = userJid + '@s.whatsapp.net'
+      logger.debug(`Formatted user JID with @s.whatsapp.net: ${userJid}`)
+    } else {
+      logger.error(`No user JID found for ${sessionId}`)
+      return
+    }
       if (!sock?.ws || sock.ws.socket?._readyState !== 1) {
         logger.warn(`Socket invalid for ${sessionId}`)
         await this._handlePingFailure(sessionId, data, sock)

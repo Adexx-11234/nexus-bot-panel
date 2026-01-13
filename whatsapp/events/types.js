@@ -209,19 +209,6 @@ export const DisconnectConfig = {
     handler: 'handleConnectionReplaced'
   },
   
-  [DisconnectReason.INTERNAL_SERVER_ERROR]: {
-    statusCode: 500,
-    shouldReconnect: true,
-    isPermanent: false,
-    requiresCleanup: false,
-    keepCredentials: true,
-    reconnectDelay: 10000,
-    maxAttempts: 20,
-    message: 'WhatsApp internal server error',
-    userAction: 'Retrying connection...',
-    handler: 'handleInternalError'
-  },
-  
   [DisconnectReason.NOT_FOUND]: {
     statusCode: 404,
     shouldReconnect: true,

@@ -60,14 +60,14 @@ export class ConnectionEventHandler {
   }
 
   _startReconnection(sessionId, type = "standard") {
-    this.activeReconnections.set(sessionId, {
-      startTime: Date.now(),
-      attempt: (this.activeReconnections.get(sessionId)?.attempt || 0) + 1,
-      type,
-    })
-    this.reconnectionLocks.add(sessionId)
-    logger.info(`🔄 Starting ${type} reconnection for ${sessionId}`)
-  }
+  this.activeReconnections.set(sessionId, {
+    startTime: Date.now(),
+    attempt: (this.activeReconnections.get(sessionId)?.attempt || 0) + 1,
+    type,  // ✅ This will be 500 for Bad MAC errors
+  })
+  this.reconnectionLocks.add(sessionId)
+  logger.info(`🔄 Starting ${type} reconnection for ${sessionId}`)
+}
 
   _endReconnection(sessionId, success = false) {
     const reconnection = this.activeReconnections.get(sessionId)
@@ -342,33 +342,31 @@ export class ConnectionEventHandler {
   }
 
   async _handleBadMac(sessionId, config) {
-    try {
-      logger.info(`🔧 ${config.message} for ${sessionId}`)
+  try {
+    logger.info(`🔧 ${config.message} for ${sessionId}`)
 
-      const session = await this.sessionManager.storage.getSession(sessionId)
-      if (!session) {
-        logger.error(`❌ No session data found for ${sessionId}`)
-        return
-      }
-
-      const sock = this.sessionManager.activeSockets?.get(sessionId)
-      if (sock) {
-        await this._cleanupSocketBeforeReconnect(sock, sessionId)
-      }
-
-      await this.sessionManager.storage.updateSession(sessionId, {
-        isConnected: true,
-        connectionStatus: "connected",
-        reconnectAttempts: 0,
-      })
-
-      await this._scheduleReconnection(sessionId, config)
-    } catch (error) {
-      logger.error(`❌ Bad MAC handler error for ${sessionId}:`, error)
-      this.reconnectionLocks.delete(sessionId)
-      await this.sessionManager.performCompleteUserCleanup(sessionId)
+    const session = await this.sessionManager.storage.getSession(sessionId)
+    if (!session) {
+      logger.error(`❌ No session data found for ${sessionId}`)
+      return
     }
+
+    // ✅ Clean socket in memory only - preserves all auth files
+    await this.sessionManager._cleanupSocketInMemory(sessionId)
+
+    await this.sessionManager.storage.updateSession(sessionId, {
+      isConnected: false,
+      connectionStatus: "reconnecting",
+    })
+
+    await this._scheduleReconnection(sessionId, config)
+  } catch (error) {
+    logger.error(`❌ Bad MAC handler error for ${sessionId}:`, error)
+    this.reconnectionLocks.delete(sessionId)
+    // Only cleanup if something went really wrong
+    await this.sessionManager.performCompleteUserCleanup(sessionId)
   }
+}
 
   async _handleForbidden(sessionId, config) {
     try {
@@ -445,22 +443,25 @@ export class ConnectionEventHandler {
   }
 
   async _attemptReconnection(sessionId) {
-    try {
-      const session = await this.sessionManager.storage.getSession(sessionId)
+  try {
+    const session = await this.sessionManager.storage.getSession(sessionId)
 
-      if (!session) {
-        logger.error(`No session data found for ${sessionId} - performing complete cleanup`)
+    if (!session) {
+      logger.error(`No session data found for ${sessionId} - performing complete cleanup`)
+      this._endReconnection(sessionId, false)
+      this.reconnectionLocks.delete(sessionId)
+      await this.sessionManager.performCompleteUserCleanup(sessionId)
+      return false
+    }
 
-        // Clear reconnection state
-        this._endReconnection(sessionId, false)
-        this.reconnectionLocks.delete(sessionId)
-
-        // Perform complete user cleanup
-        await this.sessionManager.performCompleteUserCleanup(sessionId)
-
-        return false
-      }
-
+    // ✅ Get the reconnection context to check the disconnect reason
+    const reconnection = this.activeReconnections.get(sessionId)
+    const reconnectType = reconnection?.type
+    
+    // ✅ Skip auth check for 500 errors (Bad MAC) - they need to reuse existing auth
+    const shouldVerifyAuth = reconnectType !== 500 && reconnectType !== "500"
+    
+    if (shouldVerifyAuth) {
       // Verify auth integrity before reconnection attempt
       const hasValidAuth = await this._verifyAuthIntegrity(sessionId)
       if (!hasValidAuth) {
@@ -477,10 +478,8 @@ export class ConnectionEventHandler {
           return false
         }
 
-        // Wait longer before retry if auth is potentially being written
         await new Promise((resolve) => setTimeout(resolve, 5000))
 
-        // Re-check auth
         const retryAuth = await this._verifyAuthIntegrity(sessionId)
         if (!retryAuth) {
           logger.error(`Auth still invalid for ${sessionId} after wait - scheduling retry`)
@@ -491,71 +490,70 @@ export class ConnectionEventHandler {
           return false
         }
       }
+    } else {
+      logger.info(`Skipping auth integrity check for ${sessionId} (reconnect type: ${reconnectType})`)
+    }
 
-      const newAttempts = (session.reconnectAttempts || 0) + 1
-      await this.sessionManager.storage
-        .updateSession(sessionId, {
-          reconnectAttempts: newAttempts,
-          connectionStatus: "connecting",
-        })
-        .catch((err) => logger.warn(`Failed to update attempts: ${err.message}`))
+    const newAttempts = (session.reconnectAttempts || 0) + 1
+    await this.sessionManager.storage
+      .updateSession(sessionId, {
+        reconnectAttempts: newAttempts,
+        connectionStatus: "connecting",
+      })
+      .catch((err) => logger.warn(`Failed to update attempts: ${err.message}`))
 
-      logger.info(`Reconnection attempt ${newAttempts} for ${sessionId}`)
+    logger.info(`Reconnection attempt ${newAttempts} for ${sessionId}`)
 
-      const sock = await this.sessionManager.createSession(
-        session.userId,
-        session.phoneNumber,
-        session.callbacks || {},
-        true,
-        session.source || "telegram",
-        false,
-      )
+    const sock = await this.sessionManager.createSession(
+      session.userId,
+      session.phoneNumber,
+      session.callbacks || {},
+      true,
+      session.source || "telegram",
+      false,
+    )
 
-      if (sock) {
-        logger.info(`Reconnection successful for ${sessionId}`)
-        this._endReconnection(sessionId, true)
-        return true
-      }
+    if (sock) {
+      logger.info(`Reconnection successful for ${sessionId}`)
+      this._endReconnection(sessionId, true)
+      return true
+    }
 
-      return false
-    } catch (error) {
-      logger.error(`Reconnection failed for ${sessionId}:`, error)
+    return false
+  } catch (error) {
+    logger.error(`Reconnection failed for ${sessionId}:`, error)
 
-      const session = await this.sessionManager.storage.getSession(sessionId).catch(() => null)
+    const session = await this.sessionManager.storage.getSession(sessionId).catch(() => null)
 
-      // If session doesn't exist after error, cleanup completely
-      if (!session) {
-        logger.error(`Session ${sessionId} no longer exists after error - performing complete cleanup`)
-
-        this._endReconnection(sessionId, false)
-        this.reconnectionLocks.delete(sessionId)
-
-        await this.sessionManager.performCompleteUserCleanup(sessionId)
-
-        return false
-      }
-
-      const attempts = session.reconnectAttempts || 0
-      const maxAttempts = getMaxAttempts(428)
-
-      if (attempts >= maxAttempts) {
-        logger.warn(`Session ${sessionId} exceeded max reconnection attempts (${attempts}/${maxAttempts}) - stopping`)
-        this._endReconnection(sessionId, false)
-        return false
-      }
-
-      const delay = getReconnectDelay(428, attempts)
-      logger.info(`Scheduling retry for ${sessionId} in ${delay}ms (attempt ${attempts + 1}/${maxAttempts})`)
-
-      setTimeout(() => {
-        if (this._isReconnecting(sessionId)) {
-          this._attemptReconnection(sessionId)
-        }
-      }, delay)
-
+    if (!session) {
+      logger.error(`Session ${sessionId} no longer exists after error - performing complete cleanup`)
+      this._endReconnection(sessionId, false)
+      this.reconnectionLocks.delete(sessionId)
+      await this.sessionManager.performCompleteUserCleanup(sessionId)
       return false
     }
+
+    const attempts = session.reconnectAttempts || 0
+    const maxAttempts = getMaxAttempts(428)
+
+    if (attempts >= maxAttempts) {
+      logger.warn(`Session ${sessionId} exceeded max reconnection attempts (${attempts}/${maxAttempts}) - stopping`)
+      this._endReconnection(sessionId, false)
+      return false
+    }
+
+    const delay = getReconnectDelay(428, attempts)
+    logger.info(`Scheduling retry for ${sessionId} in ${delay}ms (attempt ${attempts + 1}/${maxAttempts})`)
+
+    setTimeout(() => {
+      if (this._isReconnecting(sessionId)) {
+        this._attemptReconnection(sessionId)
+      }
+    }, delay)
+
+    return false
   }
+}
 
   // Verify auth state integrity before reconnection
   async _verifyAuthIntegrity(sessionId) {
