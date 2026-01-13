@@ -55,20 +55,19 @@ export default {
         label: ""
       }))
 
-      // Send the entire pack using sock.sendStickerPack (PROPER VERSION)
+      // Send the entire pack using sock.sendStickerPack
       const result = await sock.sendStickerPack(m.chat, sources, {
         packName: packName,
-        packPublisher: "𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙",
+        packPublisher: "𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖳",
         quoted: m
       })
 
-      // Result from sendStickerPack is: { success: true, packId, stickerCount, result }
+      // Result from sendStickerPack is: { success: true, packName, stickerCount, totalCount }
       if (result.success) {
         await m.reply(
           `✅ Telegram sticker pack imported!\n\n` +
           `📦 Pack: ${packName}\n` +
-          `🆔 Pack ID: ${result.packId}\n` +
-          `✔️ Stickers: ${result.stickerCount}\n\n` +
+          `✔️ Stickers: ${result.stickerCount}/${result.totalCount}\n\n` +
           `> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
         )
 

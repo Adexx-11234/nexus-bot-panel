@@ -744,7 +744,7 @@ export function extendSocket(sock) {
   sock.sendStickerPack = async function (jid, sources, options = {}) {
     const {
       packName = "Custom Sticker Pack",
-      packPublisher = "𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙",
+      packPublisher = "𝕹𝖊𝖝𝖚𝖘 𝕭𝖔�",
       quoted = null
     } = options
 
@@ -752,7 +752,7 @@ export function extendSocket(sock) {
     const tempFiles = []
 
     try {
-      const crypto = await import('crypto')
+      console.log(`\n📦 Processing ${sources.length} stickers...`)
       
       // Step 1: Process all stickers and create metadata
       for (let i = 0; i < sources.length; i++) {
@@ -767,153 +767,97 @@ export function extendSocket(sock) {
           // Handle URL sources
           if (source.url) {
             console.log(`${progressText} Downloading sticker from URL...`)
-            const response = await axios.get(source.url, { responseType: "arraybuffer" })
+            const response = await axios.get(source.url, { 
+              responseType: "arraybuffer",
+              timeout: 30000
+            })
             buffer = Buffer.from(response.data)
-            console.log(`${progressText} Downloaded (${buffer.length} bytes)`)
+            console.log(`${progressText} ✓ Downloaded (${buffer.length} bytes)`)
           } else if (typeof buffer === "string" && /^https?:\/\//.test(buffer)) {
             console.log(`${progressText} Downloading sticker from URL...`)
-            const response = await axios.get(buffer, { responseType: "arraybuffer" })
+            const response = await axios.get(buffer, { 
+              responseType: "arraybuffer",
+              timeout: 30000
+            })
             buffer = Buffer.from(response.data)
-            console.log(`${progressText} Downloaded (${buffer.length} bytes)`)
+            console.log(`${progressText} ✓ Downloaded (${buffer.length} bytes)`)
           }
 
           const fileType = await fileTypeFromBuffer(buffer)
           const mime = fileType?.mime || ""
           const isVideo = source.isVideo || mime.startsWith("video/") || mime === "image/gif"
-          console.log(`${progressText} Type: ${isVideo ? "Video/Animated" : "Static"}`)
 
           // Convert to webp
           let stickerBuffer
           if (isVideo) {
-            console.log(`${progressText} Converting to animated WebP...`)
             stickerBuffer = await video2webp(buffer)
-            console.log(`${progressText} ✓ Converted to animated WebP (${stickerBuffer.length} bytes)`)
+            console.log(`${progressText} ✓ Animated WebP (${stickerBuffer.length} bytes)`)
           } else {
-            console.log(`${progressText} Converting to static WebP...`)
             stickerBuffer = await image2webp(buffer)
-            console.log(`${progressText} ✓ Converted to static WebP (${stickerBuffer.length} bytes)`)
+            console.log(`${progressText} ✓ Static WebP (${stickerBuffer.length} bytes)`)
           }
 
-          // Generate file hash for filename
-          const fileSha256 = crypto.createHash('sha256').update(stickerBuffer).digest('base64')
-          const fileName = `${fileSha256.replace(/[/+=]/g, '')}.webp`
-
+          // Store as sticker message
           stickers.push({
-            fileName: fileName,
+            sticker: stickerBuffer,
             isAnimated: isVideo,
-            emojis: source.emojis || ["😊"],
-            accessibilityLabel: source.label || "",
-            isLottie: false,
-            mimetype: "image/webp",
-            buffer: stickerBuffer
+            emojis: source.emojis || ["😊"]
           })
 
-          tempFilePath = getTempFilePath('stickerPack', '.webp')
+          tempFilePath = getTempFilePath('sticker', '.webp')
           fs.writeFileSync(tempFilePath, stickerBuffer)
           tempFiles.push(tempFilePath)
 
         } catch (error) {
-          console.error(`[${i + 1}/${sources.length}] ❌ Error processing sticker:`, error.message)
+          console.error(`[${i + 1}/${sources.length}] ❌ Error:`, error.message)
           logger.error(`Error processing sticker ${i}:`, error.message)
           if (tempFilePath) {
             cleanupTempFile(tempFilePath)
           }
         }
       }
-      console.log(`✓ Sticker processing complete: ${stickers.length}/${sources.length} stickers successfully converted`)
+
+      console.log(`\n✓ Processing complete: ${stickers.length}/${sources.length} stickers converted`)
 
       if (stickers.length === 0) {
         throw new Error("No stickers were successfully processed")
       }
 
-      // Step 2: Create a combined buffer of all stickers
-      const packId = crypto.randomUUID()
-      const allStickersBuffers = stickers.map(s => s.buffer)
-      const combinedBuffer = Buffer.concat(allStickersBuffers)
+      // Step 2: Send individual sticker messages (WhatsApp expects stickers sent individually in a pack)
+      console.log(`\n📤 Sending ${stickers.length} stickers...`)
+      let successCount = 0
       
-      // Step 3: Generate thumbnail (use first sticker)
-      const thumbnailBuffer = await sharp(stickers[0].buffer)
-        .resize(252, 252, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
-        .webp()
-        .toBuffer()
-
-      const thumbnailSha256 = crypto.createHash('sha256').update(thumbnailBuffer).digest('base64')
-      const trayIconFileName = `${packId}.png`
-
-      // Step 4: Upload the sticker pack to WhatsApp servers
-      const uploadResult = await this.waUploadToServer(
-        combinedBuffer,
-        { 
-          fileEncSha256: true, 
-          mediaType: 'sticker_pack' 
-        }
-      )
-
-      // Step 5: Calculate file hashes
-      const fileSha256 = crypto.createHash('sha256').update(combinedBuffer).digest('base64')
-      const imageDataHash = crypto.createHash('sha256').update(combinedBuffer).digest('hex')
-      const imageDataHashBase64 = Buffer.from(imageDataHash, 'hex').toString('base64')
-
-      // Step 6: Upload thumbnail
-      const thumbnailUploadResult = await this.waUploadToServer(
-        thumbnailBuffer,
-        { 
-          fileEncSha256: true, 
-          mediaType: 'thumbnail' 
-        }
-      )
-
-      const thumbnailEncSha256 = crypto.createHash('sha256')
-        .update(thumbnailBuffer)
-        .digest('base64')
-
-      // Step 7: Build the sticker pack message
-      const stickerPackMessage = {
-        stickerPackMessage: {
-          stickerPackId: packId,
-          name: packName,
-          publisher: packPublisher,
-          stickers: stickers.map(s => ({
-            fileName: s.fileName,
-            isAnimated: s.isAnimated,
-            emojis: s.emojis,
-            accessibilityLabel: s.accessibilityLabel,
-            isLottie: s.isLottie,
-            mimetype: s.mimetype
-          })),
-          fileLength: combinedBuffer.length.toString(),
-          fileSha256: fileSha256,
-          fileEncSha256: uploadResult.fileEncSha256,
-          mediaKey: uploadResult.mediaKey,
-          directPath: uploadResult.directPath,
-          contextInfo: {},
-          mediaKeyTimestamp: Math.floor(Date.now() / 1000).toString(),
-          trayIconFileName: trayIconFileName,
-          thumbnailDirectPath: thumbnailUploadResult.directPath,
-          thumbnailSha256: thumbnailSha256,
-          thumbnailEncSha256: thumbnailEncSha256,
-          thumbnailHeight: 252,
-          thumbnailWidth: 252,
-          imageDataHash: imageDataHashBase64,
-          stickerPackSize: combinedBuffer.length.toString(),
-          stickerPackOrigin: "USER_CREATED"
+      for (let i = 0; i < stickers.length; i++) {
+        try {
+          const sticker = stickers[i]
+          await this.sendMessage(
+            jid,
+            {
+              sticker: sticker.sticker
+            },
+            { quoted: i === 0 ? quoted : null }
+          )
+          successCount++
+          
+          // Progress update every 10 stickers or at the end
+          if ((i + 1) % 10 === 0 || i === stickers.length - 1) {
+            console.log(`[${i + 1}/${stickers.length}] ✓ Sent`)
+          }
+        } catch (error) {
+          console.error(`[${i + 1}/${stickers.length}] ❌ Failed to send:`, error.message)
+          logger.error(`Error sending sticker ${i}:`, error.message)
         }
       }
 
-      // Step 8: Send the message
-      const result = await this.sendMessage(
-        jid,
-        stickerPackMessage,
-        { quoted }
-      )
-
-      logger.info(`✅ Sticker pack sent successfully: ${stickers.length} stickers`)
+      console.log(`\n✓ Sticker pack complete: ${successCount}/${stickers.length} stickers sent\n`)
+      
+      logger.info(`✅ Telegram sticker pack imported: ${successCount} stickers sent`)
 
       return {
-        success: true,
-        packId,
-        stickerCount: stickers.length,
-        result
+        success: successCount > 0,
+        packName,
+        stickerCount: successCount,
+        totalCount: stickers.length
       }
 
     } catch (error) {
