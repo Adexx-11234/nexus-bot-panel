@@ -807,7 +807,7 @@ export class SessionManager {
       }
 
       const mem = process.memoryUsage()
-      logger.debug(`Memory: RSS ${Math.round(mem.rss / 1024 / 1024)}MB, Heap ${Math.round(mem.heapUsed / 1024 / 1024)}MB`)
+      //logger.debug(`Memory: RSS ${Math.round(mem.rss / 1024 / 1024)}MB, Heap ${Math.round(mem.heapUsed / 1024 / 1024)}MB`)
     }, CONFIG.CLEANUP_INTERVAL)
   }
 
