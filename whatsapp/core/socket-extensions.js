@@ -832,11 +832,14 @@ export function extendSocket(sock) {
         throw new Error("No stickers were successfully processed")
       }
 
-      // Step 2: Build the sticker pack message with metadata ONLY
-      // Do NOT include actual buffers - WhatsApp serves media via directPath and mediaKey
+      // Step 2: Prepare sticker pack metadata (will be used in proto message)
       const packId = crypto.randomUUID()
+
+      // Step 3: Send the sticker pack message
+      // Send as a plain JS object that Baileys will wrap in proto
+      console.log(`📤 Sending sticker pack...`)
       
-      const stickerPackMessage = {
+      const stickerPackContent = {
         stickerPackMessage: {
           stickerPackId: packId,
           name: packName,
@@ -849,13 +852,11 @@ export function extendSocket(sock) {
             isLottie: s.isLottie,
             mimetype: s.mimetype
           })),
-          // These values are just for reference - WhatsApp doesn't actually use them
           fileLength: "0",
           fileSha256: Buffer.from(crypto.randomBytes(32)).toString('base64'),
           fileEncSha256: Buffer.from(crypto.randomBytes(32)).toString('base64'),
           mediaKey: Buffer.from(crypto.randomBytes(32)).toString('base64'),
           directPath: `/v/t62.sticker-pack-0/${packId}?type=download`,
-          contextInfo: {},
           mediaKeyTimestamp: Math.floor(Date.now() / 1000).toString(),
           trayIconFileName: `${packId}.png`,
           thumbnailDirectPath: `/v/t62.sticker-pack-0/${packId}-thumb?type=download`,
@@ -868,25 +869,30 @@ export function extendSocket(sock) {
           stickerPackOrigin: "USER_CREATED"
         }
       }
-
-      // Step 3: Send the sticker pack message
-      console.log(`📤 Sending sticker pack...`)
-      const result = await this.sendMessage(
-        jid,
-        stickerPackMessage,
-        { quoted }
-      )
-
-      console.log(`✓ Sticker pack sent successfully!\n`)
-      logger.info(`✅ Sticker pack sent: ${stickers.length} stickers`)
-
-      return {
-        success: true,
-        packId,
-        packName,
-        stickerCount: stickers.length,
-        totalCount: sources.length,
-        result
+      
+      try {
+        // Try to send normally first
+        const result = await this.sendMessage(jid, stickerPackContent, { quoted })
+        console.log(`✓ Sticker pack sent successfully!\n`)
+        logger.info(`✅ Sticker pack sent: ${stickers.length} stickers`)
+        return {
+          success: true,
+          packId,
+          packName,
+          stickerCount: stickers.length,
+          totalCount: sources.length,
+          result
+        }
+      } catch (sendErr) {
+        // If normal send fails, try alternative: create a message with only non-media content
+        console.warn(`Standard send failed (${sendErr.message}), trying alternative method...`)
+        logger.warn(`Standard send failed: ${sendErr.message}`)
+        
+        // Fall back to sending as a text message with sticker info
+        const alternativeMessage = `📦 Sticker Pack: ${packName}\n👤 By: ${packPublisher}\n\n Stickers: ${stickers.length}`
+        await this.sendMessage(jid, { text: alternativeMessage }, { quoted })
+        
+        throw new Error(`Could not send sticker pack as native message. Sent as text instead. Error: ${sendErr.message}`)
       }
 
     } catch (error) {
