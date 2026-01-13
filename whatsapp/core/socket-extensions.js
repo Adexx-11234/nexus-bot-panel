@@ -747,94 +747,60 @@ export function extendSocket(sock) {
       packName = "Custom Sticker Pack",
       packPublisher = "𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙",
       packDescription = "",
+      coverUrl = null,
       quoted = null
     } = options
 
     const stickers = []
-    const tempFiles = []
-    let coverBuffer = null
 
     try {
       console.log(`\n📦 Processing ${sources.length} stickers...`)
       
-      // Step 1: Process all stickers
+      let firstStickerUrl = null
+
+      // Process all stickers
       for (let i = 0; i < sources.length; i++) {
-        let tempFilePath = null
-        
         try {
           const source = sources[i]
-          let buffer = source.buffer || source
           const progressText = `[${i + 1}/${sources.length}]`
           console.log(`${progressText} Processing sticker...`)
 
-          // Handle URL sources
-          if (source.url) {
-            console.log(`${progressText} Downloading sticker from URL...`)
-            const response = await axios.get(source.url, { 
-              responseType: "arraybuffer",
-              timeout: 30000
-            })
-            buffer = Buffer.from(response.data)
-            console.log(`${progressText} ✓ Downloaded (${buffer.length} bytes)`)
-          } else if (typeof buffer === "string" && /^https?:\/\//.test(buffer)) {
-            console.log(`${progressText} Downloading sticker from URL...`)
-            const response = await axios.get(buffer, { 
-              responseType: "arraybuffer",
-              timeout: 30000
-            })
-            buffer = Buffer.from(response.data)
-            console.log(`${progressText} ✓ Downloaded (${buffer.length} bytes)`)
-          }
+          let stickerUrl = source.url || source
 
-          const fileType = await fileTypeFromBuffer(buffer)
-          const mime = fileType?.mime || ""
-          const isVideo = source.isVideo || mime.startsWith("video/") || mime === "image/gif"
+          // Validate URL
+          if (typeof stickerUrl === "string" && /^https?:\/\//.test(stickerUrl)) {
+            console.log(`${progressText} ✓ Sticker URL: ${stickerUrl}`)
+            
+            // Save first sticker URL for cover
+            if (i === 0 && !firstStickerUrl) {
+              firstStickerUrl = stickerUrl
+            }
 
-          // Convert to webp
-          let stickerBuffer
-          if (isVideo) {
-            stickerBuffer = await video2webp(buffer)
-            console.log(`${progressText} ✓ Animated WebP (${stickerBuffer.length} bytes)`)
+            // Add sticker in correct format
+            stickers.push({
+              sticker: { url: stickerUrl },
+              emojis: source.emojis || ["😊"],
+              isLottie: source.isLottie || false,
+              isAnimated: source.isAnimated || false
+            })
           } else {
-            stickerBuffer = await image2webp(buffer)
-            console.log(`${progressText} ✓ Static WebP (${stickerBuffer.length} bytes)`)
+            console.error(`${progressText} ❌ Invalid URL format`)
+            logger.error(`Sticker ${i} is not a valid URL`)
           }
-
-          // Save first sticker as cover if not set
-          if (i === 0 && !coverBuffer) {
-            coverBuffer = stickerBuffer
-          }
-
-          // Create temp file path for sticker
-          tempFilePath = getTempFilePath('sticker', '.webp')
-          fs.writeFileSync(tempFilePath, stickerBuffer)
-          tempFiles.push(tempFilePath)
-
-          // Add sticker in correct format
-          stickers.push({
-            sticker: { url: tempFilePath }, // Can also use buffer directly
-            emojis: source.emojis || ["😊"],
-            isLottie: false,
-            isAnimated: isVideo
-          })
 
         } catch (error) {
           console.error(`[${i + 1}/${sources.length}] ❌ Error: ${error.message}`)
-          if (error.stack) console.error(error.stack)
           logger.error(`Error processing sticker ${i}: ${error.message}`)
-          if (tempFilePath) {
-            cleanupTempFile(tempFilePath)
-          }
         }
       }
 
-      console.log(`\n✓ Processing complete: ${stickers.length}/${sources.length} stickers converted`)
+      console.log(`\n✓ Processing complete: ${stickers.length}/${sources.length} stickers added`)
 
       if (stickers.length === 0) {
-        throw new Error("No stickers were successfully processed")
+        throw new Error("No valid sticker URLs were provided")
       }
 
-      // Step 2: Send the sticker pack using correct format
+      // Send the sticker pack using correct format
       console.log(`📤 Sending sticker pack...`)
       
       const stickerPackContent = {
@@ -842,7 +808,7 @@ export function extendSocket(sock) {
           name: packName,
           publisher: packPublisher,
           description: packDescription,
-          cover: coverBuffer, // First sticker as cover
+          cover: { url: coverUrl || firstStickerUrl }, // Use provided cover or first sticker
           stickers: stickers
         }
       }
@@ -863,11 +829,6 @@ export function extendSocket(sock) {
     } catch (error) {
       logger.error('Error sending sticker pack:', error)
       throw error
-    } finally {
-      // Cleanup temp files
-      for (const tempFile of tempFiles) {
-        cleanupTempFile(tempFile)
-      }
     }
   }
 
