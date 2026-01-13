@@ -761,26 +761,37 @@ export function extendSocket(sock) {
         try {
           const source = sources[i]
           let buffer = source.buffer || source
+          const progressText = `[${i + 1}/${sources.length}]`
+          console.log(`${progressText} Processing sticker...`)
 
           // Handle URL sources
           if (source.url) {
+            console.log(`${progressText} Downloading sticker from URL...`)
             const response = await axios.get(source.url, { responseType: "arraybuffer" })
             buffer = Buffer.from(response.data)
+            console.log(`${progressText} Downloaded (${buffer.length} bytes)`)
           } else if (typeof buffer === "string" && /^https?:\/\//.test(buffer)) {
+            console.log(`${progressText} Downloading sticker from URL...`)
             const response = await axios.get(buffer, { responseType: "arraybuffer" })
             buffer = Buffer.from(response.data)
+            console.log(`${progressText} Downloaded (${buffer.length} bytes)`)
           }
 
           const fileType = await fileTypeFromBuffer(buffer)
           const mime = fileType?.mime || ""
           const isVideo = source.isVideo || mime.startsWith("video/") || mime === "image/gif"
+          console.log(`${progressText} Type: ${isVideo ? "Video/Animated" : "Static"}`)
 
           // Convert to webp
           let stickerBuffer
           if (isVideo) {
+            console.log(`${progressText} Converting to animated WebP...`)
             stickerBuffer = await video2webp(buffer)
+            console.log(`${progressText} ✓ Converted to animated WebP (${stickerBuffer.length} bytes)`)
           } else {
+            console.log(`${progressText} Converting to static WebP...`)
             stickerBuffer = await image2webp(buffer)
+            console.log(`${progressText} ✓ Converted to static WebP (${stickerBuffer.length} bytes)`)
           }
 
           // Generate file hash for filename
@@ -802,12 +813,14 @@ export function extendSocket(sock) {
           tempFiles.push(tempFilePath)
 
         } catch (error) {
+          console.error(`[${i + 1}/${sources.length}] ❌ Error processing sticker:`, error.message)
           logger.error(`Error processing sticker ${i}:`, error.message)
           if (tempFilePath) {
             cleanupTempFile(tempFilePath)
           }
         }
       }
+      console.log(`✓ Sticker processing complete: ${stickers.length}/${sources.length} stickers successfully converted`)
 
       if (stickers.length === 0) {
         throw new Error("No stickers were successfully processed")

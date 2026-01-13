@@ -42,6 +42,8 @@ export default {
         `📦 Found ${stickers.length} stickers (${staticCount} static, ${videoCount} video)\n⏳ Processing and sending as sticker pack...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
       )
 
+      console.log(`[TELESTICKER] Processing ${stickers.length} stickers (${staticCount} static, ${videoCount} video)`)
+
       // Extract pack name from URL
       const packName = url.replace("https://t.me/addstickers/", "")
 
