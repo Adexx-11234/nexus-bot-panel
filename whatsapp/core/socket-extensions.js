@@ -743,7 +743,7 @@ export function extendSocket(sock) {
 
   // ==================== STICKER PACK SENDER ====================
   
-  sock.sendStickerPack = async function (jid, sources, options = {}) {
+sock.sendStickerPack = async function (jid, sources, options = {}) {
   const {
     packName = "Custom Sticker Pack",
     packPublisher = "𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙",
@@ -844,15 +844,14 @@ export function extendSocket(sock) {
       const batchLabel = `Batch ${batchIndex + 1}/${batches.length}`
       console.log(`\n${batchLabel}: Sending ${batch.length} stickers...`)
 
-      const coverBuffer = batch[0].buffer
       const stickerPackContent = {
         stickerPack: {
           name: batches.length > 1 ? `${packName} (${batchIndex + 1}/${batches.length})` : packName,
           publisher: packPublisher,
           description: packDescription,
-          cover: { url: coverBuffer },
+          cover: batch[0].buffer,
           stickers: batch.map(sticker => ({
-            data: { url: sticker.buffer },
+            data: sticker.buffer,
             emojis: sticker.emojis,
             isAnimated: sticker.isAnimated,
             accessibilityLabel: sticker.accessibilityLabel
