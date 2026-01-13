@@ -832,8 +832,21 @@ export function extendSocket(sock) {
         throw new Error("No stickers were successfully processed")
       }
 
-      // Step 2: Prepare sticker pack metadata (will be used in proto message)
+      // Step 2: Prepare sticker pack metadata
       const packId = crypto.randomUUID()
+      
+      // Calculate total file size (sum of all sticker buffers)
+      const totalFileSize = stickers.reduce((sum, s) => sum + s.buffer.length, 0)
+      
+      // Calculate imageDataHash (base64-encoded SHA256 of sticker metadata combined)
+      // This is what WhatsApp uses to verify pack integrity
+      const stickerMetadata = stickers.map(s => 
+        `${s.fileName}${s.isAnimated}${s.emojis.join('')}${s.accessibilityLabel || ''}`
+      ).join('|')
+      const imageDataHash = crypto
+        .createHash('sha256')
+        .update(stickerMetadata)
+        .digest('base64')
 
       // Step 3: Send the sticker pack message
       console.log(`📤 Sending sticker pack...`)
@@ -851,7 +864,8 @@ export function extendSocket(sock) {
             isLottie: s.isLottie || false,
             mimetype: s.mimetype
           })),
-          fileLength: 0,
+          // Use actual file sizes, not zero
+          fileLength: totalFileSize,
           fileSha256: crypto.randomBytes(32),
           fileEncSha256: crypto.randomBytes(32),
           mediaKey: crypto.randomBytes(32),
@@ -863,9 +877,12 @@ export function extendSocket(sock) {
           thumbnailEncSha256: crypto.randomBytes(32),
           thumbnailHeight: 252,
           thumbnailWidth: 252,
-          imageDataHash: crypto.randomBytes(32).toString('hex'),
-          stickerPackSize: 0,
-          stickerPackOrigin: 1 // USER_CREATED
+          // Use base64-encoded hash (not hex)
+          imageDataHash: imageDataHash,
+          stickerPackSize: totalFileSize,
+          stickerPackOrigin: 1, // USER_CREATED
+          // ✅ IMPORTANT: Keep contextInfo empty for new pack sends (not quoted/replied)
+          contextInfo: {}
         }
       }
       
