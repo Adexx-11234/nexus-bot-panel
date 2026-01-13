@@ -745,17 +745,19 @@ export function extendSocket(sock) {
   sock.sendStickerPack = async function (jid, sources, options = {}) {
     const {
       packName = "Custom Sticker Pack",
-      packPublisher = "𝕹𝖊𝖝𝖚𝖘 𝕭𝖔�",
+      packPublisher = "𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙",
+      packDescription = "",
       quoted = null
     } = options
 
     const stickers = []
     const tempFiles = []
+    let coverBuffer = null
 
     try {
       console.log(`\n📦 Processing ${sources.length} stickers...`)
       
-      // Step 1: Process all stickers and create metadata
+      // Step 1: Process all stickers
       for (let i = 0; i < sources.length; i++) {
         let tempFilePath = null
         
@@ -798,23 +800,23 @@ export function extendSocket(sock) {
             console.log(`${progressText} ✓ Static WebP (${stickerBuffer.length} bytes)`)
           }
 
-          // Generate file hash for filename
-          const fileSha256 = crypto.createHash('sha256').update(stickerBuffer).digest('base64')
-          const fileName = `${fileSha256.replace(/[/+=]/g, '')}.webp`
+          // Save first sticker as cover if not set
+          if (i === 0 && !coverBuffer) {
+            coverBuffer = stickerBuffer
+          }
 
-          stickers.push({
-            fileName: fileName,
-            isAnimated: isVideo,
-            emojis: source.emojis || ["😊"],
-            accessibilityLabel: source.label || "",
-            isLottie: false,
-            mimetype: "image/webp",
-            buffer: stickerBuffer
-          })
-
+          // Create temp file path for sticker
           tempFilePath = getTempFilePath('sticker', '.webp')
           fs.writeFileSync(tempFilePath, stickerBuffer)
           tempFiles.push(tempFilePath)
+
+          // Add sticker in correct format
+          stickers.push({
+            sticker: { url: tempFilePath }, // Can also use buffer directly
+            emojis: source.emojis || ["😊"],
+            isLottie: false,
+            isAnimated: isVideo
+          })
 
         } catch (error) {
           console.error(`[${i + 1}/${sources.length}] ❌ Error: ${error.message}`)
@@ -832,57 +834,16 @@ export function extendSocket(sock) {
         throw new Error("No stickers were successfully processed")
       }
 
-      // Step 2: Prepare sticker pack metadata
-      const packId = crypto.randomUUID()
-      
-      // Calculate total file size (sum of all sticker buffers)
-      const totalFileSize = stickers.reduce((sum, s) => sum + s.buffer.length, 0)
-      
-      // Calculate imageDataHash (base64-encoded SHA256 of sticker metadata combined)
-      // This is what WhatsApp uses to verify pack integrity
-      const stickerMetadata = stickers.map(s => 
-        `${s.fileName}${s.isAnimated}${s.emojis.join('')}${s.accessibilityLabel || ''}`
-      ).join('|')
-      const imageDataHash = crypto
-        .createHash('sha256')
-        .update(stickerMetadata)
-        .digest('base64')
-
-      // Step 3: Send the sticker pack message
+      // Step 2: Send the sticker pack using correct format
       console.log(`📤 Sending sticker pack...`)
       
       const stickerPackContent = {
-        stickerPackMessage: {
-          stickerPackId: packId,
+        stickerPack: {
           name: packName,
           publisher: packPublisher,
-          stickers: stickers.map(s => ({
-            fileName: s.fileName,
-            isAnimated: s.isAnimated,
-            emojis: s.emojis || [],
-            accessibilityLabel: s.accessibilityLabel || '',
-            isLottie: s.isLottie || false,
-            mimetype: s.mimetype
-          })),
-          // Use actual file sizes, not zero
-          fileLength: totalFileSize,
-          fileSha256: crypto.randomBytes(32),
-          fileEncSha256: crypto.randomBytes(32),
-          mediaKey: crypto.randomBytes(32),
-          directPath: `/v/t62.sticker-pack-0/${packId}?type=download`,
-          mediaKeyTimestamp: Math.floor(Date.now() / 1000),
-          trayIconFileName: `${packId}.png`,
-          thumbnailDirectPath: `/v/t62.sticker-pack-0/${packId}-thumb?type=download`,
-          thumbnailSha256: crypto.randomBytes(32),
-          thumbnailEncSha256: crypto.randomBytes(32),
-          thumbnailHeight: 252,
-          thumbnailWidth: 252,
-          // Use base64-encoded hash (not hex)
-          imageDataHash: imageDataHash,
-          stickerPackSize: totalFileSize,
-          stickerPackOrigin: 2, // USER_CREATED (enum value: 0=UNKNOWN, 1=THIRD_PARTY, 2=USER_CREATED)
-          // ✅ IMPORTANT: Keep contextInfo empty for new pack sends (not quoted/replied)
-          contextInfo: {}
+          description: packDescription,
+          cover: coverBuffer, // First sticker as cover
+          stickers: stickers
         }
       }
       
@@ -893,7 +854,6 @@ export function extendSocket(sock) {
 
       return {
         success: true,
-        packId,
         packName,
         stickerCount: stickers.length,
         totalCount: sources.length,
