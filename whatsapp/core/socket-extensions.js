@@ -797,11 +797,18 @@ export function extendSocket(sock) {
             console.log(`${progressText} ✓ Static WebP (${stickerBuffer.length} bytes)`)
           }
 
-          // Store as sticker message
+          // Generate file hash for filename
+          const fileSha256 = crypto.createHash('sha256').update(stickerBuffer).digest('base64')
+          const fileName = `${fileSha256.replace(/[/+=]/g, '')}.webp`
+
           stickers.push({
-            sticker: stickerBuffer,
+            fileName: fileName,
             isAnimated: isVideo,
-            emojis: source.emojis || ["😊"]
+            emojis: source.emojis || ["😊"],
+            accessibilityLabel: source.label || "",
+            isLottie: false,
+            mimetype: "image/webp",
+            buffer: stickerBuffer
           })
 
           tempFilePath = getTempFilePath('sticker', '.webp')
@@ -823,41 +830,79 @@ export function extendSocket(sock) {
         throw new Error("No stickers were successfully processed")
       }
 
-      // Step 2: Send individual sticker messages (WhatsApp expects stickers sent individually in a pack)
-      console.log(`\n📤 Sending ${stickers.length} stickers...`)
-      let successCount = 0
+      // Step 2: Create a combined buffer of all stickers
+      const crypto = await import('crypto')
+      const packId = crypto.randomUUID()
+      const allStickersBuffers = stickers.map(s => s.buffer)
+      const combinedBuffer = Buffer.concat(allStickersBuffers)
       
-      for (let i = 0; i < stickers.length; i++) {
-        try {
-          const sticker = stickers[i]
-          await this.sendMessage(
-            jid,
-            {
-              sticker: sticker.sticker
-            },
-            { quoted: i === 0 ? quoted : null }
-          )
-          successCount++
-          
-          // Progress update every 10 stickers or at the end
-          if ((i + 1) % 10 === 0 || i === stickers.length - 1) {
-            console.log(`[${i + 1}/${stickers.length}] ✓ Sent`)
-          }
-        } catch (error) {
-          console.error(`[${i + 1}/${stickers.length}] ❌ Failed to send:`, error.message)
-          logger.error(`Error sending sticker ${i}:`, error.message)
+      // Step 3: Generate thumbnail (use first sticker)
+      const thumbnailBuffer = await sharp(stickers[0].buffer)
+        .resize(252, 252, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+        .webp()
+        .toBuffer()
+
+      // Step 4: Calculate hashes
+      const fileSha256 = crypto.createHash('sha256').update(combinedBuffer).digest('base64')
+      const fileEncSha256 = crypto.createHash('sha256').update(combinedBuffer).digest('base64')
+      const thumbnailSha256 = crypto.createHash('sha256').update(thumbnailBuffer).digest('base64')
+      const thumbnailEncSha256 = crypto.createHash('sha256').update(thumbnailBuffer).digest('base64')
+      const imageDataHash = crypto.createHash('sha256').update(combinedBuffer).digest('hex')
+      const imageDataHashBase64 = Buffer.from(imageDataHash, 'hex').toString('base64')
+      
+      const trayIconFileName = `${packId}.png`
+
+      // Step 5: Build the sticker pack message (matching WhatsApp format exactly)
+      const stickerPackMessage = {
+        stickerPackMessage: {
+          stickerPackId: packId,
+          name: packName,
+          publisher: packPublisher,
+          stickers: stickers.map(s => ({
+            fileName: s.fileName,
+            isAnimated: s.isAnimated,
+            emojis: s.emojis,
+            accessibilityLabel: s.accessibilityLabel,
+            isLottie: s.isLottie,
+            mimetype: s.mimetype
+          })),
+          fileLength: combinedBuffer.length.toString(),
+          fileSha256: fileSha256,
+          fileEncSha256: fileEncSha256,
+          mediaKey: Buffer.from(crypto.randomBytes(32)).toString('base64'),
+          directPath: `/v/t62.sticker-pack-0/${packId}?type=download`,
+          contextInfo: {},
+          mediaKeyTimestamp: Math.floor(Date.now() / 1000).toString(),
+          trayIconFileName: trayIconFileName,
+          thumbnailDirectPath: `/v/t62.sticker-pack-0/${packId}-thumb?type=download`,
+          thumbnailSha256: thumbnailSha256,
+          thumbnailEncSha256: thumbnailEncSha256,
+          thumbnailHeight: 252,
+          thumbnailWidth: 252,
+          imageDataHash: imageDataHashBase64,
+          stickerPackSize: combinedBuffer.length.toString(),
+          stickerPackOrigin: "USER_CREATED"
         }
       }
 
-      console.log(`\n✓ Sticker pack complete: ${successCount}/${stickers.length} stickers sent\n`)
-      
-      logger.info(`✅ Telegram sticker pack imported: ${successCount} stickers sent`)
+      // Step 6: Send the sticker pack message
+      console.log(`📤 Sending sticker pack...`)
+      const result = await this.sendMessage(
+        jid,
+        stickerPackMessage,
+        { quoted }
+      )
+
+      console.log(`✓ Sticker pack sent successfully!\n`)
+      logger.info(`✅ Sticker pack sent: ${stickers.length} stickers`)
 
       return {
-        success: successCount > 0,
+        success: true,
+        packId,
         packName,
-        stickerCount: successCount,
-        totalCount: stickers.length
+        stickerCount: stickers.length,
+        totalCount: sources.length,
+        result
       }
 
     } catch (error) {
