@@ -73,7 +73,7 @@ export class EventDispatcher {
       }
       
       // ✅ HEALTH CHECK: Start monitoring message receipt for this session
-      this._startHealthCheck(sock, sessionId)
+     // this._startHealthCheck(sock, sessionId)
 
       logger.info(`Event handlers setup complete for ${sessionId}`)
       return true
