@@ -85,9 +85,9 @@ class QueryManager {
       if (error.message?.includes('timeout') || error.code === 'CIRCUIT_OPEN') {
         logger.debug(`[QueryManager] Database timeout/circuit: ${error.message}`)
       } else {
-        logger.error(`[QueryManager] Database error: ${error.message}`)
-        logger.error(`[QueryManager] Query: ${query}`)
-        logger.error(`[QueryManager] Params: ${JSON.stringify(params)}`)
+        //logger.error(`[QueryManager] Database error: ${error.message}`)
+        //logger.error(`[QueryManager] Query: ${query}`)
+        //logger.error(`[QueryManager] Params: ${JSON.stringify(params)}`)
       }
       throw error
     }

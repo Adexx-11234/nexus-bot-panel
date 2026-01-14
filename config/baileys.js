@@ -43,8 +43,7 @@ const HEALTH_CHECK_TIMEOUT = 30 * 60 * 1000 // 30 minutes
 // ==================== BAILEYS DEFAULT CONFIGURATION ====================
 
 export const baileysConfig = {
-  ...DEFAULT_CONNECTION_CONFIG, 
-  version,
+  ...DEFAULT_CONNECTION_CONFIG,
   logger: baileysLogger,
   generateHighQualityLinkPreview: true,
 }
