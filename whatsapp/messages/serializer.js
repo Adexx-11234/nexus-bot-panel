@@ -38,6 +38,7 @@ export function serializeMessage(sock, m) {
       }
     }
 
+
     if (!m.download) {
       m.download = async () => {
         try {
@@ -76,8 +77,7 @@ export function serializeMessage(sock, m) {
     return m
   }
 }
-
-/**
+    /**
  * Get message type from message object
  */
 function getMessageType(message) {
@@ -117,3 +117,4 @@ function getMessageType(message) {
 
   return 'unknown'
 }
+serializeMessage.getMessageType = getMessageType

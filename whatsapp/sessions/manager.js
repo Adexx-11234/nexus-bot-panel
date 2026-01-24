@@ -10,7 +10,7 @@ import { SessionEventHandlers } from "./handlers.js"
 const logger = createComponentLogger("SESSION_MANAGER")
 
 const CONFIG = {
-  MAX_SESSIONS: 300,
+  MAX_SESSIONS: 900,
   CONCURRENCY: 3,
   STAGGER_DELAY: 800,
   BATCH_DELAY: 1500,

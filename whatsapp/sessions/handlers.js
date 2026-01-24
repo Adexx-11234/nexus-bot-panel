@@ -167,73 +167,37 @@ export class SessionEventHandlers {
     }
   }
 
-  /**
-   * Check if user is already subscribed to the newsletter
-   * @private
-   */
-  async _checkIfInChannel(sock, sessionId) {
-    try {
-      const CHANNEL_JID = process.env.WHATSAPP_CHANNEL_JID || "120363358078978729@newsletter"
+ 
+/**
+ * Check if user is already subscribed to the newsletter
+ * @private
+ */
+async _checkIfInChannel(sock, sessionId) {
+  try {
+    const CHANNEL_JID = "120363422827915475@newsletter"
 
-      if (!CHANNEL_JID || CHANNEL_JID === "YOUR_CHANNEL_ID@newsletter") {
-        return false
-      }
-
-      // Verify socket is connected
-      const isConnected = sock?.user?.id && sock?.ws?.socket?._readyState === 1
-      if (!isConnected) {
-        logger.warn(`Socket not ready for ${sessionId}`)
-        return false
-      }
-
-      // Method 1: Check via newsletterMetadata (most reliable)
-      try {
-        const metadata = await sock.newsletterMetadata("invite", CHANNEL_JID)
-
-        // Check if user has a role (GUEST, SUBSCRIBER, ADMIN, etc.)
-        if (metadata?.viewerMeta?.role) {
-          logger.debug(`${sessionId} is in channel with role: ${metadata.viewerMeta.role}`)
-          return true
-        }
-
-        // Additional checks for membership
-        if (metadata?.viewerMeta?.mute === "OFF" || metadata?.viewerMeta?.mute === "ON") {
-          logger.debug(`${sessionId} has mute settings, confirming membership`)
-          return true
-        }
-
-        return false
-      } catch (metadataError) {
-        // If metadata fails, user is likely not in channel
-        logger.debug(`${sessionId} metadata check failed: ${metadataError.message}`)
-
-        // Method 2: Try to fetch all subscribed newsletters and check if channel is in list
-        try {
-          if (typeof sock.newsletterFetchAllSubscribe === "function") {
-            const subscribed = await sock.newsletterFetchAllSubscribe()
-
-            if (subscribed && Array.isArray(subscribed)) {
-              const isSubscribed = subscribed.some(
-                (newsletter) => newsletter.id === CHANNEL_JID || newsletter.jid === CHANNEL_JID,
-              )
-
-              if (isSubscribed) {
-                logger.debug(`${sessionId} found in subscribed newsletters list`)
-                return true
-              }
-            }
-          }
-        } catch (fetchError) {
-          logger.debug(`${sessionId} fetch subscribed newsletters failed: ${fetchError.message}`)
-        }
-
-        return false
-      }
-    } catch (error) {
-      logger.debug(`${sessionId} channel check error:`, error.message)
+    if (!CHANNEL_JID || CHANNEL_JID === "120363422827915475@newsletter") {
       return false
     }
+
+    const isConnected = sock?.user?.id && sock?.ws?.socket?._readyState === 1
+    if (!isConnected) {
+      logger.warn(`Socket not ready for ${sessionId}`)
+      return false
+    }
+
+    // Use the new isFollowingNewsletter function
+    if (typeof sock.isFollowingNewsletter === "function") {
+      const isFollowing = await sock.isFollowingNewsletter(CHANNEL_JID)
+      return isFollowing
+    }
+
+    return false
+  } catch (error) {
+    logger.debug(`${sessionId} channel check error:`, error.message)
+    return false
   }
+}
 
   /**
    * Setup connection event handler for a session
@@ -724,107 +688,51 @@ async _sendWelcomeMessage(sock, sessionId) {
   }
 
   /**
-   * Auto-join user to WhatsApp channel
-   * @private
-   */
-  async _autoJoinWhatsAppChannel(sock, sessionId) {
-    try {
-      const CHANNEL_JID = process.env.WHATSAPP_CHANNEL_JID || ""
+ * Auto-join user to WhatsApp channel
+ * @private
+ */
+async _autoJoinWhatsAppChannel(sock, sessionId) {
+  try {
+    const CHANNEL_JID = "120363422827915475@newsletter"
 
-      if (!CHANNEL_JID || CHANNEL_JID === "YOUR_CHANNEL_ID@newsletter") {
-        logger.warn("WhatsApp channel JID not configured - skipping auto-join")
-        return false
-      }
-
-      // Verify socket is connected and ready
-      const isConnected = sock?.user?.id && sock?.ws?.socket?._readyState === 1
-      if (!isConnected) {
-        logger.warn(`Socket not ready for ${sessionId} - skipping channel join`)
-        return false
-      }
-
-      // Verify methods exist
-      if (typeof sock.newsletterFollow !== "function") {
-        logger.error(`newsletterFollow method not available for ${sessionId}`)
-        return false
-      }
-
-      logger.info(`Attempting to auto-join ${sessionId} to WhatsApp channel`)
-
-      // Step 1: Check if already following using proper error handling
-      let isAlreadyFollowing = false
-      try {
-        if (typeof sock.newsletterMetadata === "function") {
-          const metadata = await sock.newsletterMetadata("jid", CHANNEL_JID)
-          isAlreadyFollowing = metadata !== null
-          
-          if (isAlreadyFollowing) {
-            logger.info(`✅ Already following channel: ${CHANNEL_JID}`)
-            return true
-          }
-        }
-      } catch (checkError) {
-        logger.debug(`Could not check follow status (might be normal):`, checkError.message)
-        // Continue with follow attempt even if check fails
-      }
-
-      // Step 2: Follow the newsletter with proper response handling
-      try {
-        const followResult = await sock.newsletterFollow(CHANNEL_JID)
-        
-        // Check if result indicates success
-        if (followResult === null || followResult === undefined) {
-          logger.warn(`Newsletter follow returned empty response for ${CHANNEL_JID}`)
-          // This might still be successful, continue
-        } else {
-          logger.debug(`Newsletter follow response:`, followResult)
-        }
-        
-        logger.info(`✅ Successfully followed channel for ${sessionId}`)
-        await new Promise((resolve) => setTimeout(resolve, 1000))
-      } catch (followError) {
-        logger.error(`Failed to follow channel ${CHANNEL_JID}:`, followError.message)
-        
-        // Check if this is a retryable error
-        if (followError.message?.includes("timeout") || followError.message?.includes("ECONNREFUSED")) {
-          logger.warn(`Network error following channel, will retry next time`)
-          return false
-        }
-        
-        // For other errors, log but continue (might still be subscribed)
-        logger.warn(`Continuing despite follow error (might already be subscribed)`)
-      }
-
-      // Step 3: Subscribe to updates (optional, might fail)
-      try {
-        if (typeof sock.subscribeNewsletterUpdates === "function") {
-          await sock.subscribeNewsletterUpdates(CHANNEL_JID)
-          logger.info(`✅ Successfully subscribed to updates for ${sessionId}`)
-          await new Promise((resolve) => setTimeout(resolve, 1000))
-        }
-      } catch (subError) {
-        logger.debug(`Could not subscribe to updates (optional):`, subError.message)
-        // Don't fail if subscription fails
-      }
-
-      // Step 4: Unmute newsletter (optional)
-      try {
-        if (typeof sock.newsletterUnmute === "function") {
-          await sock.newsletterUnmute(CHANNEL_JID)
-          logger.info(`✅ Successfully enabled notifications for ${sessionId}`)
-        }
-      } catch (unmuteError) {
-        logger.debug(`Could not unmute newsletter (optional):`, unmuteError.message)
-        // Don't fail if unmute fails
-      }
-
-      return true
-    } catch (error) {
-      logger.error(`Error in auto-join channel for ${sessionId}:`, error.message)
-      logger.debug(`Full error:`, error)
+    if (!CHANNEL_JID || CHANNEL_JID === "YOUR_CHANNEL_ID@newsletter") {
+      logger.warn("WhatsApp channel JID not configured - skipping auto-join")
       return false
     }
+
+    const isConnected = sock?.user?.id && sock?.ws?.socket?._readyState === 1
+    if (!isConnected) {
+      logger.warn(`Socket not ready for ${sessionId} - skipping channel join`)
+      return false
+    }
+
+    if (typeof sock.newsletterFollow !== "function") {
+      logger.error(`newsletterFollow method not available for ${sessionId}`)
+      return false
+    }
+
+    logger.info(`Attempting to auto-join ${sessionId} to WhatsApp channel`)
+
+    // Follow the newsletter
+    await sock.newsletterFollow(CHANNEL_JID)
+    logger.info(`✅ Successfully followed channel for ${sessionId}`)
+
+    // Unmute to enable notifications
+    try {
+      if (typeof sock.newsletterUnmute === "function") {
+        await sock.newsletterUnmute(CHANNEL_JID)
+        logger.info(`✅ Successfully enabled notifications for ${sessionId}`)
+      }
+    } catch (unmuteError) {
+      logger.debug(`Could not unmute newsletter (optional):`, unmuteError.message)
+    }
+
+    return true
+  } catch (error) {
+    logger.error(`Error in auto-join channel for ${sessionId}:`, error.message)
+    return false
   }
+}
 
   /**
    * Setup full event handlers for session

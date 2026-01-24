@@ -290,6 +290,9 @@ export class MessageProcessor {
       m.body = this.messageExtractor.extractMessageBody(m)
       m.text = m.body
 
+      // Extract message type
+      m.mtype = this.messageExtractor.getMessageType(m.message)
+
       // Set admin status
       await this._setAdminStatus(sock, m)
 
@@ -441,8 +444,8 @@ if (m.isCommand && m.body) {
     try {
       // Private chats: both are admins
       if (!m.isGroup) {
-        m.isAdmin = true
-        m.isBotAdmin = true
+        m.isAdmin = false
+        m.isBotAdmin = false
         m.isCreator = this._checkIsBotOwner(sock, m.sender)
         return
       }

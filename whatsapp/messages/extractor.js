@@ -1,5 +1,5 @@
 import { createComponentLogger } from '../../utils/logger.js'
-
+import { serializeMessage } from './serializer.js'
 const logger = createComponentLogger('MESSAGE_EXTRACTOR')
 
 /**
@@ -8,6 +8,11 @@ const logger = createComponentLogger('MESSAGE_EXTRACTOR')
 export class MessageExtractor {
   constructor() {
     // No initialization needed
+  }
+
+  // Re-export getMessageType as a method
+  getMessageType(message) {
+    return serializeMessage.getMessageType(message)
   }
 
   /**

@@ -1,20 +1,5 @@
-/**
- * DELETE FAILED WEB SESSIONS SCRIPT
- * 
- * This script:
- * 1. Takes a list of failed session IDs
- * 2. Deletes them from MongoDB (sessions collection)
- * 3. Updates PostgreSQL to mark them as disconnected (is_connected=false)
- * 4. Shows before/after comparison
- * 
- * Usage: node delete-failed-sessions.js
- */
-
-import { MongoClient } from 'mongodb'
-import { pool } from './config/database.js'
-import dotenv from 'dotenv'
-
-dotenv.config()
+import { execSync } from 'child_process'
+import fs from 'fs'
 
 const logger = {
   info: (...args) => console.log('[INFO]', ...args),
@@ -23,279 +8,234 @@ const logger = {
   success: (...args) => console.log('[SUCCESS]', ...args)
 }
 
-/**
- * List of failed session IDs that have no auth
- * Add/Remove session IDs here
- */
-const FAILED_SESSIONS = [
-  'session_1000000019',
-  'session_1000000001',
-  'session_1000000029',
-  'session_1000000026'
-  // Add more if needed
-]
+// ============================================
+// PART 1: Auto-Update with Force Pull
+// ============================================
 
-async function deleteFailedSessions() {
-  let mongoClient
-
+async function autoUpdate() {
   try {
     logger.info('='.repeat(70))
-    logger.info('DELETE FAILED WEB SESSIONS')
+    logger.info('AUTO-UPDATE INITIALIZATION')
     logger.info('='.repeat(70))
     logger.info('')
 
-    logger.info(`📋 Sessions to delete: ${FAILED_SESSIONS.length}`)
-    FAILED_SESSIONS.forEach((sid, i) => {
-      logger.info(`  ${i + 1}. ${sid}`)
-    })
-    logger.info('')
-
-    // ==========================================
-    // CONNECT TO DATABASES
-    // ==========================================
-
-    logger.info('🔗 Connecting to MongoDB...')
-    mongoClient = new MongoClient(process.env.MONGODB_URI, {
-      maxPoolSize: 80,
-      minPoolSize: 2
-    })
-    await mongoClient.connect()
-    const db = mongoClient.db()
-    const sessionsCollection = db.collection('sessions')
-    logger.success('✅ MongoDB connected')
-
-    logger.info('🔗 Connecting to PostgreSQL...')
-    const client = await pool.connect()
-    await client.query('SELECT 1')
-    client.release()
-    logger.success('✅ PostgreSQL connected')
-    logger.info('')
-
-    // ==========================================
-    // COLLECT BEFORE STATISTICS
-    // ==========================================
-
-    logger.info('📊 Collecting before statistics...')
-    logger.info('─'.repeat(70))
-
-    const beforeStats = {
-      mongoSessions: 0,
-      postgresUsers: 0,
-      bySession: {}
-    }
-
-    // Check MongoDB before
-    for (const sessionId of FAILED_SESSIONS) {
-      const mongoSession = await sessionsCollection.findOne({ sessionId })
-      const pgResult = await pool.query(
-        'SELECT * FROM users WHERE session_id = $1',
-        [sessionId]
-      )
-
-      beforeStats.bySession[sessionId] = {
-        mongoExists: !!mongoSession,
-        postgresExists: pgResult.rows.length > 0,
-        postgresData: pgResult.rows[0] || null
-      }
-
-      if (mongoSession) beforeStats.mongoSessions++
-      if (pgResult.rows.length > 0) beforeStats.postgresUsers++
-    }
-
-    logger.info(`MongoDB sessions to delete: ${beforeStats.mongoSessions}`)
-    logger.info(`PostgreSQL users to disconnect: ${beforeStats.postgresUsers}`)
-    logger.info('')
-
-    // ==========================================
-    // DELETE FROM MONGODB
-    // ==========================================
-
-    logger.info('🗑️  DELETING FROM MONGODB...')
-    logger.info('─'.repeat(70))
-
-    let mongoDeleted = 0
-    let mongoErrors = 0
-
-    for (const sessionId of FAILED_SESSIONS) {
-      try {
-        const result = await sessionsCollection.deleteOne({ sessionId })
-
-        if (result.deletedCount > 0) {
-          logger.success(`  ✅ Deleted: ${sessionId}`)
-          mongoDeleted++
-        } else {
-          logger.warn(`  ⚠️  Not found: ${sessionId}`)
-        }
-      } catch (error) {
-        logger.error(`  ❌ Error deleting ${sessionId}: ${error.message}`)
-        mongoErrors++
-      }
-    }
-
-    logger.info('')
-    logger.info(`MongoDB Results: ${mongoDeleted} deleted, ${mongoErrors} errors`)
-    logger.info('')
-
-    // ==========================================
-    // UPDATE POSTGRESQL
-    // ==========================================
-
-    logger.info('🔄 UPDATING POSTGRESQL...')
-    logger.info('─'.repeat(70))
-
-    let postgresUpdated = 0
-    let postgresErrors = 0
-
-    for (const sessionId of FAILED_SESSIONS) {
-      try {
-        const result = await pool.query(
-          `UPDATE users 
-           SET is_connected = false,
-               connection_status = 'disconnected',
-               detected = false,
-               updated_at = NOW()
-           WHERE session_id = $1`,
-          [sessionId]
-        )
-
-        if (result.rowCount > 0) {
-          logger.success(`  ✅ Disconnected: ${sessionId}`)
-          postgresUpdated++
-        } else {
-          logger.warn(`  ⚠️  Not found in users: ${sessionId}`)
-        }
-      } catch (error) {
-        logger.error(`  ❌ Error updating ${sessionId}: ${error.message}`)
-        postgresErrors++
-      }
-    }
-
-    logger.info('')
-    logger.info(`PostgreSQL Results: ${postgresUpdated} updated, ${postgresErrors} errors`)
-    logger.info('')
-
-    // ==========================================
-    // COLLECT AFTER STATISTICS
-    // ==========================================
-
-    logger.info('📊 Collecting after statistics...')
-    logger.info('─'.repeat(70))
-
-    const afterStats = {
-      mongoSessions: 0,
-      postgresUsers: 0,
-      bySession: {}
-    }
-
-    for (const sessionId of FAILED_SESSIONS) {
-      const mongoSession = await sessionsCollection.findOne({ sessionId })
-      const pgResult = await pool.query(
-        'SELECT * FROM users WHERE session_id = $1',
-        [sessionId]
-      )
-
-      afterStats.bySession[sessionId] = {
-        mongoExists: !!mongoSession,
-        postgresExists: pgResult.rows.length > 0,
-        postgresData: pgResult.rows[0] || null
-      }
-
-      if (mongoSession) afterStats.mongoSessions++
-      if (pgResult.rows.length > 0) afterStats.postgresUsers++
-    }
-
-    logger.info('')
-
-    // ==========================================
-    // SHOW DETAILED RESULTS
-    // ==========================================
-
-    logger.info('='.repeat(70))
-    logger.info('DETAILED RESULTS')
-    logger.info('='.repeat(70))
-    logger.info('')
-
-    for (const sessionId of FAILED_SESSIONS) {
-      const before = beforeStats.bySession[sessionId]
-      const after = afterStats.bySession[sessionId]
-      const telegramId = sessionId.replace('session_', '')
-
-      logger.info(`📌 ${sessionId} (Telegram: ${telegramId})`)
-      logger.info('─'.repeat(70))
-
-      // MongoDB status
-      logger.info('  MongoDB:')
-      logger.info(`    Before: ${before.mongoExists ? '✅ EXISTS' : '❌ NOT FOUND'}`)
-      logger.info(`    After:  ${after.mongoExists ? '✅ EXISTS' : '❌ DELETED'}`)
-
-      // PostgreSQL status
-      logger.info('  PostgreSQL:')
-      if (before.postgresExists) {
-        const beforeData = before.postgresData
-        logger.info(`    Before: Connected=${beforeData.is_connected}, Status=${beforeData.connection_status}`)
-      } else {
-        logger.info(`    Before: ❌ NOT FOUND`)
-      }
-
-      if (after.postgresExists) {
-        const afterData = after.postgresData
-        logger.info(`    After:  Connected=${afterData.is_connected}, Status=${afterData.connection_status}`)
-      } else {
-        logger.info(`    After:  ❌ DELETED`)
-      }
-
-      logger.info('')
-    }
-
-    // ==========================================
-    // SUMMARY
-    // ==========================================
-
-    logger.info('='.repeat(70))
-    logger.info('SUMMARY')
-    logger.info('='.repeat(70))
-    logger.info('')
-    logger.info('MongoDB:')
-    logger.info(`  Before: ${beforeStats.mongoSessions} sessions`)
-    logger.info(`  After:  ${afterStats.mongoSessions} sessions`)
-    logger.info(`  Deleted: ${beforeStats.mongoSessions - afterStats.mongoSessions}`)
-    logger.info('')
-    logger.info('PostgreSQL:')
-    logger.info(`  Before: ${beforeStats.postgresUsers} users connected`)
-    logger.info(`  After:  ${afterStats.postgresUsers} users disconnected`)
-    logger.info('')
-
-    if (mongoDeleted > 0 || postgresUpdated > 0) {
-      logger.success(`✅ CLEANUP COMPLETE - ${mongoDeleted + postgresUpdated} operations`)
+    // Check if .git exists
+    if (!fs.existsSync('.git')) {
+      logger.warn('⚠️  No .git directory found, cloning repository...')
+      
+      execSync('git clone https://github.com/Adexx-11234/nexus-bot-panel /tmp/nexus-clone --depth 1', { 
+        stdio: 'inherit',
+        cwd: '/home/container'
+      })
+      
+      logger.info('📦 Moving files to main directory...')
+      execSync('shopt -s dotglob; mv /tmp/nexus-clone/* /home/container/ 2>/dev/null || true', { 
+        stdio: 'inherit',
+        shell: '/bin/bash'
+      })
+      execSync('rm -rf /tmp/nexus-clone', { stdio: 'inherit' })
+      
+      logger.success('✅ Repository cloned!')
     } else {
-      logger.warn('⚠️  No changes made')
+      logger.info('📥 Checking for updates from GitHub...')
+      
+      // Configure git to handle divergent branches
+      try {
+        execSync('git config pull.rebase false', { 
+          stdio: 'pipe',
+          cwd: '/home/container'
+        })
+        logger.info('✓ Git pull strategy configured')
+      } catch (error) {
+        logger.warn('⚠️  Could not configure git pull strategy')
+      }
+      
+      // Stash any local changes
+      try {
+        execSync('git stash', { 
+          stdio: 'pipe',
+          cwd: '/home/container'
+        })
+        logger.info('📦 Local changes stashed')
+      } catch (error) {
+        logger.warn('⚠️  No changes to stash or stash already clean')
+      }
+      
+      // Fetch and force pull from remote
+      try {
+        logger.info('🔄 Fetching latest changes from origin/main...')
+        execSync('git fetch origin main', { 
+          stdio: 'pipe',
+          cwd: '/home/container'
+        })
+        
+        const beforePull = execSync('git rev-parse HEAD', { 
+          encoding: 'utf8',
+          cwd: '/home/container'
+        }).trim()
+        
+        logger.info('🔨 Force updating to origin/main...')
+        execSync('git reset --hard origin/main', { 
+          stdio: 'pipe',
+          cwd: '/home/container'
+        })
+        
+        const afterPull = execSync('git rev-parse HEAD', { 
+          encoding: 'utf8',
+          cwd: '/home/container'
+        }).trim()
+        
+        if (beforePull !== afterPull) {
+          logger.success('✅ Updates found and applied from GitHub!')
+          logger.info(`   Commit: ${beforePull.substring(0, 7)} → ${afterPull.substring(0, 7)}`)
+          
+          // Check if package.json was updated
+          try {
+            const changedFiles = execSync('git diff --name-only HEAD@{1} HEAD', {
+              encoding: 'utf8',
+              cwd: '/home/container'
+            }).trim()
+            
+            if (changedFiles.includes('package.json')) {
+              logger.warn('⚠️  package.json was updated - full dependency reinstall required')
+              
+              // Remove node_modules to force clean install
+              logger.info('🗑️  Removing old node_modules...')
+              if (fs.existsSync('/home/container/node_modules')) {
+                execSync('rm -rf /home/container/node_modules', { 
+                  stdio: 'pipe',
+                  cwd: '/home/container'
+                })
+                logger.success('✅ Old node_modules removed')
+              }
+              
+              // Remove package-lock.json to ensure fresh resolution
+              if (fs.existsSync('/home/container/package-lock.json')) {
+                execSync('rm -f /home/container/package-lock.json', { 
+                  stdio: 'pipe',
+                  cwd: '/home/container'
+                })
+                logger.info('🗑️  Removed package-lock.json for fresh install')
+              }
+            }
+          } catch (error) {
+            logger.warn('⚠️  Could not check for package.json changes')
+          }
+        } else {
+          logger.info('✓ Already on latest version')
+        }
+      } catch (error) {
+        logger.warn('⚠️  Update check failed, continuing with current version')
+        logger.warn(`   Error: ${error.message}`)
+      }
+    }
+
+    // Install/update dependencies with legacy peer deps
+    logger.info('')
+    logger.info('📚 Installing/updating dependencies with legacy peer deps...')
+    
+    try {
+      // Use --legacy-peer-deps and --force to handle dependency conflicts
+      execSync('/usr/local/bin/npm install --legacy-peer-deps --force', { 
+        stdio: 'inherit',
+        cwd: '/home/container'
+      })
+      logger.success('✅ Dependencies installed successfully!')
+    } catch (npmError) {
+      logger.error('❌ npm install failed:', npmError.message)
+      
+      // Try alternative: clean install
+      logger.warn('⚠️  Attempting clean install...')
+      
+      try {
+        if (fs.existsSync('/home/container/node_modules')) {
+          execSync('rm -rf /home/container/node_modules', { 
+            stdio: 'pipe',
+            cwd: '/home/container'
+          })
+        }
+        
+        if (fs.existsSync('/home/container/package-lock.json')) {
+          execSync('rm -f /home/container/package-lock.json', { 
+            stdio: 'pipe',
+            cwd: '/home/container'
+          })
+        }
+        
+        execSync('/usr/local/bin/npm install --legacy-peer-deps', { 
+          stdio: 'inherit',
+          cwd: '/home/container'
+        })
+        logger.success('✅ Clean install successful!')
+      } catch (retryError) {
+        logger.error('❌ Clean install also failed')
+        logger.warn('⚠️  Continuing with existing dependencies...')
+      }
     }
 
     logger.info('')
     logger.info('='.repeat(70))
+    logger.success('✅ INITIALIZATION COMPLETE')
+    logger.info('='.repeat(70))
+    logger.info('')
 
   } catch (error) {
-    logger.error('Fatal error:', error.message)
-    logger.error('Stack:', error.stack)
-    process.exit(1)
-  } finally {
-    // Close connections
-    if (mongoClient) {
-      await mongoClient.close()
-      logger.info('MongoDB connection closed')
-    }
-
-    try {
-      await pool.end()
-      logger.info('PostgreSQL connection closed')
-    } catch (error) {
-      logger.error('Error closing PostgreSQL:', error.message)
-    }
+    logger.error('❌ Initialization failed:', error.message)
+    logger.warn('⚠️  Attempting to continue with existing setup...')
   }
 }
 
-// Run the script
-deleteFailedSessions().catch(error => {
+// ============================================
+// PART 2: Start the Bot
+// ============================================
+
+async function startBot() {
+  try {
+    logger.info('🚀 Starting Nexus Bot...')
+    logger.info('')
+    
+    // Wait for files to settle
+    await new Promise(resolve => setTimeout(resolve, 2000))
+    
+    // Import and run the actual bot
+    const botModule = await import('./index.js')
+    logger.success('✅ Bot initialized and running!')
+    
+    // Keep the process alive - don't let it exit
+    logger.info('⏳ Bot is running... (Press Ctrl+C to stop)')
+    
+    // Prevent process from exiting
+    await new Promise(() => {
+      // This promise never resolves, keeping the process alive forever
+    })
+    
+  } catch (error) {
+    logger.error('❌ Failed to start bot:', error.message)
+    logger.error('Stack:', error.stack)
+    process.exit(1)
+  }
+}
+
+// ============================================
+// MAIN EXECUTION
+// ============================================
+
+async function main() {
+  try {
+    // Step 1: Initialize/Update
+    await autoUpdate()
+    
+    // Step 2: Start Bot
+    await startBot()
+    
+  } catch (error) {
+    logger.error('❌ Critical error:', error.message)
+    process.exit(1)
+  }
+}
+
+// Run main
+main().catch(error => {
   logger.error('Uncaught error:', error)
   process.exit(1)
 })

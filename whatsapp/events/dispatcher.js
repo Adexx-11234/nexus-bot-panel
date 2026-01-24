@@ -187,6 +187,30 @@ sock.ev.on(EventTypes.MESSAGES_UPSERT, async (messageUpdate) => {
     // ✅ HEALTH CHECK: Update last message time when we receive messages.upsert
     this.lastMessageTime.set(sessionId, Date.now())
 
+    // 📝 LOG: Save complete messageUpdate to JSON file
+    /*try {
+      const fs = await import('fs/promises')
+      const path = await import('path')
+      
+      const logsDir = path.join(process.cwd(), 'message-logs', sessionId)
+      await fs.mkdir(logsDir, { recursive: true })
+      
+      const timestamp = Date.now()
+      const messageId = messageUpdate.messages?.[0]?.key?.id || 'no-id'
+      const filename = `${timestamp}-${messageId}.json`
+      
+      await fs.writeFile(
+        path.join(logsDir, filename),
+        JSON.stringify(messageUpdate, null, 2),
+        'utf8'
+      )
+      
+      console.log(`[MESSAGE LOG] ${sessionId}/${filename}`)
+      console.log(JSON.stringify(messageUpdate, null, 2))
+    } catch (logError) {
+      logger.error(`Failed to log message for ${sessionId}:`, logError)
+    }*/
+
     // Fire and forget - process without blocking
     this.messageHandler
       .handleMessagesUpsert(sock, sessionId, messageUpdate)

@@ -5,7 +5,7 @@ import fs from 'fs';
 
 export default {
   name: "pinterest",
-  commands: ["pinterest", "pin", "pindl"],
+  commands: ["pinterest", "pindl"],
   description: "Download Pinterest images and videos",
   category: "download",
   usage: "• .pinterest <url> - Download Pinterest content\n• .pin <url> - Short command",
