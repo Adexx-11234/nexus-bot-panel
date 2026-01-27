@@ -7,10 +7,6 @@ const logger = createComponentLogger('CORE_CONFIG')
  */
 export {
   baileysConfig,
-  createSessionStore,
-  getSessionStore,
-  deleteSessionStore,
-  bindStoreToSocket,
   createBaileysSocket,  // ✅ Added this
   setupSocketDefaults,
   getBaileysConfig,
@@ -28,8 +24,7 @@ export {
   clearAllGroupCache,
   getCacheStats,
   updateSessionLastMessage,
-  ensureCacheableKeys,
-  wrapSocketForDecryptionErrors
+  ensureCacheableKeys
 } from '../../config/baileys.js'
 
 // No logging needed - this is just a re-export module

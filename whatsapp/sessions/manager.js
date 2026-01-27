@@ -621,16 +621,6 @@ export class SessionManager {
     try {
       logger.info(`🧹 In-memory cleanup for ${sessionId}`)
 
-      const results = { messageStore: false }
-      try {
-        const { deleteSessionStore } = await import("../core/index.js")
-        await deleteSessionStore(sessionId)
-        results.messageStore = true
-        logger.info(`✅ Message store deleted for ${sessionId}`)
-      } catch (error) {
-        logger.error(`Message store deletion failed: ${error.message}`)
-      }
-
       const sock = this.activeSockets.get(sessionId)
 
       if (sock) {
@@ -651,7 +641,6 @@ export class SessionManager {
         sock.user = null
         sock.eventHandlersSetup = false
         sock.connectionCallbacks = null
-        sock._sessionStore = null
       }
 
       this.activeSockets.delete(sessionId)
@@ -673,10 +662,6 @@ export class SessionManager {
         } catch {}
       }
 
-      if (sock._storeCleanup) {
-        sock._storeCleanup()
-      }
-
       if (sock.ev && typeof sock.ev.removeAllListeners === "function") {
         sock.ev.removeAllListeners()
       }
@@ -688,7 +673,6 @@ export class SessionManager {
       sock.user = null
       sock.eventHandlersSetup = false
       sock.connectionCallbacks = null
-      sock._sessionStore = null
 
       return true
     } catch (error) {
@@ -722,15 +706,6 @@ export class SessionManager {
       this.initializingSessions.delete(sessionId)
       this.voluntarilyDisconnected.add(sessionId)
       this.detectedWebSessions.delete(sessionId)
-
-      try {
-        const { deleteSessionStore } = await import("../core/index.js")
-        await deleteSessionStore(sessionId)
-        results.messageStore = true
-        logger.info(`✅ Message store deleted for ${sessionId}`)
-      } catch (error) {
-        logger.error(`Message store deletion failed: ${error.message}`)
-      }
 
       try {
         await this.storage.fileManager.cleanupSessionFiles(sessionId)
@@ -871,11 +846,6 @@ export class SessionManager {
                 this.detectedWebSessions.delete(sessionId)
 
                 await this.storage.fileManager.cleanupSessionFiles(sessionId)
-
-                try {
-                  const { deleteSessionStore } = await import("../core/index.js")
-                  await deleteSessionStore(sessionId)
-                } catch {}
 
                 await this.storage.postgresStorage.updateSession(sessionId, {
                   isConnected: false,

@@ -1,7 +1,8 @@
 import { pool } from '../../config/database.js'
 import { createComponentLogger } from '../../utils/logger.js'
 import bcrypt from 'bcryptjs'
-
+import dotenv from "dotenv"
+dotenv.config()
 const logger = createComponentLogger('ADMIN_MIDDLEWARE')
 
 /**

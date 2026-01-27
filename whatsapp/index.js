@@ -40,11 +40,6 @@ export {
   hasValidAuthData,
   getSessionStorage,
   initializeStorage,
-  FileBasedStore,
-  createFileStore,
-  getFileStore,
-  deleteFileStore,
-  getStoreStats,
 } from './storage/index.js'
 
 // ============================================================================

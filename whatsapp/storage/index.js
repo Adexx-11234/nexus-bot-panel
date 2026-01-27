@@ -10,14 +10,6 @@ export {
   checkAuthAvailability,
 } from "./auth-state.js"
 
-export {
-  FileBasedStore,
-  createFileStore,
-  getFileStore,
-  deleteFileStore,
-  getStoreStats,
-} from "./file-store.js"
-
 // Re-export singleton functions
 export {
   getSessionStorage,

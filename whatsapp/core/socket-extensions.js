@@ -362,7 +362,13 @@ export function extendSocket(sock) {
         stickerPack: {
           name: packName, publisher: packPublisher, description: packDescription,
           cover: processedStickers[0].buffer,
-          stickers: processedStickers.map(s => ({ data: s.buffer, emojis: s.emojis, isAnimated: s.isAnimated, accessibilityLabel: s.accessibilityLabel }))
+          stickers: processedStickers.map((s, idx) => ({ 
+            data: s.buffer, 
+            emojis: s.emojis, 
+            isAnimated: s.isAnimated, 
+            accessibilityLabel: s.accessibilityLabel,
+            name: s.name || `Sticker ${idx + 1}` // Add name field, fallback to index if not provided
+          }))
         }
       }
       
@@ -374,7 +380,7 @@ export function extendSocket(sock) {
       throw error
     }
   }
-
+  
   sock.reply = async function (m, text) {
     return await this.sendMessage(m.chat || m.key.remoteJid, { text }, { quoted: m })
   }

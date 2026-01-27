@@ -4,7 +4,7 @@ const logger = {
   //console.log(`[INFO] ${message}`, ...args)
   },
   error: (message, ...args) => {
-    console.error(`[ERROR] ${message}`, ...args)
+   // console.error(`[ERROR] ${message}`, ...args)
   },
   warn: (message, ...args) => {
     //console.warn(`[WARN] ${message}`, ...args)
@@ -27,16 +27,16 @@ function createComponentLogger(component) {
    //console.log(`[INFO] [${component}] ${message}`, ...args)
     },
     error: (message, ...args) => {
-      console.error(`[ERROR] [${component}] ${message}`, ...args)
+     // console.error(`[ERROR] [${component}] ${message}`, ...args)
     },
     warn: (message, ...args) => {
-     //console.warn(`[WARN] [${component}] ${message}`, ...args)
+    // console.warn(`[WARN] [${component}] ${message}`, ...args)
     },
       message: (message, ...args) => {
      console.log(`[MESSAGE] [${component}] ${message}`, ...args)
     },
     debug: (message, ...args) => {
- //console.debug(`[DEBUG] [${component}] ${message}`, ...args)
+// console.debug(`[DEBUG] [${component}] ${message}`, ...args)
     },
     child: (options) => {
       const childComponent = options.component || 'CHILD'

@@ -214,6 +214,54 @@ You don't have permission to use this feature.`
   }
 
   /**
+   * Admin login
+   */
+  static adminLogin() {
+    return `*Admin Panel*
+
+Enter your admin password to proceed:`
+  }
+
+  /**
+   * Admin panel main menu
+   */
+  static adminPanel() {
+    return `*Admin Control Panel* 🛡️
+
+Select an option below to manage the bot system.
+
+Use the buttons to navigate.`
+  }
+
+  /**
+   * Admin login success
+   */
+  static adminLoginSuccess() {
+    return `*Welcome Admin* ✅
+
+You have access to the admin panel.`
+  }
+
+  /**
+   * Admin login failed
+   */
+  static adminLoginFailed(attemptsLeft) {
+    return `*Wrong Password* ❌
+
+Attempts remaining: ${attemptsLeft}`
+  }
+
+  /**
+   * Admin lockout
+   */
+  static adminLockout() {
+    return `*Account Locked* 🔒
+
+Too many failed login attempts.
+Please try again later.`
+  }
+
+  /**
    * Operation success
    */
   static operationSuccess(message) {

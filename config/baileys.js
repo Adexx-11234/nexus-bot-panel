@@ -5,7 +5,6 @@ import {
   fetchLatestBaileysVersion,
   DEFAULT_CONNECTION_CONFIG,
 } from "@nexustechpro/baileys"
-import { createFileStore, deleteFileStore, getFileStore } from "../whatsapp/index.js"
 import { logger } from "../utils/logger.js"
 import pino from "pino"
 import { wrapBaileysSocket } from "../whatsapp/core/socket-wrapper.js"
@@ -45,7 +44,7 @@ const HEALTH_CHECK_TIMEOUT = 30 * 60 * 1000 // 30 minutes
 export const baileysConfig = {
   ...DEFAULT_CONNECTION_CONFIG, 
   version,
-  logger: baileysLogger,
+  //logger: baileysLogger,
   generateHighQualityLinkPreview: true,
 }
 
@@ -63,42 +62,6 @@ export const eventTypes = [
   "call",
   "lid-mapping.update", // v7: LID/PN mappings
 ]
-
-// ==================== SESSION STORE MANAGEMENT ====================
-/**
- * Create a new session store for a given session ID
- */
-export async function createSessionStore(sessionId) {
-  const store = createFileStore(sessionId)
-  sessionLastActivity.set(sessionId, Date.now())
-  sessionLastMessage.set(sessionId, Date.now())
-  logger.debug(`[Store] Created file-based store for ${sessionId}`)
-  return store
-}
-
-/**
- * Get existing session store or create new one
- */
-export function getSessionStore(sessionId) {
-  sessionLastActivity.set(sessionId, Date.now())
-  const existingStore = getFileStore(sessionId)
-  if (existingStore) {
-    logger.debug(`[Store] Retrieved existing store for ${sessionId}`)
-    return existingStore
-  }
-  return createSessionStore(sessionId)
-}
-
-/**
- * Delete session store and cleanup tracking
- */
-export async function deleteSessionStore(sessionId) {
-  sessionLastActivity.delete(sessionId)
-  sessionLastMessage.delete(sessionId)
-  await deleteFileStore(sessionId)
-  logger.debug(`[Store] Cleaned up file store for ${sessionId}`)
-  return true
-}
 
 /**
  * Update last message timestamp for session
@@ -124,98 +87,6 @@ export function ensureCacheableKeys(authState) {
   }
 
   return authState
-}
-
-// ==================== ENCRYPTION/DECRYPTION ERROR PATTERNS ====================
-const DECRYPTION_ERROR_PATTERNS = [
-  // Standard decryption errors
-  "decrypt",
-  "Could not find",
-  "message key",
-
-  // libsignal specific errors
-  "SessionEntry",
-  "Bad MAC",
-  "session_cipher",
-  "libsignal",
-
-  // Session structure errors
-  "_chains",
-  "registrationId",
-  "currentRatchet",
-  "ephemeralKeyPair",
-  "indexInfo",
-  "pendingPreKey",
-  "baseKey",
-  "remoteIdentityKey",
-
-  // Key errors
-  "pubKey",
-  "privKey",
-  "lastRemoteEphemeralKey",
-  "previousCounter",
-  "rootKey",
-  "baseKeyType",
-  "signedKeyId",
-  "preKeyId",
-  "chainKey",
-  "chainType",
-  "messageKeys",
-
-  // Session state errors
-  "used:",
-  "created:",
-  "closed:",
-  "Closing",
-
-  // Buffer errors related to encryption
-  "<Buffer",
-]
-
-/**
- * Check if error is related to encryption/decryption
- */
-function isEncryptionError(error) {
-  if (!error) return false
-
-  const errorMessage = error.message || error.toString() || ""
-  const errorStack = error.stack || ""
-  const combinedError = `${errorMessage} ${errorStack}`.toLowerCase()
-
-  return DECRYPTION_ERROR_PATTERNS.some((pattern) => combinedError.includes(pattern.toLowerCase()))
-}
-
-/**
- * ✅ CRITICAL: Wrap socket to catch decryption errors
- */
-export function wrapSocketForDecryptionErrors(sock, sessionId) {
-  const originalEmit = sock.ev.emit.bind(sock.ev)
-
-  sock.ev.emit = (event, ...args) => {
-    try {
-      return originalEmit(event, ...args)
-    } catch (error) {
-      // ✅ Catch ALL encryption/decryption related errors
-      if (isEncryptionError(error)) {
-        logger.warn(`Encryption error for ${sessionId} on ${event}:`, error.message)
-
-        // ✅ CRITICAL: Request message retry from WhatsApp
-        if (event === "messages.upsert" && args[0]?.messages) {
-          const msg = args[0].messages[0]
-          if (msg?.key && sock.sendRetryRequest) {
-            logger.info(`Requesting retry for message ${msg.key.id}`)
-            sock.sendRetryRequest(msg.key).catch((err) => logger.debug(`Retry request failed: ${err.message}`))
-          }
-        }
-
-        return // Don't propagate error
-      }
-
-      throw error // Re-throw non-encryption errors
-    }
-  }
-
-  return sock
 }
 
 /**
@@ -272,17 +143,6 @@ export function startSessionCleanup() {
   }, SESSION_CLEANUP_INTERVAL)
 
   logger.info("[Store] Session cleanup interval started")
-}
-
-/**
- * Get session store statistics
- */
-export function getSessionStoreStats() {
-  return {
-    activeTrackers: sessionLastActivity.size,
-    groupCacheKeys: groupCache.getStats().keys,
-    sessionsTracked: sessionLastMessage.size,
-  }
 }
 
 // ==================== JID NORMALIZATION ====================
@@ -396,7 +256,7 @@ const normalizeMetadata = (metadata) => {
  *
  * Socket capturing is handled by the wrapper, works with ANY baileys version
  */
-export function createBaileysSocket(authState, sessionId, getMessage = null) {
+export function createBaileysSocket(authState, sessionId) {
   try {
     // Call makeWASocket (which is now wrapped to capture sockets automatically)
     // Works with any baileys version - old or new
@@ -404,7 +264,6 @@ export function createBaileysSocket(authState, sessionId, getMessage = null) {
       ...baileysConfig,
       auth: authState,
       sessionId, // Pass sessionId if the baileys version supports it
-      getMessage: getMessage || null,
       msgRetryCounterCache,
     })
 
@@ -771,114 +630,6 @@ export const getCacheStats = () => {
   } catch (error) {
     logger.error("[Cache] Error getting cache stats:", error.message)
     return null
-  }
-}
-
-// ==================== STORE BINDING ====================
-/**
- * Bind store to socket and setup message retrieval
- */
-export async function bindStoreToSocket(sock, sessionId) {
-  try {
-    const store = await getSessionStore(sessionId)
-    if (!store || typeof store.bind !== "function") {
-      logger.error(`[Store] Invalid store object for ${sessionId}`)
-      return null
-    }
-
-    store.bind(sock.ev)
-
-    // Setup message retrieval from store
-    sock.getMessage = async (key) => {
-      try {
-        const msg = await store.loadMessage(key.remoteJid, key.id)
-        return msg?.message || undefined
-      } catch {
-        return undefined
-      }
-    }
-
-    logger.debug(`[Store] Bound file-based store to socket for ${sessionId}`)
-    return store
-  } catch (error) {
-    logger.error(`[Store] Error binding store for ${sessionId}:`, error.message)
-    return null
-  }
-}
-
-// ==================== NEWSLETTER HELPERS (Baileys v7) ====================
-/**
- * Follow a WhatsApp newsletter/channel (Baileys v7+)
- */
-export async function followNewsletter(sock, newsletterJid) {
-  try {
-    if (!sock.newsletterFollow) {
-      logger.warn(`[Newsletter] Socket doesn't have newsletterFollow method (old Baileys version?)`)
-      return false
-    }
-
-    const result = await sock.newsletterFollow(newsletterJid)
-    logger.info(`[Newsletter] Successfully followed: ${newsletterJid}`)
-    return result
-  } catch (error) {
-    logger.error(`[Newsletter] Error following ${newsletterJid}:`, error.message)
-    return null
-  }
-}
-
-/**
- * Check if already following a newsletter
- */
-export async function isFollowingNewsletter(sock, newsletterJid) {
-  try {
-    if (!sock.newsletterMetadata) {
-      logger.warn(`[Newsletter] Socket doesn't have newsletterMetadata method`)
-      return false
-    }
-
-    const metadata = await sock.newsletterMetadata("jid", newsletterJid)
-    return metadata !== null
-  } catch (error) {
-    logger.error(`[Newsletter] Error checking follow status for ${newsletterJid}:`, error.message)
-    return false
-  }
-}
-
-/**
- * Get newsletter metadata
- */
-export async function getNewsletterMetadata(sock, newsletterJid) {
-  try {
-    if (!sock.newsletterMetadata) {
-      logger.warn(`[Newsletter] Socket doesn't have newsletterMetadata method`)
-      return null
-    }
-
-    const metadata = await sock.newsletterMetadata("jid", newsletterJid)
-    return metadata
-  } catch (error) {
-    logger.error(`[Newsletter] Error getting metadata for ${newsletterJid}:`, error.message)
-    return null
-  }
-}
-
-/**
- * List all newsletters user is following
- */
-export async function getFollowedNewsletters(sock) {
-  try {
-    if (!sock.ev) {
-      logger.warn(`[Newsletter] Socket doesn't have event emitter`)
-      return []
-    }
-
-    // Note: Baileys v7 doesn't have a direct method to list all newsletters
-    // You need to track them manually or use the newsletter-related events
-    logger.info(`[Newsletter] Use newsletter events to track followed newsletters`)
-    return []
-  } catch (error) {
-    logger.error(`[Newsletter] Error getting newsletters:`, error.message)
-    return []
   }
 }
 

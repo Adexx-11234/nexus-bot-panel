@@ -109,12 +109,24 @@ export class TelegramBot {
    */
   async _clearWebhookAndStartPolling() {
     try {
-      await this.bot.setWebHook('')
-      logger.info('Webhook cleared successfully')
+      // Clear webhook with timeout to prevent hanging
+      const webhookPromise = this.bot.setWebHook('')
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Webhook clear timeout')), 5000)
+      )
       
-      await new Promise(resolve => setTimeout(resolve, 1000))
+      try {
+        await Promise.race([webhookPromise, timeoutPromise])
+        logger.info('Webhook cleared successfully')
+      } catch (timeoutError) {
+        logger.warn('Webhook clear timed out, continuing anyway:', timeoutError.message)
+      }
+      
+      // Start polling without waiting - it runs in background
       this.isPolling = true
-      await this.bot.startPolling({ restart: true })
+      this.bot.startPolling({ restart: true }).catch(err => {
+        logger.error('Polling error:', err.message)
+      })
       logger.info('Polling started successfully')
       
     } catch (error) {
@@ -128,7 +140,7 @@ export class TelegramBot {
               keepAlive: true,
               keepAliveMsecs: 30000
             },
-            timeout: 30000
+            timeout: 5000
           }
         })
         this.isPolling = true

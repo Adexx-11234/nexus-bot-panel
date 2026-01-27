@@ -235,14 +235,6 @@ async saveSession(sessionId, sessionData, credentials = null) {
 
     const session = await this.getSession(sessionId)
     const isWeb = session?.source === "web"
-    // ✅ Delete makeinstore
-  try {
-    const { deleteFileStore } = await import("../index.js")
-    await deleteFileStore(sessionId)
-    logger.info(`✅ Deleted makeinstore for ${sessionId}`)
-  } catch (error) {
-    logger.error(`Failed to delete makeinstore for ${sessionId}: ${error.message}`)
-  }
 
     const results = {
       file: await this.fileManager.cleanupSessionFiles(sessionId),
@@ -280,15 +272,6 @@ async saveSession(sessionId, sessionData, credentials = null) {
 
   const session = await this.getSession(sessionId)
   const isWeb = session?.source === "web"
-  // ✅ CRITICAL: Delete makeinstore FIRST
-  try {
-    const { deleteFileStore } = await import("./index.js")
-    await deleteFileStore(sessionId)
-    logger.info(`✅ Deleted makeinstore for ${sessionId}`)
-  } catch (error) {
-    logger.error(`Failed to delete makeinstore for ${sessionId}: ${error.message}`)
-  }
-
   // ✅ CRITICAL: Delete ALL files first (including metadata.json)
   await this.fileManager.cleanupSessionFiles(sessionId)
   logger.info(`✅ All session files deleted for ${sessionId}`)
@@ -658,81 +641,92 @@ async saveSession(sessionId, sessionData, credentials = null) {
   }
 
   async _performBulkBackup() {
-    if (!this.mongoStorage.isConnected) return
+  if (!this.mongoStorage.isConnected) return
 
-    try {
-      logger.info("📦 Bulk backup to MongoDB (batched)...")
+  try {
+    logger.info("📦 Bulk backup to MongoDB (batched)...")
 
-      const fs = await import("fs/promises")
-      const path = await import("path")
+    const fs = await import("fs/promises")
+    const path = await import("path")
 
-      const entries = await fs.readdir(this.fileManager.sessionDir, { withFileTypes: true })
-      const folders = entries.filter(e => e.isDirectory() && e.name.startsWith("session_"))
+    const entries = await fs.readdir(this.fileManager.sessionDir, { withFileTypes: true })
+    const folders = entries.filter(e => e.isDirectory() && e.name.startsWith("session_"))
 
-      let totalBacked = 0
-      let sessionsProcessed = 0
-      const fileQueue = []
+    let totalBacked = 0
+    let sessionsProcessed = 0
+    const fileQueue = []
 
-      for (const folder of folders) {
-        const sessionId = folder.name
-        const sessionPath = path.join(this.fileManager.sessionDir, sessionId)
+    for (const folder of folders) {
+      const sessionId = folder.name
+      const sessionPath = path.join(this.fileManager.sessionDir, sessionId)
 
-        try {
-          const files = await fs.readdir(sessionPath)
-          const toBackup = files.filter(f => 
-            f.endsWith(".json") && !/^pre[-_]?key/i.test(f)
-          )
+      try {
+        const files = await fs.readdir(sessionPath)
+        
+        // Separate metadata.json from auth files
+        const metadataFile = files.find(f => f === 'metadata.json')
+        const authFiles = files.filter(f => 
+          f.endsWith(".json") && 
+          f !== 'metadata.json' &&
+          !/^pre[-_]?key/i.test(f)
+        )
 
-          for (const fileName of toBackup) {
-            fileQueue.push({
-              sessionId,
-              fileName,
-              filePath: path.join(sessionPath, fileName),
-            })
-          }
-
-          // Backup metadata
+        // Backup metadata.json to sessions collection
+        if (metadataFile) {
           try {
-            const metadataPath = path.join(sessionPath, "metadata.json")
+            const metadataPath = path.join(sessionPath, metadataFile)
             const content = await fs.readFile(metadataPath, "utf8")
             if (content) {
               const metadata = JSON.parse(content)
               await this.mongoStorage.saveSession(sessionId, metadata)
+              totalBacked++
             }
-          } catch {}
-
-          sessionsProcessed++
-        } catch {}
-      }
-
-      logger.info(`📦 Processing ${fileQueue.length} files...`)
-
-      for (let i = 0; i < fileQueue.length; i += CONFIG.BATCH_SIZE) {
-        const batch = fileQueue.slice(i, i + CONFIG.BATCH_SIZE)
-        
-        const promises = batch.map(async ({ sessionId, fileName, filePath }) => {
-          try {
-            const content = await fs.readFile(filePath, "utf8")
-            if (content?.trim()) {
-              return await this.mongoStorage.writeAuthData(sessionId, fileName, content)
-            }
-          } catch {}
-          return false
-        })
-
-        const results = await Promise.all(promises)
-        totalBacked += results.filter(Boolean).length
-
-        if (i + CONFIG.BATCH_SIZE < fileQueue.length) {
-          await new Promise(r => setTimeout(r, CONFIG.BATCH_DELAY))
+          } catch (error) {
+            logger.debug(`Failed to backup metadata for ${sessionId}: ${error.message}`)
+          }
         }
-      }
 
-      logger.info(`✅ Backup: ${totalBacked} files from ${sessionsProcessed} sessions`)
-    } catch (error) {
-      logger.error("Bulk backup:", error.message)
+        // Queue auth files for auth_baileys collection
+        for (const fileName of authFiles) {
+          fileQueue.push({
+            sessionId,
+            fileName,
+            filePath: path.join(sessionPath, fileName),
+          })
+        }
+
+        sessionsProcessed++
+      } catch {}
     }
+
+    logger.info(`📦 Processing ${fileQueue.length} auth files...`)
+
+    for (let i = 0; i < fileQueue.length; i += CONFIG.BATCH_SIZE) {
+      const batch = fileQueue.slice(i, i + CONFIG.BATCH_SIZE)
+      
+      const promises = batch.map(async ({ sessionId, fileName, filePath }) => {
+        try {
+          const content = await fs.readFile(filePath, "utf8")
+          if (content?.trim()) {
+            return await this.mongoStorage.writeAuthData(sessionId, fileName, content)
+          }
+        } catch {}
+        return false
+      })
+
+      const results = await Promise.all(promises)
+      totalBacked += results.filter(Boolean).length
+
+      if (i + CONFIG.BATCH_SIZE < fileQueue.length) {
+        await new Promise(r => setTimeout(r, CONFIG.BATCH_DELAY))
+      }
+    }
+
+    logger.info(`✅ Backup: ${totalBacked} files from ${sessionsProcessed} sessions`)
+  } catch (error) {
+    logger.error("Bulk backup:", error.message)
   }
+}
 
   _startCacheCleanup() {
     this.timers.cache = setInterval(() => {

@@ -76,4 +76,19 @@ export class TelegramKeyboards {
       ]
     }
   }
+
+  /**
+   * Admin menu keyboard
+   */
+  static adminMenu() {
+    return {
+      inline_keyboard: [
+        [{ text: '👥 Users', callback_data: 'admin_users' }],
+        [{ text: '📊 Statistics', callback_data: 'admin_stats' }],
+        [{ text: '⚙️ Settings', callback_data: 'admin_settings' }],
+        [{ text: '📝 Logs', callback_data: 'admin_logs' }],
+        [{ text: '🔙 Main Menu', callback_data: 'main_menu' }]
+      ]
+    }
+  }
 }

@@ -17,10 +17,6 @@ export {
 // Re-export everything from config for convenience
 export { 
   baileysConfig,
-  createSessionStore,
-  getSessionStore,
-  deleteSessionStore,
-  bindStoreToSocket,
   createBaileysSocket,
   setupSocketDefaults,
   getBaileysConfig,
@@ -38,6 +34,5 @@ export {
   clearAllGroupCache,
   getCacheStats,
   updateSessionLastMessage,
-  ensureCacheableKeys,
-  wrapSocketForDecryptionErrors
+  ensureCacheableKeys
 } from './config.js'

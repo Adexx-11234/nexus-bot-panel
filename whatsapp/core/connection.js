@@ -84,22 +84,14 @@ export class ConnectionManager {
         throw new Error("Failed to get authentication state")
       }
 
-      const { createSessionStore, createBaileysSocket, bindStoreToSocket } = await import("./config.js")
+      const { createBaileysSocket } = await import("./config.js")
 
-      const store = createSessionStore(sessionId)
 
-      // Create optimized getMessage function
-      const getMessage = this._createGetMessage(store)
-
-      let sock = createBaileysSocket(authState.state, sessionId, getMessage)
+      let sock = createBaileysSocket(authState.state, sessionId)
       extendSocket(sock)
 
       // Setup credentials update handler
       sock.ev.on("creds.update", authState.saveCreds)
-
-      // Bind store
-      logger.info(`Binding store to socket for ${sessionId}`)
-      await bindStoreToSocket(sock, sessionId)
       await new Promise((resolve) => setTimeout(resolve, 500))
 
       // Store metadata
@@ -107,11 +99,6 @@ export class ConnectionManager {
       sock.authMethod = authState.method
       sock.authCleanup = authState.cleanup
       sock.connectionCallbacks = callbacks
-      sock._sessionStore = store
-      sock._storeCleanup = () => {
-        if (authState.cleanup) authState.cleanup()
-      }
-      sock._messageCache = getMessage._cache
 
       this.activeSockets.set(sessionId, sock)
 
@@ -127,45 +114,6 @@ export class ConnectionManager {
       throw error
     }
   }
-
-  // ==================== GET MESSAGE (OPTIMIZED) ====================
-_createGetMessage(store) {
-  const cache = this.messageCache
-
-  const getMessage = async (key) => {
-    if (!key || !key.remoteJid || !key.id) {
-      return proto.Message.fromObject({})
-    }
-
-    const cacheKey = `${key.remoteJid}:${key.id}`
-
-    // Fast in-memory cache check
-    const cached = cache.get(cacheKey)
-    if (cached) return cached
-
-    // Try store lookup with timeout
-    if (store && typeof store.loadMessage === 'function') {
-      try {
-        const msg = await Promise.race([
-          store.loadMessage(key.remoteJid, key.id),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 5000)),
-        ])
-
-        if (msg?.message) {
-          cache.set(cacheKey, msg.message)
-          return msg.message
-        }
-      } catch (error) {
-        logger.debug(`getMessage store lookup failed: ${error.message}`)
-      }
-    }
-
-    return proto.Message.fromObject({})
-  }
-
-  getMessage._cache = cache
-  return getMessage
-}
 
   // ==================== AUTH STATE ====================
   async _getAuthState(sessionId, allowPairing = true) {
@@ -356,9 +304,6 @@ _createGetMessage(store) {
       }
     }
 
-    const { deleteSessionStore } = await import("./config.js")
-    deleteSessionStore(sessionId)
-
     this.activeSockets.delete(sessionId)
     this.pairingInProgress.delete(sessionId)
     this.clearConnectionTimeout(sessionId)
@@ -371,14 +316,10 @@ _createGetMessage(store) {
       const sock = this.activeSockets.get(sessionId)
 
       if (sock) {
-        if (sock._storeCleanup) sock._storeCleanup()
         if (typeof sock.authCleanup === "function") sock.authCleanup()
         if (sock.ev && typeof sock.ev.removeAllListeners === "function") sock.ev.removeAllListeners()
         if (sock.ws && sock.ws.socket._readyState === 1) sock.ws.close(1000, "Disconnect")
       }
-
-      const { deleteSessionStore } = await import("./config.js")
-      deleteSessionStore(sessionId)
 
       this.activeSockets.delete(sessionId)
       this.pairingInProgress.delete(sessionId)
