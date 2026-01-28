@@ -318,97 +318,167 @@ export class WebSessionDetector {
    * This ensures file storage has the auth data before takeover
    * @private
    */
-  async _syncAuthFromMongoToFile(sessionId) {
-    try {
-      logger.info(`🔄 Syncing auth from MongoDB to file for ${sessionId}`)
+  /**
+ * 🆕 Sync auth from MongoDB to file storage
+ * This ensures file storage has the auth data before takeover
+ * @private
+ */
+async _syncAuthFromMongoToFile(sessionId) {
+  try {
+    logger.info(`🔄 Syncing auth from MongoDB to file for ${sessionId}`)
 
-      const mongoStorage = this.storage.mongoStorage
-      if (!mongoStorage || !mongoStorage.isConnected) {
-        logger.warn(`MongoDB not available for auth sync`)
-        return false
-      }
-
-      // Get all auth files from MongoDB
-      const authFiles = await mongoStorage.getAllAuthFiles(sessionId)
-
-      if (authFiles.length === 0) {
-        logger.warn(`No auth files found in MongoDB for ${sessionId}`)
-        return false
-      }
-
-      logger.info(`Found ${authFiles.length} auth files in MongoDB`)
-
-      // Import file storage manager
-      const { FileManager } = await import("../storage/index.js")
-      const fileManager = new FileManager()
-      await fileManager.ensureSessionDirectory(sessionId)
-
-      let synced = 0
-      let failed = 0
-
-      // Copy each auth file to file storage
-      for (const fileName of authFiles) {
-        try {
-          // Read from MongoDB
-          const authDataStr = await mongoStorage.readAuthData(sessionId, fileName)
-
-          if (!authDataStr) {
-            logger.debug(`Empty auth data for ${fileName}`)
-            failed++
-            continue
-          }
-
-          // Parse and write to file
-          const BufferJSON = {
-            replacer: (k, value) => {
-              if (Buffer.isBuffer(value) || value instanceof Uint8Array || value?.type === "Buffer") {
-                return { type: "Buffer", data: Buffer.from(value?.data || value).toString("base64") }
-              }
-              return value
-            },
-            reviver: (_, value) => {
-              if (typeof value === "object" && !!value && (value.buffer === true || value.type === "Buffer")) {
-                const val = value.data || value.value
-                return typeof val === "string" ? Buffer.from(val, "base64") : Buffer.from(val || [])
-              }
-              return value
-            },
-          }
-
-          const authData = typeof authDataStr === "string" ? JSON.parse(authDataStr, BufferJSON.reviver) : authDataStr
-
-          // Write to file storage
-          const fs = await import("fs/promises")
-          const path = await import("path")
-
-          const sanitizeFileName = (name) => {
-            return name.replace(/::/g, "__").replace(/:/g, "-").replace(/\//g, "_").replace(/\\/g, "_")
-          }
-
-          const sanitizedName = sanitizeFileName(fileName)
-          const sessionPath = fileManager.getSessionPath(sessionId)
-          const filePath = path.join(sessionPath, sanitizedName)
-
-          await fs.writeFile(filePath, JSON.stringify(authData, BufferJSON.replacer, 2), "utf8")
-
-          synced++
-
-          if (fileName === "creds.json") {
-            logger.info(`✅ Synced ${fileName}`)
-          }
-        } catch (error) {
-          logger.error(`Failed to sync ${fileName}: ${error.message}`)
-          failed++
-        }
-      }
-
-      logger.info(`✅ Auth sync complete: ${synced} synced, ${failed} failed`)
-      return synced > 0
-    } catch (error) {
-      logger.error(`Auth sync failed for ${sessionId}:`, error.message)
+    const mongoStorage = this.storage.mongoStorage
+    if (!mongoStorage || !mongoStorage.isConnected) {
+      logger.warn(`MongoDB not available for auth sync`)
       return false
     }
+
+    // ============================================================================
+    // STEP 1: Get metadata from sessions collection (CRITICAL - MUST EXIST)
+    // ============================================================================
+    
+    const sessionMetadata = await mongoStorage.getSession(sessionId)
+    if (!sessionMetadata) {
+      logger.warn(`No session metadata found in MongoDB for ${sessionId}`)
+      return false
+    }
+
+    logger.info(`✅ Found session metadata in MongoDB`)
+
+    // ============================================================================
+    // STEP 2: Get all auth files from auth_baileys collection
+    // ============================================================================
+    
+    const authFiles = await mongoStorage.getAllAuthFiles(sessionId)
+
+    if (authFiles.length === 0) {
+      logger.warn(`No auth files found in MongoDB for ${sessionId}`)
+      return false
+    }
+
+    logger.info(`Found ${authFiles.length} auth files in MongoDB`)
+
+    // ============================================================================
+    // STEP 3: Prepare file storage
+    // ============================================================================
+    
+    const { FileManager } = await import("../storage/index.js")
+    const fileManager = new FileManager()
+    await fileManager.ensureSessionDirectory(sessionId)
+
+    const fs = await import("fs/promises")
+    const path = await import("path")
+    const sessionPath = fileManager.getSessionPath(sessionId)
+
+    let synced = 0
+    let failed = 0
+
+    // ============================================================================
+    // STEP 4: Write metadata.json FIRST (required for validation)
+    // ============================================================================
+    
+    try {
+      const metadataPath = path.join(sessionPath, "metadata.json")
+      await fs.writeFile(metadataPath, JSON.stringify(sessionMetadata, null, 2), "utf8")
+      logger.info(`✅ Synced metadata.json`)
+      synced++
+    } catch (error) {
+      logger.error(`❌ Failed to sync metadata.json: ${error.message}`)
+      failed++
+      // If metadata fails, abort - it's required
+      return false
+    }
+
+    // ============================================================================
+    // STEP 5: Write all auth files from auth_baileys collection
+    // ============================================================================
+    
+    const BufferJSON = {
+      replacer: (k, value) => {
+        if (Buffer.isBuffer(value) || value instanceof Uint8Array || value?.type === "Buffer") {
+          return { type: "Buffer", data: Buffer.from(value?.data || value).toString("base64") }
+        }
+        return value
+      },
+      reviver: (_, value) => {
+        if (typeof value === "object" && !!value && (value.buffer === true || value.type === "Buffer")) {
+          const val = value.data || value.value
+          return typeof val === "string" ? Buffer.from(val, "base64") : Buffer.from(val || [])
+        }
+        return value
+      },
+    }
+
+    const sanitizeFileName = (name) => {
+      return name.replace(/::/g, "__").replace(/:/g, "-").replace(/\//g, "_").replace(/\\/g, "_")
+    }
+
+    // Process auth files
+    for (const fileName of authFiles) {
+      try {
+        // Read from MongoDB
+        const authDataStr = await mongoStorage.readAuthData(sessionId, fileName)
+
+        if (!authDataStr) {
+          logger.debug(`Empty auth data for ${fileName}`)
+          failed++
+          continue
+        }
+
+        // Parse the data
+        const authData = typeof authDataStr === "string" 
+          ? JSON.parse(authDataStr, BufferJSON.reviver) 
+          : authDataStr
+
+        // Write to file storage
+        const sanitizedName = sanitizeFileName(fileName)
+        const filePath = path.join(sessionPath, sanitizedName)
+
+        await fs.writeFile(filePath, JSON.stringify(authData, BufferJSON.replacer, 2), "utf8")
+
+        synced++
+
+        // Log important files
+        if (fileName === "creds.json") {
+          logger.info(`✅ Synced creds.json`)
+        }
+      } catch (error) {
+        logger.error(`Failed to sync ${fileName}: ${error.message}`)
+        failed++
+      }
+    }
+
+    // ============================================================================
+    // STEP 6: Verify critical files exist
+    // ============================================================================
+    
+    const hasCredsJson = await fs.access(path.join(sessionPath, "creds.json"))
+      .then(() => true)
+      .catch(() => false)
+
+    const hasMetadataJson = await fs.access(path.join(sessionPath, "metadata.json"))
+      .then(() => true)
+      .catch(() => false)
+
+    if (!hasCredsJson) {
+      logger.error(`❌ creds.json missing after sync`)
+      return false
+    }
+
+    if (!hasMetadataJson) {
+      logger.error(`❌ metadata.json missing after sync`)
+      return false
+    }
+
+    logger.info(`✅ Auth sync complete: ${synced} synced, ${failed} failed`)
+    logger.info(`✅ Critical files verified: creds.json ✓, metadata.json ✓`)
+    
+    return synced > 0
+  } catch (error) {
+    logger.error(`Auth sync failed for ${sessionId}:`, error.message)
+    return false
   }
+}
 
   /**
    * Check if detector is running
