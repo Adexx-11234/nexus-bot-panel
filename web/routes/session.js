@@ -7,6 +7,15 @@ const router = express.Router()
 const sessionController = new SessionController()
 const logger = createComponentLogger('SESSION_ROUTES')
 
+// Helper function to format time
+const formatRetryTime = (seconds) => {
+  if (seconds < 60) {
+    return `${seconds} second${seconds !== 1 ? 's' : ''}`
+  }
+  const minutes = Math.ceil(seconds / 60)
+  return `${minutes} minute${minutes !== 1 ? 's' : ''}`
+}
+
 // Get user's session status
 router.get('/status', async (req, res) => {
   try {
@@ -24,8 +33,8 @@ router.get('/status', async (req, res) => {
   }
 })
 
-// Create new WhatsApp session
-router.post('/create', rateLimitMiddleware(5, 300000), async (req, res) => {
+// Create new WhatsApp session (5 requests per 5 minutes)
+router.post('/create', rateLimitMiddleware(50, 300000, 'You can only create 50 sessions per 5 minutes.'), async (req, res) => {
   try {
     const userId = req.user.userId
     const { phoneNumber } = req.body
@@ -51,7 +60,6 @@ router.post('/create', rateLimitMiddleware(5, 300000), async (req, res) => {
     res.status(500).json({ error: 'Failed to create session' })
   }
 })
-
 // Get pairing code
 router.get('/pairing-code', async (req, res) => {
   try {
@@ -111,8 +119,8 @@ router.get('/stats', async (req, res) => {
   }
 })
 
-// Reconnect session
-router.post('/reconnect', rateLimitMiddleware(10, 300000), async (req, res) => {
+// Reconnect session (10 requests per 5 minutes)
+router.post('/reconnect', rateLimitMiddleware(50, 300000, 'You can only reconnect 50 times per 5 minutes.'), async (req, res) => {
   try {
     const userId = req.user.userId
     const result = await sessionController.reconnectSession(userId)

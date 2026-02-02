@@ -15,6 +15,7 @@ export class WebSessionService {
     this.sessionManager = null
     this.pairingCodes = new Map()
     this.cleanupInterval = null
+    this.initializationPromise = null // Track initialization
 
     serviceInstance = this
   }
@@ -22,19 +23,66 @@ export class WebSessionService {
   /**
    * Initialize service with session manager
    */
-  initialize() {
-    if (!this.sessionManager) {
-      this.sessionManager = getSessionManager()
+  async initialize() {
+    // Prevent multiple simultaneous initializations
+    if (this.initializationPromise) {
+      return this.initializationPromise
     }
 
-    // Start cleanup interval
-    if (!this.cleanupInterval) {
-      this.cleanupInterval = setInterval(() => {
-        this.cleanupExpiredPairingCodes()
-      }, 60000) // Every minute
-    }
+    this.initializationPromise = (async () => {
+      try {
+        if (!this.sessionManager) {
+          logger.info('Getting session manager...')
+          this.sessionManager = getSessionManager()
+          
+          // CRITICAL: Wait for SessionManager to initialize
+          if (!this.sessionManager.storage) {
+            logger.info('Initializing session manager...')
+            await this.sessionManager.initialize()
+          }
+          
+          // Wait for storage to be ready
+          let attempts = 0
+          while (!this.sessionManager.storage && attempts < 20) {
+            logger.debug('Waiting for storage to initialize...')
+            await new Promise(resolve => setTimeout(resolve, 500))
+            attempts++
+          }
 
-    logger.info('Web session service initialized')
+          if (!this.sessionManager.storage) {
+            throw new Error('Storage failed to initialize after 10 seconds')
+          }
+
+          logger.info('Session manager storage ready')
+        }
+
+        // Start cleanup interval
+        if (!this.cleanupInterval) {
+          this.cleanupInterval = setInterval(() => {
+            this.cleanupExpiredPairingCodes()
+          }, 60000) // Every minute
+        }
+
+        logger.info('Web session service initialized successfully')
+        return true
+      } catch (error) {
+        logger.error('Web session service initialization failed:', error)
+        this.initializationPromise = null // Reset so it can be retried
+        throw error
+      }
+    })()
+
+    return this.initializationPromise
+  }
+
+  /**
+   * Ensure initialization before any operation
+   * @private
+   */
+  async _ensureInitialized() {
+    if (!this.sessionManager || !this.sessionManager.storage) {
+      await this.initialize()
+    }
   }
 
   /**
@@ -42,9 +90,7 @@ export class WebSessionService {
    */
   async getSessionStatus(sessionId) {
     try {
-      if (!this.sessionManager) {
-        this.initialize()
-      }
+      await this._ensureInitialized()
 
       const session = await this.sessionManager.storage.getSession(sessionId)
       const hasActiveSocket = this.sessionManager.activeSockets.has(sessionId)
@@ -69,7 +115,8 @@ export class WebSessionService {
         connectionStatus: 'disconnected',
         phoneNumber: null,
         hasActiveSocket: false,
-        canReconnect: false
+        canReconnect: false,
+        error: error.message
       }
     }
   }
@@ -79,9 +126,7 @@ export class WebSessionService {
    */
   async createSession(userId, phoneNumber) {
     try {
-      if (!this.sessionManager) {
-        this.initialize()
-      }
+      await this._ensureInitialized()
 
       const sessionId = `session_${userId}`
 
@@ -167,21 +212,38 @@ export class WebSessionService {
     }
   }
 
-  /**
+/**
    * Disconnect session
    */
-  async disconnectSession(sessionId) {
+  async disconnectSession(sessionId, forceCleanup = false) {
     try {
-      if (!this.sessionManager) {
-        this.initialize()
-      }
+      await this._ensureInitialized()
 
       const status = await this.getSessionStatus(sessionId)
       
-      if (!status.hasActiveSocket && !status.isConnected) {
+      if (!status.hasActiveSocket && !status.isConnected && !forceCleanup) {
         return { success: false, error: 'No active session to disconnect' }
       }
 
+      logger.info(`Disconnecting session ${sessionId} (forceCleanup: ${forceCleanup})`)
+
+      // FIX: If forceCleanup, perform complete deletion
+      if (forceCleanup) {
+        const cleanupResults = await this.sessionManager.performCompleteUserCleanup(sessionId)
+        
+        // Clear pairing code
+        this.pairingCodes.delete(sessionId)
+        
+        logger.info(`Complete cleanup performed for ${sessionId}:`, cleanupResults)
+        
+        return {
+          success: true,
+          message: 'Session completely disconnected and cleaned up',
+          cleanupResults
+        }
+      }
+
+      // Otherwise, do soft disconnect
       await this.sessionManager.disconnectSession(sessionId, false)
 
       // Clear pairing code
@@ -203,9 +265,7 @@ export class WebSessionService {
    */
   async reconnectSession(sessionId) {
     try {
-      if (!this.sessionManager) {
-        this.initialize()
-      }
+      await this._ensureInitialized()
 
       const status = await this.getSessionStatus(sessionId)
 
@@ -261,9 +321,7 @@ export class WebSessionService {
    */
   async getSessionStats(sessionId) {
     try {
-      if (!this.sessionManager) {
-        this.initialize()
-      }
+      await this._ensureInitialized()
 
       const session = await this.sessionManager.storage.getSession(sessionId)
       const sock = this.sessionManager.getSession(sessionId)
@@ -310,24 +368,28 @@ export class WebSessionService {
    */
   async getSystemStats() {
     try {
-      if (!this.sessionManager) {
-        this.initialize()
-      }
+      await this._ensureInitialized()
 
       const stats = await this.sessionManager.getStats()
 
       return {
-        totalSessions: stats.totalSessions,
-        connectedSessions: stats.connectedSessions,
-        webSessions: stats.webSessions,
-        activeSockets: stats.activeSockets,
-        isInitialized: stats.isInitialized,
-        eventHandlersEnabled: stats.eventHandlersEnabled
+        totalSessions: stats.totalSessions || 0,
+        connectedSessions: stats.connectedWebSessions || 0,
+        webSessions: stats.webSessions || 0,
+        activeSockets: stats.activeSockets || 0,
+        isInitialized: stats.isInitialized || false
       }
 
     } catch (error) {
       logger.error('Get system stats error:', error)
-      throw error
+      return {
+        totalSessions: 0,
+        connectedSessions: 0,
+        webSessions: 0,
+        activeSockets: 0,
+        isInitialized: false,
+        error: error.message
+      }
     }
   }
 
@@ -361,6 +423,7 @@ export class WebSessionService {
 
     this.pairingCodes.clear()
     this.sessionManager = null
+    this.initializationPromise = null
 
     logger.info('Web session service shutdown')
   }
@@ -370,7 +433,10 @@ export class WebSessionService {
 export function getWebSessionService() {
   if (!serviceInstance) {
     serviceInstance = new WebSessionService()
-    serviceInstance.initialize()
+    // Initialize asynchronously but return immediately
+    serviceInstance.initialize().catch(err => {
+      logger.error('Failed to initialize web session service:', err)
+    })
   }
   return serviceInstance
 }

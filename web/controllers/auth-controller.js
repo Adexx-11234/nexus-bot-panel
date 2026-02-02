@@ -62,57 +62,68 @@ export class AuthController {
     }
   }
 
-  async login(phoneNumber, password) {
-    try {
-      // Clean phone number
-      const cleanPhone = this._cleanPhoneNumber(phoneNumber)
+async login(phoneNumber, password) {
+  try {
+    // Clean phone number
+    const cleanPhone = this._cleanPhoneNumber(phoneNumber)
+    
+    logger.info(`[LOGIN] Attempt - Input: "${phoneNumber}" → Cleaned: "${cleanPhone}"`)
 
-      // Get user
-      const user = await this.userService.getUserByPhone(cleanPhone)
-      if (!user) {
-        return { success: false, error: 'Invalid phone number or password' }
-      }
+    // Get user by phone number (handles all variations internally)
+    const user = await this.userService.getUserByPhone(cleanPhone)
 
-      // Get password hash
-      const authData = await this.userService.getUserAuth(user.id)
-      if (!authData || !authData.passwordHash) {
-        return { success: false, error: 'Invalid phone number or password' }
-      }
-
-      // Verify password
-      const isValidPassword = await bcrypt.compare(password, authData.passwordHash)
-      if (!isValidPassword) {
-        return { success: false, error: 'Invalid phone number or password' }
-      }
-
-      // Check if user is active
-      if (!user.isActive) {
-        return { success: false, error: 'Account is deactivated' }
-      }
-
-      // Generate token using telegram_id
-      const token = generateToken(user.telegramId, cleanPhone)
-
-      logger.info(`User logged in successfully: telegram_id=${user.telegramId}, db_id=${user.id}`)
-
-      return {
-        success: true,
-        token,
-        user: {
-          id: user.telegramId, // Return telegram_id as the main ID
-          phoneNumber: user.phoneNumber,
-          firstName: user.firstName,
-          isConnected: user.isConnected,
-          connectionStatus: user.connectionStatus,
-          sessionId: user.sessionId
-        }
-      }
-
-    } catch (error) {
-      logger.error('Login error:', error)
-      return { success: false, error: 'Login failed' }
+    if (!user) {
+      logger.error(`[LOGIN] ❌ User not found for phone: ${cleanPhone}`)
+      return { success: false, error: 'Invalid phone number or password' }
     }
+
+    logger.info(`[LOGIN] ✅ User found - ID: ${user.id}, TelegramID: ${user.telegramId}, Phone: ${user.phoneNumber}`)
+
+    // Get password hash
+    const authData = await this.userService.getUserAuth(user.id)
+    if (!authData || !authData.passwordHash) {
+      logger.error(`[LOGIN] ❌ No auth data for user ID: ${user.id}`)
+      return { success: false, error: 'Invalid phone number or password' }
+    }
+
+    logger.debug(`[LOGIN] Verifying password...`)
+
+    // Verify password
+    const isValidPassword = await bcrypt.compare(password, authData.passwordHash)
+    if (!isValidPassword) {
+      logger.warn(`[LOGIN] ❌ Invalid password for user ID: ${user.id}`)
+      return { success: false, error: 'Invalid phone number or password' }
+    }
+
+    // Check if user is active
+    if (!user.isActive) {
+      logger.warn(`[LOGIN] ❌ Inactive user: ${user.id}`)
+      return { success: false, error: 'Account is deactivated' }
+    }
+
+    // Generate token using telegram_id
+    const token = generateToken(user.telegramId, user.phoneNumber)
+
+    logger.info(`[LOGIN] ✅✅✅ SUCCESS - User: ${user.telegramId}, Phone: ${user.phoneNumber}`)
+
+    return {
+      success: true,
+      token,
+      user: {
+        id: user.telegramId,
+        phoneNumber: user.phoneNumber,
+        firstName: user.firstName,
+        isConnected: user.isConnected,
+        connectionStatus: user.connectionStatus,
+        sessionId: user.sessionId
+      }
+    }
+
+  } catch (error) {
+    logger.error('[LOGIN] Exception:', error)
+    return { success: false, error: 'Login failed' }
   }
+}
 
   async verifyToken(token) {
     try {
@@ -255,21 +266,27 @@ export class AuthController {
     }
   }
 
-  _cleanPhoneNumber(phoneNumber) {
-    // Remove all non-digit characters
-    let cleaned = phoneNumber.replace(/\D/g, '')
+_cleanPhoneNumber(phoneNumber) {
+    // Remove suffix (anything after :)
+    const phoneWithoutSuffix = phoneNumber.split(':')[0]
     
-    // Add + if not present
-    if (!cleaned.startsWith('+')) {
-      cleaned = '+' + cleaned
+    // Remove all non-digit characters except +
+    let cleaned = phoneWithoutSuffix.replace(/[^\d+]/g, '')
+    
+    // Remove multiple + signs, keep only first one
+    if (cleaned.includes('+')) {
+      const parts = cleaned.split('+')
+      cleaned = '+' + parts.filter(p => p).join('')
     }
-
+    
     return cleaned
   }
 
   _isValidPhoneNumber(phoneNumber) {
-    // Basic validation: starts with + and has 10-15 digits
-    const phoneRegex = /^\+\d{10,15}$/
-    return phoneRegex.test(phoneNumber)
+    // Remove + for validation
+    const digits = phoneNumber.replace(/\D/g, '')
+    
+    // Must have 10-15 digits
+    return digits.length >= 10 && digits.length <= 15
   }
 }

@@ -1,9 +1,10 @@
-// Dashboard handler
+// Dashboard handler - FIXED to handle 515 restart flow
 class DashboardHandler {
   constructor() {
     this.apiBase = ''
     this.refreshInterval = null
     this.pairingCode = null
+    this.connectionPollInterval = null
     this.init()
   }
 
@@ -67,9 +68,16 @@ class DashboardHandler {
       if (data.success && data.status) {
         this.updateSessionUI(data.status)
         
-        // If connecting, start polling for pairing code
+        // Handle different connection states
         if (data.status.connectionStatus === 'connecting') {
           this.pollPairingCode()
+          this.startConnectionPolling() // Poll for connection completion
+        } else if (data.status.connectionStatus === 'reconnecting') {
+          // Keep polling when reconnecting after 515
+          this.startConnectionPolling()
+          this.showAlert('Finalizing connection...', 'info')
+        } else {
+          this.stopConnectionPolling()
         }
       }
     } catch (error) {
@@ -77,17 +85,63 @@ class DashboardHandler {
     }
   }
 
+  // Poll connection status more frequently during connection
+  startConnectionPolling() {
+    if (this.connectionPollInterval) return
+
+    console.log('Starting connection polling...')
+    this.connectionPollInterval = setInterval(async () => {
+      try {
+        const response = await fetch('/api/sessions/status')
+        const data = await response.json()
+
+        if (data.success && data.status) {
+          // Check if connected
+          if (data.status.isConnected && data.status.connectionStatus === 'connected') {
+            console.log('Connection established!')
+            this.stopConnectionPolling()
+            this.showAlert('WhatsApp connected successfully!', 'success')
+            await this.loadSessionStatus() // Final status update
+          } else if (data.status.connectionStatus === 'disconnected') {
+            // Connection failed
+            console.log('Connection failed')
+            this.stopConnectionPolling()
+            await this.loadSessionStatus()
+          }
+        }
+      } catch (error) {
+        console.error('Connection poll error:', error)
+      }
+    }, 2000) // Poll every 2 seconds
+  }
+
+  stopConnectionPolling() {
+    if (this.connectionPollInterval) {
+      clearInterval(this.connectionPollInterval)
+      this.connectionPollInterval = null
+      console.log('Stopped connection polling')
+    }
+  }
+
   updateSessionUI(status) {
-    // Update status badge
+    // Update status badge with reconnecting state
     const statusBadge = document.getElementById('status-badge')
     if (statusBadge) {
-      const statusClass = status.isConnected ? 'status-badge-connected' : 
-                         status.connectionStatus === 'connecting' ? 'status-badge-connecting' :
-                         'status-badge-disconnected'
-      
-      const statusText = status.isConnected ? 'Connected' :
-                        status.connectionStatus === 'connecting' ? 'Connecting' :
-                        'Disconnected'
+      let statusClass, statusText
+
+      if (status.isConnected) {
+        statusClass = 'status-badge-connected'
+        statusText = 'Connected'
+      } else if (status.connectionStatus === 'connecting') {
+        statusClass = 'status-badge-connecting'
+        statusText = 'Connecting'
+      } else if (status.connectionStatus === 'reconnecting') {
+        statusClass = 'status-badge-connecting'
+        statusText = 'Finalizing Connection'
+      } else {
+        statusClass = 'status-badge-disconnected'
+        statusText = 'Disconnected'
+      }
 
       statusBadge.className = `status-badge ${statusClass}`
       statusBadge.innerHTML = `
@@ -113,11 +167,20 @@ class DashboardHandler {
       if (disconnectBtn) disconnectBtn.classList.remove('hidden')
       if (reconnectBtn) reconnectBtn.classList.add('hidden')
       if (pairingContainer) pairingContainer.classList.add('hidden')
-    } else if (status.connectionStatus === 'connecting') {
+    } else if (status.connectionStatus === 'connecting' || 
+               status.connectionStatus === 'reconnecting') {
+      // Keep UI in connecting/reconnecting state
       if (connectCard) connectCard.classList.add('hidden')
       if (disconnectBtn) disconnectBtn.classList.add('hidden')
       if (reconnectBtn) reconnectBtn.classList.add('hidden')
-      if (pairingContainer) pairingContainer.classList.remove('hidden')
+      
+      // Show pairing code only during initial connecting (not reconnecting)
+      if (status.connectionStatus === 'connecting' && pairingContainer) {
+        pairingContainer.classList.remove('hidden')
+      } else if (pairingContainer) {
+        // Hide pairing code during reconnecting
+        pairingContainer.classList.add('hidden')
+      }
     } else {
       if (connectCard) connectCard.classList.remove('hidden')
       if (disconnectBtn) disconnectBtn.classList.add('hidden')
@@ -353,6 +416,9 @@ class DashboardHandler {
   }
 
   async handleLogout() {
+    this.stopAutoRefresh()
+    this.stopConnectionPolling()
+    
     try {
       await fetch('/auth/logout', { method: 'POST' })
       window.location.href = '/login'
@@ -419,5 +485,6 @@ document.addEventListener('DOMContentLoaded', () => {
 window.addEventListener('beforeunload', () => {
   if (window.dashboardHandler) {
     window.dashboardHandler.stopAutoRefresh()
+    window.dashboardHandler.stopConnectionPolling()
   }
 })

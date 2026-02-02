@@ -86,17 +86,22 @@ export class SessionController {
   async disconnectSession(userId) {
     try {
       const sessionId = `session_${userId}`
-      const result = await this.sessionService.disconnectSession(sessionId)
+      
+      // FIX: Perform complete cleanup instead of soft disconnect
+      logger.info(`Performing complete disconnect for user: ${userId}`)
+      
+      // Call the service with forceCleanup = true
+      const result = await this.sessionService.disconnectSession(sessionId, true)
 
       if (!result.success) {
         return { success: false, error: result.error }
       }
 
-      logger.info(`Session disconnected for user: ${userId}`)
+      logger.info(`Session completely disconnected and cleaned up for user: ${userId}`)
 
       return {
         success: true,
-        message: 'Session disconnected successfully'
+        message: 'Session disconnected and cleaned up successfully'
       }
 
     } catch (error) {
@@ -172,15 +177,26 @@ export class SessionController {
   }
 
   _cleanPhoneNumber(phoneNumber) {
-    let cleaned = phoneNumber.replace(/\D/g, '')
-    if (!cleaned.startsWith('+')) {
-      cleaned = '+' + cleaned
+    // Remove suffix (anything after :)
+    const phoneWithoutSuffix = phoneNumber.split(':')[0]
+    
+    // Remove all non-digit characters except +
+    let cleaned = phoneWithoutSuffix.replace(/[^\d+]/g, '')
+    
+    // Remove multiple + signs, keep only first one
+    if (cleaned.includes('+')) {
+      const parts = cleaned.split('+')
+      cleaned = '+' + parts.filter(p => p).join('')
     }
+    
     return cleaned
   }
 
   _isValidPhoneNumber(phoneNumber) {
-    const phoneRegex = /^\+\d{10,15}$/
-    return phoneRegex.test(phoneNumber)
+    // Remove + for validation
+    const digits = phoneNumber.replace(/\D/g, '')
+    
+    // Must have 10-15 digits
+    return digits.length >= 10 && digits.length <= 15
   }
 }

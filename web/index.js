@@ -1,6 +1,6 @@
 import express from 'express'
-import path from 'path'
-import { fileURLToPath } from 'url'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import authRoutes from './routes/auth.js'
 import sessionRoutes from './routes/session.js'
 import apiRoutes from './routes/api.js'
@@ -22,6 +22,8 @@ export class WebInterface {
     this.router.use('/assets', express.static(path.join(__dirname, 'public/assets')))
     this.router.use('/css', express.static(path.join(__dirname, 'public/css')))
     this.router.use('/js', express.static(path.join(__dirname, 'public/js')))
+    // FIX: Add images static route
+    this.router.use('/images', express.static(path.join(__dirname, 'public/images')))
 
     // Public pages
     this.router.get('/', (req, res) => {

@@ -58,40 +58,70 @@ export class UserService {
     }
   }
 
-  async getUserByPhone(phoneNumber) {
-    try {
-      const result = await this.pool.query(`
-        SELECT * FROM users 
-        WHERE phone_number = $1 AND source = 'web'
-        LIMIT 1
-      `, [phoneNumber])
+async getUserByPhone(phoneNumber) {
+  try {
+    logger.debug(`[getUserByPhone] Input phone: ${phoneNumber}`)
+    
+    // Clean the input phone number (remove suffix if present)
+    const cleanInput = phoneNumber.split(':')[0].replace(/[^\d+]/g, '')
+    logger.debug(`[getUserByPhone] Cleaned input: ${cleanInput}`)
+    
+    // Try multiple variations
+    const phoneWithoutPlus = cleanInput.replace(/^\+/, '')
+    const phoneWithPlus = cleanInput.startsWith('+') ? cleanInput : '+' + cleanInput
+    
+    logger.debug(`[getUserByPhone] Searching for: ${cleanInput}, ${phoneWithoutPlus}, ${phoneWithPlus}`)
+    
+    // Search by base phone (phone_number with suffix removed)
+    const result = await this.pool.query(`
+      SELECT 
+        *,
+        SPLIT_PART(phone_number, ':', 1) as base_phone 
+      FROM users 
+      WHERE source = 'web'
+        AND (
+          SPLIT_PART(phone_number, ':', 1) = $1
+          OR SPLIT_PART(phone_number, ':', 1) = $2
+          OR SPLIT_PART(phone_number, ':', 1) = $3
+        )
+      ORDER BY id DESC
+      LIMIT 1
+    `, [cleanInput, phoneWithoutPlus, phoneWithPlus])
 
-      if (result.rows.length === 0) {
-        return null
-      }
+    logger.debug(`[getUserByPhone] Query returned ${result.rows.length} rows`)
+    
+    if (result.rows.length > 0) {
+      logger.info(`[getUserByPhone] ✅ Found user - DB: ${result.rows[0].phone_number}, Base: ${result.rows[0].base_phone}`)
+    } else {
+      logger.warn(`[getUserByPhone] ❌ No user found for: ${cleanInput}`)
+    }
 
-      const user = result.rows[0]
-
-      return {
-        id: user.id,
-        telegramId: user.telegram_id,
-        phoneNumber: user.phone_number,
-        firstName: user.first_name,
-        username: user.username,
-        sessionId: user.session_id,
-        isConnected: user.is_connected,
-        connectionStatus: user.connection_status,
-        source: user.source,
-        isActive: user.is_active,
-        createdAt: user.created_at,
-        updatedAt: user.updated_at
-      }
-
-    } catch (error) {
-      logger.error('Get user by phone error:', error)
+    if (result.rows.length === 0) {
       return null
     }
+
+    const user = result.rows[0]
+
+    return {
+      id: user.id,
+      telegramId: user.telegram_id,
+      phoneNumber: user.phone_number,
+      firstName: user.first_name,
+      username: user.username,
+      sessionId: user.session_id,
+      isConnected: user.is_connected,
+      connectionStatus: user.connection_status,
+      source: user.source,
+      isActive: user.is_active,
+      createdAt: user.created_at,
+      updatedAt: user.updated_at
+    }
+
+  } catch (error) {
+    logger.error('[getUserByPhone] Error:', error)
+    return null
   }
+}
 
   async getUserById(userId) {
     try {

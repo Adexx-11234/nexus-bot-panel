@@ -40,7 +40,7 @@ class RateLimiter {
 
 const limiter = new RateLimiter()
 
-export function rateLimitMiddleware(maxRequests = 100, windowMs = 60000) {
+export function rateLimitMiddleware(maxRequests = 100, windowMs = 60000, customMessage = null) {
   return (req, res, next) => {
     const identifier = req.user?.userId || req.ip
     const result = limiter.check(identifier, maxRequests, windowMs)
@@ -49,12 +49,30 @@ export function rateLimitMiddleware(maxRequests = 100, windowMs = 60000) {
     res.setHeader('X-RateLimit-Remaining', result.remaining)
 
     if (!result.allowed) {
-      const retryAfter = Math.ceil((result.resetTime - Date.now()) / 1000)
-      res.setHeader('Retry-After', retryAfter)
+      const retryAfterSeconds = Math.ceil((result.resetTime - Date.now()) / 1000)
+      const retryAfterMinutes = Math.ceil(retryAfterSeconds / 60)
+      
+      res.setHeader('Retry-After', retryAfterSeconds)
       logger.warn(`Rate limit exceeded for ${identifier}`)
+      
+      // Format time message
+      let timeMessage
+      if (retryAfterSeconds < 60) {
+        timeMessage = `${retryAfterSeconds} second${retryAfterSeconds !== 1 ? 's' : ''}`
+      } else {
+        timeMessage = `${retryAfterMinutes} minute${retryAfterMinutes !== 1 ? 's' : ''}`
+      }
+      
+      // Use custom message or generate default
+      const message = customMessage 
+        ? `${customMessage} Please try again in ${timeMessage}.`
+        : `You have exceeded the rate limit. Please try again in ${timeMessage}.`
+      
       return res.status(429).json({
         error: 'Too many requests',
-        retryAfter
+        message: message,
+        retryAfter: retryAfterSeconds,
+        retryAfterMinutes: retryAfterMinutes
       })
     }
 
@@ -63,9 +81,9 @@ export function rateLimitMiddleware(maxRequests = 100, windowMs = 60000) {
 }
 
 export function strictRateLimit(req, res, next) {
-  return rateLimitMiddleware(20, 60000)(req, res, next)
+  return rateLimitMiddleware(50, 60000, 'You can only make 50 requests per minute.')(req, res, next)
 }
 
 export function authRateLimit(req, res, next) {
-  return rateLimitMiddleware(5, 300000)(req, res, next)
+  return rateLimitMiddleware(10, 300000, 'You can only make 10 authentication requests per 5 minutes.')(req, res, next)
 }
