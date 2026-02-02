@@ -3,142 +3,13 @@ import dotenv from "dotenv"
 dotenv.config()
 
 import { EventEmitter } from 'events'
-import v8 from 'v8'
-import fs from 'fs'
-import path from 'path'
 
-// ==================== END MEMORY LIMIT AUTO-FIX ====================
-
-// ==================== FILE LOGGING SETUP ====================
-const LOG_DIR = './logs'
-const MEMORY_LOG_FILE = path.join(LOG_DIR, 'memory-monitor.log')
-
-// Create logs directory if it doesn't exist
-if (!fs.existsSync(LOG_DIR)) {
-  fs.mkdirSync(LOG_DIR, { recursive: true })
-}
-
-// Function to write to log file
-function writeToLog(message) {
-  const timestamp = new Date().toISOString()
-  const logMessage = `[${timestamp}] ${message}\n`
-  
-  // Write to file (append mode)
-  fs.appendFileSync(MEMORY_LOG_FILE, logMessage, 'utf8')
-  
-  // Also log to console
-  console.log(message)
-}
-
-// ==================== MEMORY MONITORING ====================
-// Get current heap limit
-const heapStats = v8.getHeapStatistics()
-const heapLimitMB = Math.round(heapStats.heap_size_limit / 1024 / 1024)
-
-writeToLog('═══════════════════════════════════════════════')
-writeToLog(`🧠 Node.js Heap Limit: ${heapLimitMB} MB`)
-writeToLog(`💻 Pterodactyl RAM Allocated: 14.39 GB`)
-writeToLog(`📊 Expected Sessions: ~600`)
-writeToLog(`📈 Expected Memory Usage: 3-5 GB (600 sessions × ~5MB each)`)
-if (heapLimitMB < 4000) {
-  writeToLog(`⚠️  CRITICAL: Node.js limit (${heapLimitMB}MB) is TOO LOW for 600 sessions!`)
-  writeToLog(`🔧 FIX: Contact admin to add --max-old-space-size=8192 to startup command`)
-} else {
-  writeToLog(`✅ Node.js memory limit is adequate for 600 sessions`)
-}
-writeToLog(`📝 Memory logs: ${MEMORY_LOG_FILE}`)
-writeToLog('═══════════════════════════════════════════════')
-
-// Memory monitoring function
-function logMemoryUsage() {
-  const usage = process.memoryUsage()
-  const heapStats = v8.getHeapStatistics()
-  const usedPercent = (heapStats.used_heap_size / heapStats.heap_size_limit) * 100
-  
-  const heapUsedMB = Math.round(usage.heapUsed / 1024 / 1024)
-  const heapLimitMB = Math.round(heapStats.heap_size_limit / 1024 / 1024)
-  const rssMB = Math.round(usage.rss / 1024 / 1024)
-  const uptimeMinutes = Math.round(process.uptime() / 60)
-  
-  const emoji = usedPercent > 85 ? '🚨' : usedPercent > 70 ? '⚠️' : '💾'
-  const sessions = sessionManager?.activeSockets?.size || 0
-  const message = `${emoji} [MEMORY] ${heapUsedMB}MB / ${heapLimitMB}MB (${usedPercent.toFixed(1)}%) | RSS: ${rssMB}MB | Sessions: ${sessions} | Uptime: ${uptimeMinutes}m`
-  
-  writeToLog(message)
-  
-  // Calculate expected memory for current sessions
-  const expectedMemoryMB = sessions * 5 // ~5MB per session average
-  const memoryPerSession = sessions > 0 ? (heapUsedMB / sessions).toFixed(2) : 0
-  
-  if (usedPercent > 70 && usedPercent <= 85) {
-    writeToLog(`⚠️  Memory usage high! ${heapUsedMB}MB for ${sessions} sessions (${memoryPerSession}MB/session)`)
-    if (heapUsedMB > expectedMemoryMB * 1.5) {
-      writeToLog(`⚠️  Possible leak: Using ${heapUsedMB}MB but expected ~${expectedMemoryMB}MB for ${sessions} sessions`)
-    }
-  }
-  
-  if (usedPercent > 85) {
-    writeToLog(`🚨 CRITICAL! Server will crash soon at ${usedPercent.toFixed(1)}%`)
-    writeToLog(`📊 Active WhatsApp sessions: ${sessions}`)
-    writeToLog(`📈 Memory per session: ${memoryPerSession}MB`)
-    
-    if (heapLimitMB < 4000) {
-      writeToLog(`🔧 SOLUTION: Increase Node.js memory limit with --max-old-space-size=8192`)
-    }
-    
-    // Log event listener counts
-    try {
-      if (sessionManager?.activeSockets) {
-        let totalListeners = 0
-        let leakySessions = 0
-        sessionManager.activeSockets.forEach((socket, sessionId) => {
-          if (socket._events) {
-            const listenerCount = Object.keys(socket._events).reduce((sum, event) => {
-              const listeners = socket._events[event]
-              return sum + (Array.isArray(listeners) ? listeners.length : 1)
-            }, 0)
-            totalListeners += listenerCount
-            
-            if (listenerCount > 100) {
-              leakySessions++
-              writeToLog(`⚠️  Session ${sessionId}: ${listenerCount} listeners (POTENTIAL LEAK!)`)
-            }
-          }
-        })
-        writeToLog(`📊 Total event listeners: ${totalListeners} across ${sessions} sessions`)
-        writeToLog(`📊 Average listeners per session: ${(totalListeners / sessions).toFixed(1)}`)
-        if (leakySessions > 0) {
-          writeToLog(`⚠️  ${leakySessions} sessions have excessive listeners`)
-        }
-      }
-    } catch (err) {
-      // Ignore errors in listener counting
-    }
-  }
-  
-  return { heapUsedMB, heapLimitMB, usedPercent, rssMB }
-}
-
-// Log memory every 3 minutes
-setInterval(() => {
-  logMemoryUsage()
-}, 180000)
-
-// Initial log after startup
-setTimeout(() => {
-  writeToLog('\n═══════════════════════════════════════════════')
-  writeToLog('📊 Initial Memory Check (after 30s startup):')
-  logMemoryUsage()
-  writeToLog('═══════════════════════════════════════════════\n')
-}, 30000)
-
-// Increase max listeners globally (REQUIRED for 600+ sessions)
+// Increase max listeners globally
 EventEmitter.defaultMaxListeners = 900
 process.setMaxListeners(900)
-process.setMaxListeners(0)
 
-writeToLog('✅ EventEmitter max listeners set to 900 (normal for 600+ sessions)')
-// ==================== END MEMORY MONITORING ====================
+// Also increase for process warnings
+process.setMaxListeners(0)
 
 if (process.env.SUPPRESS_LIBRARY_LOGS !== 'false') {
   const originalStdoutWrite = process.stdout.write.bind(process.stdout)
@@ -193,7 +64,7 @@ import { GroupScheduler } from "./database/groupscheduler.js"
 import pluginLoader from "./utils/plugin-loader.js"
 
 const logger = createComponentLogger("MAIN")
-const PORT = process.env.PORT || 7088  // Changed to match Pterodactyl allocation
+const PORT = process.env.PORT || 3000
 const app = express()
 
 // Platform components
