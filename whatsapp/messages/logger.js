@@ -142,13 +142,13 @@ export class MessageLogger {
             fromNumber = this.extractNumber(sender)
           }
           toName = 'GROUP'
-          toNumber = ''
+          toNumber = remoteJid
         } else {
           // Someone else sending to group
           fromName = m.pushName || 'Unknown'
           fromNumber = this.extractNumber(sender)
           toName = 'GROUP'
-          toNumber = ''
+          toNumber = remoteJid
         }
       } else {
         // PRIVATE MESSAGE
