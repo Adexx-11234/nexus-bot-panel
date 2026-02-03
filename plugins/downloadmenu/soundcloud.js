@@ -76,7 +76,7 @@ async function downloadSoundCloudDirect(sock, m, url) {
         fileName: `soundcloud_${Date.now()}.mp3`,
       }, { quoted: m });
 
-      console.log('[SoundCloud] Audio sent successfully');
+      //console.log('[SoundCloud] Audio sent successfully');
       
       // Cleanup temp file
       mediaFile.cleanup();
@@ -173,7 +173,7 @@ async function sendSoundCloudAudio(sock, m, result) {
         }, { quoted: m });
       }
 
-      console.log("[SoundCloud] Audio sent successfully!");
+      //console.log("[SoundCloud] Audio sent successfully!");
       
       // Cleanup temp file
       mediaFile.cleanup();

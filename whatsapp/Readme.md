@@ -770,8 +770,8 @@ await sessionManager.initialize()
 
 // Create session
 const sock = await sessionManager.createSession(userId, phoneNumber, {
-  onPairingCode: (code) => console.log('Code:', code),
-  onConnected: () => console.log('Connected!'),
+  onPairingCode: (code) => //console.log('Code:', code),
+  onConnected: () => //console.log('Connected!'),
   onError: (error) => console.error('Error:', error)
 })
 

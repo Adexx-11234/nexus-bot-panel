@@ -77,7 +77,7 @@ export default {
         })
 
         // Log the owner removal for audit trail
-        console.log(`[RemoveOwner] Owner removed: ${normalizedId} (${platform}) by ${m.sender}`)
+        //console.log(`[RemoveOwner] Owner removed: ${normalizedId} (${platform}) by ${m.sender}`)
       } else {
         await sock.sendMessage(m.chat, {
           text: "❌ Failed to remove owner. Please check the identifier and try again.\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙",

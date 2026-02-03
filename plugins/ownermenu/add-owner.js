@@ -58,7 +58,7 @@ export default {
           },
         })
 
-        console.log(`[AddOwner] New owner added: ${normalizedId} (${platform}) by ${m.sender}`)
+        //console.log(`[AddOwner] New owner added: ${normalizedId} (${platform}) by ${m.sender}`)
       } else {
         await sock.sendMessage(m.chat, {
           text: "❌ Failed to add owner. Please check the identifier and try again.\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙",

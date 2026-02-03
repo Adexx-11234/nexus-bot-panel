@@ -79,7 +79,7 @@ export default {
         caption: `✅ *Image Enhanced to HD*\n\n📸 Your image has been enhanced successfully!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - HD Enhancement`
       }, { quoted: m });
 
-      console.log("[ImageToHD] Image enhanced and sent successfully!");
+      //console.log("[ImageToHD] Image enhanced and sent successfully!");
 
     } catch (error) {
       console.error("[ImageToHD Plugin] Error:", error);

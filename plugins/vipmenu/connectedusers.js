@@ -206,7 +206,7 @@ export default {
           // Clean up if: DB says connected but no socket, OR socket exists without user
           if (session.isConnected && !isFullyConnected) {
             if (!socket || !socket.user) {
-              console.log(`Cleaning stale session: ${sessionId}`)
+              //console.log(`Cleaning stale session: ${sessionId}`)
               await sessionManager.performCompleteUserCleanup(sessionId)
               cleanedCount++
             }

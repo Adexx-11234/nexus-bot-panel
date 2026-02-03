@@ -52,7 +52,7 @@ export default {
       throw new Error("Method 1 failed, trying fallback")
       
     } catch (error) {
-      console.log("[v0] groupParticipantsUpdate failed, trying groupAdd:", error.message)
+      //console.log("[v0] groupParticipantsUpdate failed, trying groupAdd:", error.message)
       
       try {
         // Try method 2: groupAdd
@@ -60,7 +60,7 @@ export default {
         return m.reply(`✅ Successfully added @${number} to the group!`, { mentions: [targetNumber] })
         
       } catch (error2) {
-        console.log("[v0] groupAdd failed, sending invite:", error2.message)
+        //console.log("[v0] groupAdd failed, sending invite:", error2.message)
         
         try {
           // Fallback to invite
@@ -85,7 +85,7 @@ export default {
           })
           
         } catch (error3) {
-          console.log("[v0] All methods failed:", error3.message)
+          //console.log("[v0] All methods failed:", error3.message)
           // Silent fail - no error message to user
         }
       }

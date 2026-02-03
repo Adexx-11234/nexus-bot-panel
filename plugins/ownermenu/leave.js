@@ -34,11 +34,11 @@ export default {
 ` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
           })
         } catch (error) {
-          console.log("[v0] Error leaving group:", error)
+          //console.log("[v0] Error leaving group:", error)
         }
       }, 2000)
     } catch (error) {
-      console.log("[v0] Error in leave command:", error)
+      //console.log("[v0] Error in leave command:", error)
       m.reply(`❌ Failed to leave group!` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`)
     }
   },

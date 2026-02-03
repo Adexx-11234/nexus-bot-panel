@@ -251,7 +251,7 @@ export async function initializeWhatsAppModule(telegramBot = null, options = {})
   // Initialize existing sessions if requested
   if (initializeSessions) {
     const result = await sessionManager.initializeExistingSessions()
-    console.log(`[WhatsApp] Initialized ${result.initialized}/${result.total} sessions`)
+    //console.log(`[WhatsApp] Initialized ${result.initialized}/${result.total} sessions`)
   }
 
   // Enable event handlers if requested

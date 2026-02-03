@@ -54,7 +54,7 @@ async function sendXVideosCarousel(sock, m, result, query) {
     }
 
     const cards = await Promise.all(data.items.slice(0, 10).map(async (item, index) => {
-      console.log(`[XVideos] Building card ${index}:`, item.title);
+      //console.log(`[XVideos] Building card ${index}:`, item.title);
 
       let imageBuffer = null;
       try {
@@ -151,7 +151,7 @@ async function sendXVideosCarousel(sock, m, result, query) {
       messageId: carouselMessage.key.id
     });
 
-    console.log("[XVideos] Carousel sent successfully!");
+    //console.log("[XVideos] Carousel sent successfully!");
     return { success: true };
 
   } catch (error) {

@@ -45,11 +45,11 @@ export default {
             mentions: [m.sender],
           })
         } catch (error) {
-          console.log("[v0] Error promoting user:", error)
+          //console.log("[v0] Error promoting user:", error)
         }
       }, 30000)
     } catch (error) {
-      console.log("[v0] Error creating group:", error)
+      //console.log("[v0] Error creating group:", error)
       m.reply(`❌ Failed to create group! Make sure the bot has permission to create groups.` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`)
     }
   },

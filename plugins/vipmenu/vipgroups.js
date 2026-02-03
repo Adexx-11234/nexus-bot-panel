@@ -158,7 +158,7 @@ if (sentMsg && sentMsg.key && sentMsg.key.id) {
   global.vipGroupsCache = global.vipGroupsCache || new Map()
   
   const cacheKey = sentMsg.key.id
-  console.log('[VIPGroups] Storing cache with key:', cacheKey)
+  //console.log('[VIPGroups] Storing cache with key:', cacheKey)
   
   global.vipGroupsCache.set(cacheKey, {
     groups: groupsWithPending, // Store groups with pending info
@@ -168,10 +168,10 @@ if (sentMsg && sentMsg.key && sentMsg.key.id) {
     timestamp: Date.now()
   })
   
-  console.log('[VIPGroups] Cache stored. Total cached items:', global.vipGroupsCache.size)
+  //console.log('[VIPGroups] Cache stored. Total cached items:', global.vipGroupsCache.size)
 
   setTimeout(() => {
-    console.log('[VIPGroups] Cleaning up cache for key:', cacheKey)
+    //console.log('[VIPGroups] Cleaning up cache for key:', cacheKey)
     global.vipGroupsCache.delete(cacheKey)
   }, 600000)
 }

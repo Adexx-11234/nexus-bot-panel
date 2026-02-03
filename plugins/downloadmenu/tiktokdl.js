@@ -85,7 +85,7 @@ async function downloadTikTokDirect(sock, m, url, quality) {
         }, { quoted: m });
       }
 
-      console.log('[TikTok] Media sent successfully');
+      //console.log('[TikTok] Media sent successfully');
       
       // Cleanup temp file
       mediaFile.cleanup();
@@ -198,7 +198,7 @@ async function sendTikTokButtons(sock, m, result) {
       messageId: buttonMessage.key.id
     });
 
-    console.log("[TikTok] Button message sent successfully!");
+    //console.log("[TikTok] Button message sent successfully!");
     return { success: true };
 
   } catch (error) {

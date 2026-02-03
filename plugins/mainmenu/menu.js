@@ -17,7 +17,7 @@ export default {
     try {
       // Check connection state first
       if (!sock || !sock.user) {
-        console.log("[Menu] Socket not ready, retrying...");
+        //console.log("[Menu] Socket not ready, retrying...");
         await new Promise(resolve => setTimeout(resolve, 1000));
         if (!sock || !sock.user) {
           throw new Error("Bot connection not ready");
@@ -82,7 +82,7 @@ export default {
 
       // Get local image
       let imageUrl = null;
-      console.log("[Menu] Loading local menu image");
+      //console.log("[Menu] Loading local menu image");
       
       const possiblePaths = [
         path.resolve(process.cwd(), "Defaults", "images", "menu.png"),
@@ -95,13 +95,13 @@ export default {
           const imageBuffer = fs.readFileSync(imagePath);
           const base64Image = imageBuffer.toString('base64');
           imageUrl = `data:image/png;base64,${base64Image}`;
-          console.log(`[Menu] Using local image: ${imagePath}`);
+          //console.log(`[Menu] Using local image: ${imagePath}`);
           break;
         }
       }
       
       if (!imageUrl) {
-        console.log("[Menu] No local image found, using placeholder");
+        //console.log("[Menu] No local image found, using placeholder");
         imageUrl = "https://via.placeholder.com/800x400/1a1a1a/00ff00?text=Nexus+Bot";
       }
 
@@ -228,7 +228,7 @@ export default {
         }
       }, { quoted: m });
 
-      console.log("[Menu] Enhanced interactive menu with native flow sent successfully!");
+      //console.log("[Menu] Enhanced interactive menu with native flow sent successfully!");
       return { success: true };
       
     } catch (error) {

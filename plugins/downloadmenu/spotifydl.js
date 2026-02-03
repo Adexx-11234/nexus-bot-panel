@@ -77,7 +77,7 @@ async function downloadSpotifyDirect(sock, m, url) {
         fileName: `spotify_${Date.now()}.mp3`,
       }, { quoted: m });
 
-      console.log('[Spotify] Audio sent successfully');
+      //console.log('[Spotify] Audio sent successfully');
       
       // Cleanup temp file
       mediaFile.cleanup();
@@ -177,7 +177,7 @@ async function sendSpotifyAudio(sock, m, result) {
         }, { quoted: m });
       }
 
-      console.log("[Spotify] Audio sent successfully!");
+      //console.log("[Spotify] Audio sent successfully!");
       
       // Cleanup temp file
       mediaFile.cleanup();

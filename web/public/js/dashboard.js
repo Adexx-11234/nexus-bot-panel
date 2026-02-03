@@ -89,7 +89,7 @@ class DashboardHandler {
   startConnectionPolling() {
     if (this.connectionPollInterval) return
 
-    console.log('Starting connection polling...')
+    //console.log('Starting connection polling...')
     this.connectionPollInterval = setInterval(async () => {
       try {
         const response = await fetch('/api/sessions/status')
@@ -98,13 +98,13 @@ class DashboardHandler {
         if (data.success && data.status) {
           // Check if connected
           if (data.status.isConnected && data.status.connectionStatus === 'connected') {
-            console.log('Connection established!')
+            //console.log('Connection established!')
             this.stopConnectionPolling()
             this.showAlert('WhatsApp connected successfully!', 'success')
             await this.loadSessionStatus() // Final status update
           } else if (data.status.connectionStatus === 'disconnected') {
             // Connection failed
-            console.log('Connection failed')
+            //console.log('Connection failed')
             this.stopConnectionPolling()
             await this.loadSessionStatus()
           }
@@ -119,7 +119,7 @@ class DashboardHandler {
     if (this.connectionPollInterval) {
       clearInterval(this.connectionPollInterval)
       this.connectionPollInterval = null
-      console.log('Stopped connection polling')
+      //console.log('Stopped connection polling')
     }
   }
 

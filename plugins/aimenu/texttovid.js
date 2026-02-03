@@ -71,7 +71,7 @@ export default {
           mimetype: 'video/mp4'
         }, { quoted: m });
 
-        console.log('[VGen] Video sent successfully');
+        //console.log('[VGen] Video sent successfully');
         
         // Cleanup temp file
         videoFile.cleanup();

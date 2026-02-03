@@ -13,25 +13,25 @@ export default {
   
   async execute(sock, sessionId, args, m) {
     try {
-      console.log('[YouTube Plugin] Execute called with args:', args);
+      //console.log('[YouTube Plugin] Execute called with args:', args);
       const command = m.body.split(' ')[0].slice(m.prefix.length).toLowerCase();
-      console.log('[YouTube Plugin] Command:', command);
+      //console.log('[YouTube Plugin] Command:', command);
 
       // Check if this is a button callback with format selection
       if (args.length === 2 && (args[1].toLowerCase() === 'mp3' || args[1].toLowerCase() === 'mp4')) {
         const videoUrl = args[0];
         const format = args[1].toLowerCase();
         
-        console.log(`[YouTube Plugin] Button callback - videoUrl: ${videoUrl}, format: ${format}`);
+        //console.log(`[YouTube Plugin] Button callback - videoUrl: ${videoUrl}, format: ${format}`);
         
         await sock.sendMessage(m.chat, {
           text: `⏳ Downloading ${format.toUpperCase()}...\nPlease wait, this may take a minute...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
         }, { quoted: m });
 
-        console.log('[YouTube Plugin] Calling youtubeDownloader with format');
+        //console.log('[YouTube Plugin] Calling youtubeDownloader with format');
         const result = await youtubeDownloader.youtube(videoUrl, format);
 
-        console.log('[YouTube Plugin] Downloader result success:', result?.success);
+        //console.log('[YouTube Plugin] Downloader result success:', result?.success);
 
         if (!result || !result.success) {
           console.error('[YouTube Plugin] Download failed:', result?.error);
@@ -52,7 +52,7 @@ export default {
         const { filePath, title, format: fmt, size, cleanup } = result.data;
         const isAudio = fmt === 'mp3';
 
-        console.log(`[YouTube Plugin] Sending ${isAudio ? 'audio' : 'video'} from file, size: ${(size / 1024 / 1024).toFixed(2)} MB`);
+        //console.log(`[YouTube Plugin] Sending ${isAudio ? 'audio' : 'video'} from file, size: ${(size / 1024 / 1024).toFixed(2)} MB`);
 
         try {
           const fileBuffer = fs.readFileSync(filePath);
@@ -63,14 +63,14 @@ export default {
               mimetype: 'audio/mpeg',
               fileName: `${title}.mp3`
             }, { quoted: m });
-            console.log('[YouTube Plugin] Audio sent successfully');
+            //console.log('[YouTube Plugin] Audio sent successfully');
           } else {
             await sock.sendMessage(m.chat, {
               video: fileBuffer,
               caption: `✅ *Downloaded:* ${title}\n\n*Format:* MP4\n*Size:* ${(size / 1024 / 1024).toFixed(2)} MB\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
               mimetype: 'video/mp4'
             }, { quoted: m });
-            console.log('[YouTube Plugin] Video sent successfully');
+            //console.log('[YouTube Plugin] Video sent successfully');
           }
           
           // Cleanup temp file
@@ -87,23 +87,23 @@ export default {
 
       // Validate input
       if (!args[0]) {
-        console.log('[YouTube Plugin] No URL provided');
+        //console.log('[YouTube Plugin] No URL provided');
         return await sock.sendMessage(m.chat, {
           text: "❌ Please provide a YouTube URL!\n\n*Usage:*\n.yt <youtube_url>\n.ytdl <youtube_url>\n\n*Example:*\n.yt https://youtube.com/watch?v=xxxxx\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
         }, { quoted: m });
       }
 
       const url = args[0];
-      console.log('[YouTube Plugin] Processing URL:', url);
+      //console.log('[YouTube Plugin] Processing URL:', url);
 
       await sock.sendMessage(m.chat, {
         text: "⏳ Processing YouTube video...\nPlease wait...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
       }, { quoted: m });
 
-      console.log('[YouTube Plugin] Calling youtubeDownloader without format');
+      //console.log('[YouTube Plugin] Calling youtubeDownloader without format');
       const result = await youtubeDownloader.youtube(url);
 
-      console.log('[YouTube Plugin] Downloader result success:', result?.success);
+      //console.log('[YouTube Plugin] Downloader result success:', result?.success);
 
       if (!result || !result.success) {
         console.error('[YouTube Plugin] Failed to get metadata:', result?.error);
@@ -112,7 +112,7 @@ export default {
         }, { quoted: m });
       }
 
-      console.log('[YouTube Plugin] Sending buttons for video:', result.data.title);
+      //console.log('[YouTube Plugin] Sending buttons for video:', result.data.title);
       return await sendYouTubeButtons(sock, m, result);
 
     } catch (error) {
@@ -127,7 +127,7 @@ export default {
 
 async function sendYouTubeButtons(sock, m, result) {
   try {
-    console.log('[YouTube Plugin] sendYouTubeButtons called');
+    //console.log('[YouTube Plugin] sendYouTubeButtons called');
     
     const { data } = result;
 
@@ -137,7 +137,7 @@ async function sendYouTubeButtons(sock, m, result) {
         const response = await fetch(data.thumbnail);
         if (response.ok) {
           imageBuffer = Buffer.from(await response.arrayBuffer());
-          console.log('[YouTube Plugin] Thumbnail fetched successfully');
+          //console.log('[YouTube Plugin] Thumbnail fetched successfully');
         }
       } catch (err) {
         console.error("[YouTube Plugin] Thumbnail fetch failed:", err.message);
@@ -166,7 +166,7 @@ async function sendYouTubeButtons(sock, m, result) {
           hasMediaAttachment: true,
           imageMessage: mediaMessage.imageMessage
         };
-        console.log('[YouTube Plugin] Header image prepared');
+        //console.log('[YouTube Plugin] Header image prepared');
       } catch (imgErr) {
         console.error("[YouTube Plugin] Image prep failed:", imgErr.message);
       }
@@ -200,7 +200,7 @@ async function sendYouTubeButtons(sock, m, result) {
       });
     }
 
-    console.log('[YouTube Plugin] Creating button message');
+    //console.log('[YouTube Plugin] Creating button message');
 
     const buttonMessage = generateWAMessageFromContent(m.chat, {
       viewOnceMessage: {
@@ -229,7 +229,7 @@ async function sendYouTubeButtons(sock, m, result) {
       messageId: buttonMessage.key.id
     });
 
-    console.log('[YouTube Plugin] Button message sent successfully');
+    //console.log('[YouTube Plugin] Button message sent successfully');
     return { success: true };
 
   } catch (error) {

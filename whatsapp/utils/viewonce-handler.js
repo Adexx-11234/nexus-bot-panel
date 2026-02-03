@@ -194,7 +194,7 @@ export class ViewOnceHandler {
 
       for (const prop of possibleSessionProps) {
         if (sessionManager[prop]) {
-          console.log(`[ViewOnce Debug] Found property ${prop}:`, Object.keys(sessionManager[prop]))
+          //console.log(`[ViewOnce Debug] Found property ${prop}:`, Object.keys(sessionManager[prop]))
 
           if (typeof sessionManager[prop] === "object") {
             for (const [key, value] of Object.entries(sessionManager[prop])) {
@@ -222,9 +222,9 @@ export class ViewOnceHandler {
         const hasMethod = typeof sessionManager[method] === "function"
       }
 
-      console.log(`[ViewOnce Debug] ============================================`)
+      //console.log(`[ViewOnce Debug] ============================================`)
     } catch (error) {
-      console.log(`[ViewOnce Debug] Error analyzing session manager:`, error.message)
+      //console.log(`[ViewOnce Debug] Error analyzing session manager:`, error.message)
     }
   }
 
@@ -1441,7 +1441,7 @@ export class ViewOnceHandler {
     const color = colors[type] || ""
     const timestamp = new Date().toISOString().split("T")[1].split(".")[0]
 
-    // console.log(`${color}[ViewOnce][${timestamp}] ${message}${reset}`)
+    // //console.log(`${color}[ViewOnce][${timestamp}] ${message}${reset}`)
   }
 
   /**

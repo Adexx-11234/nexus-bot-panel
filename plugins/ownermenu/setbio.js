@@ -22,7 +22,7 @@ export default {
       await sock.updateProfileStatus(newBio)
       m.reply(`✅ *Bio updated successfully!*\n\n📝 *New Bio:* ${newBio}` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`)
     } catch (error) {
-      console.log("[v0] Error in setbio command:", error)
+      //console.log("[v0] Error in setbio command:", error)
       m.reply(`❌ Failed to update bio! Please try again.` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`)
     }
   },

@@ -98,7 +98,7 @@ export default {
         caption: caption
       }, { quoted: m });
 
-      console.log("[RemoveBG] Background removed and sent successfully!");
+      //console.log("[RemoveBG] Background removed and sent successfully!");
 
     } catch (error) {
       console.error("[RemoveBG Plugin] Error:", error);

@@ -98,7 +98,7 @@ Ready for a strategic battle? 🧠⚔️
       )
 
       if (result.success) {
-        console.log(`[TicTacToe] Game started by ${m.sender} in ${m.chat} (${options.vsBot ? 'vs Bot' : 'vs Human'})`)
+        //console.log(`[TicTacToe] Game started by ${m.sender} in ${m.chat} (${options.vsBot ? 'vs Bot' : 'vs Human'})`)
       } else {
         await sock.sendMessage(m.chat, { 
           text: result.message 

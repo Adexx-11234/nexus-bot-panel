@@ -41,7 +41,7 @@ export default {
 
       m.reply(`✅ Successfully removed @${number} from the group!`, { mentions: [targetNumber] })
     } catch (error) {
-      console.log("[v0] Error in kick command:", error)
+      //console.log("[v0] Error in kick command:", error)
       m.reply(`❌ Failed to remove member! They might be an admin or already left.` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`)
     }
   },

@@ -71,7 +71,7 @@ async function downloadInstagramDirect(sock, m, args) {
     // When button is clicked with: .igdownload_0_https://... ig_direct
     // args becomes: ['0', 'https://...', 'ig_direct']
     
-    console.log('[Instagram Direct] Args:', args);
+    //console.log('[Instagram Direct] Args:', args);
     
     // Find the URL (it should be the argument before 'ig_direct')
     let url = null;
@@ -89,7 +89,7 @@ async function downloadInstagramDirect(sock, m, args) {
       throw new Error('Could not extract URL from button callback');
     }
     
-    console.log('[Instagram Direct] Extracted URL:', url);
+    //console.log('[Instagram Direct] Extracted URL:', url);
     
     await sock.sendMessage(m.chat, {
       text: `⏳ Downloading...\nPlease wait...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
@@ -211,7 +211,7 @@ async function sendInstagramCarousel(sock, m, result) {
       messageId: carouselMessage.key.id
     });
 
-    console.log("[Instagram] Carousel sent successfully!");
+    //console.log("[Instagram] Carousel sent successfully!");
     return { success: true };
 
   } catch (error) {
@@ -306,7 +306,7 @@ async function sendInstagramButtons(sock, m, result) {
       messageId: buttonMessage.key.id
     });
 
-    console.log("[Instagram] Button message sent successfully!");
+    //console.log("[Instagram] Button message sent successfully!");
     return { success: true };
 
   } catch (error) {

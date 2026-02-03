@@ -892,7 +892,7 @@ Closes #123
 - [ ] Code follows project style
 - [ ] All tests pass
 - [ ] Documentation updated
-- [ ] No console.log statements
+- [ ] No //console.log statements
 - [ ] Error handling implemented
 - [ ] Security considerations addressed
 

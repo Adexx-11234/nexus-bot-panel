@@ -104,7 +104,7 @@ Ready for battle? ⚔️💪
       )
 
       if (result.success) {
-        console.log(`[RPS] Tournament started by ${m.sender} in ${m.chat}`)
+        //console.log(`[RPS] Tournament started by ${m.sender} in ${m.chat}`)
       } else {
         await sock.sendMessage(m.chat, { 
           text: result.message 

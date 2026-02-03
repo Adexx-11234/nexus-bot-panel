@@ -46,7 +46,7 @@ export default {
         caption: `✅ *Website Screenshot*\n\n🔗 *URL:* ${result.data.url}\n\n📸 Screenshot captured successfully!\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙 - Screenshot Tool`
       }, { quoted: m });
 
-      console.log("[Screenshot] Screenshot sent successfully!");
+      //console.log("[Screenshot] Screenshot sent successfully!");
 
     } catch (error) {
       console.error("[Screenshot Plugin] Error:", error);

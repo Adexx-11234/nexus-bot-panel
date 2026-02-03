@@ -35,7 +35,7 @@ export default {
       await sock.groupAcceptInvite(inviteCode)
       m.reply(`✅ Successfully joined the group!` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`)
     } catch (error) {
-      console.log("[v0] Error in join command:", error)
+      //console.log("[v0] Error in join command:", error)
 
       // Handle specific error cases
       if (error.output?.statusCode === 400) {

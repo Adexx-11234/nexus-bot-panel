@@ -77,7 +77,7 @@ async function downloadAppleMusicDirect(sock, m, url) {
         fileName: `applemusic_${Date.now()}.m4a`,
       }, { quoted: m });
 
-      console.log('[Apple Music] Audio sent successfully');
+      //console.log('[Apple Music] Audio sent successfully');
       
       // Cleanup
       mediaFile.cleanup();
@@ -186,7 +186,7 @@ async function sendAppleMusicButtons(sock, m, result) {
       messageId: buttonMessage.key.id
     });
 
-    console.log("[Apple Music] Button message sent successfully!");
+    //console.log("[Apple Music] Button message sent successfully!");
     return { success: true };
 
   } catch (error) {

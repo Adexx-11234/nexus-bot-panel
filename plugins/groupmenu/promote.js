@@ -35,7 +35,7 @@ export default {
 
       m.reply(`✅ Successfully promoted @${number} to admin!`, { mentions: [targetNumber] })
     } catch (error) {
-      console.log("[v0] Error in promote command:", error)
+      //console.log("[v0] Error in promote command:", error)
       m.reply(`❌ Failed to promote user! They might already be an admin or not in the group.` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`)
     }
   },

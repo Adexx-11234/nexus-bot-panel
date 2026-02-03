@@ -378,16 +378,16 @@ export default {
       )
       
       // Console log
-      console.log("\n" + "=".repeat(50))
-      console.log("SOCK INSPECTION COMPLETE (JSON)")
-      console.log("=".repeat(50))
-      console.log(`File: ${jsonFile}`)
-      console.log(`Properties: ${inspection.statistics.totalProperties}`)
-      console.log(`Methods: ${inspection.statistics.totalMethods}`)
-      console.log(`ev.on: ${inspection.eventEmitter.listenerMethods.on}`)
-      console.log(`ev.prependListener: ${inspection.eventEmitter.listenerMethods.prependListener}`)
-      console.log(`Active events: ${inspection.eventEmitter.totalEvents || 0}`)
-      console.log("=".repeat(50) + "\n")
+      //console.log("\n" + "=".repeat(50))
+      //console.log("SOCK INSPECTION COMPLETE (JSON)")
+      //console.log("=".repeat(50))
+      //console.log(`File: ${jsonFile}`)
+      //console.log(`Properties: ${inspection.statistics.totalProperties}`)
+      //console.log(`Methods: ${inspection.statistics.totalMethods}`)
+      //console.log(`ev.on: ${inspection.eventEmitter.listenerMethods.on}`)
+      //console.log(`ev.prependListener: ${inspection.eventEmitter.listenerMethods.prependListener}`)
+      //console.log(`Active events: ${inspection.eventEmitter.totalEvents || 0}`)
+      //console.log("=".repeat(50) + "\n")
       
       return { success: true, file: jsonFile, data: inspection }
       

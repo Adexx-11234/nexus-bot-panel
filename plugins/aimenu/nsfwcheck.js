@@ -115,7 +115,7 @@ export default {
         text: response
       }, { quoted: m });
 
-      console.log("[NSFW Check] Image checked successfully!");
+      //console.log("[NSFW Check] Image checked successfully!");
 
       return { success: true };
       

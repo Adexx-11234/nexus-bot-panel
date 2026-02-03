@@ -205,7 +205,7 @@ sock.ev.on(EventTypes.MESSAGES_UPSERT, async (messageUpdate) => {
         'utf8'
       )
       
-      console.log(`[MESSAGE LOG] ${sessionId}/${filename}`)
+      //console.log(`[MESSAGE LOG] ${sessionId}/${filename}`)
     } catch (logError) {
       logger.error(`Failed to log message for ${sessionId}:`, logError)
     }*/

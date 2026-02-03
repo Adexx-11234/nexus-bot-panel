@@ -2,10 +2,10 @@ import { execSync } from 'child_process'
 import fs from 'fs'
 
 const logger = {
-  info: (...args) => console.log('[INFO]', ...args),
+  info: (...args) => //console.log('[INFO]', ...args),
   warn: (...args) => console.warn('[WARN]', ...args),
   error: (...args) => console.error('[ERROR]', ...args),
-  success: (...args) => console.log('[SUCCESS]', ...args)
+  success: (...args) => //console.log('[SUCCESS]', ...args)
 }
 
 // ============================================

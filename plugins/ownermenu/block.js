@@ -63,7 +63,7 @@ export default {
         mentions: [targetJid]
       }, { quoted: m });
 
-      console.log(`[Block] Owner ${m.sender} blocked ${targetJid}`);
+      //console.log(`[Block] Owner ${m.sender} blocked ${targetJid}`);
 
     } catch (error) {
       console.error("[Block] Error:", error);

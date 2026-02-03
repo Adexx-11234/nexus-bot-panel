@@ -125,7 +125,7 @@ Think you can crack the code? 🕵️‍♂️🔍
       )
 
       if (result.success) {
-        console.log(`[NumberGuess] Game started by ${m.sender} in ${m.chat}`)
+        //console.log(`[NumberGuess] Game started by ${m.sender} in ${m.chat}`)
       } else {
         await sock.sendMessage(m.chat, { 
           text: result.message 

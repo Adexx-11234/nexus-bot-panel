@@ -110,7 +110,7 @@ Ready to challenge your mind? 🤔💡
       )
 
       if (result.success) {
-        console.log(`[Trivia] Game started by ${m.sender} in ${m.chat}`)
+        //console.log(`[Trivia] Game started by ${m.sender} in ${m.chat}`)
       } else {
         await sock.sendMessage(m.chat, { 
           text: result.message 

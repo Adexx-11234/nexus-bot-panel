@@ -73,7 +73,7 @@ export default {
             limit: limit === 9223372036854771712 ? 'unlimited' : (limit / 1024 / 1024 / 1024).toFixed(2) + 'GB'
           }
         } catch (err) {
-          console.log('[Status] cgroup v2 read failed, trying v1...')
+          //console.log('[Status] cgroup v2 read failed, trying v1...')
         }
       }
       
@@ -88,12 +88,12 @@ export default {
             limit: limit > 9000000000000000 ? 'unlimited' : (limit / 1024 / 1024 / 1024).toFixed(2) + 'GB'
           }
         } catch (err) {
-          console.log('[Status] cgroup v1 read failed, using system memory...')
+          //console.log('[Status] cgroup v1 read failed, using system memory...')
         }
       }
       
       // Fallback to system memory if not in container or cgroup read failed
-      console.log('[Status] Using system memory as fallback')
+      //console.log('[Status] Using system memory as fallback')
       const totalMem = os.totalmem() / 1024 / 1024 / 1024
       const freeMem = os.freemem() / 1024 / 1024 / 1024
       const usedMem = totalMem - freeMem

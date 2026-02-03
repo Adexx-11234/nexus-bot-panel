@@ -54,7 +54,7 @@ async function sendXNXXCarousel(sock, m, result, query) {
     }
 
     const cards = await Promise.all(data.items.slice(0, 10).map(async (item, index) => {
-      console.log(`[XNXX] Building card ${index}:`, item.title);
+      //console.log(`[XNXX] Building card ${index}:`, item.title);
 
       const headerConfig = {
         title: item.title.substring(0, 60),
@@ -120,7 +120,7 @@ async function sendXNXXCarousel(sock, m, result, query) {
       messageId: carouselMessage.key.id
     });
 
-    console.log("[XNXX] Carousel sent successfully!");
+    //console.log("[XNXX] Carousel sent successfully!");
     return { success: true };
 
   } catch (error) {

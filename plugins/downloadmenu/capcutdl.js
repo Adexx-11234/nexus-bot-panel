@@ -168,7 +168,7 @@ async function sendCapcutButtons(sock, m, result) {
       messageId: buttonMessage.key.id
     });
 
-    console.log("[Capcut] Button message sent successfully!");
+    //console.log("[Capcut] Button message sent successfully!");
     return { success: true };
 
   } catch (error) {

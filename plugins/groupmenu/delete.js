@@ -55,7 +55,7 @@ export default {
       }, 500)
 
     } catch (error) {
-      console.log("[Delete] Error deleting message:", error)
+      //console.log("[Delete] Error deleting message:", error)
       
       // Provide specific error messages
       if (error.message?.includes("forbidden")) {

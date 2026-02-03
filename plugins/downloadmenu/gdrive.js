@@ -69,7 +69,7 @@ async function sendGDriveDirect(sock, m, result) {
       text: message
     }, { quoted: m });
 
-    console.log("[Google Drive] Info sent successfully!");
+    //console.log("[Google Drive] Info sent successfully!");
     return { success: true };
 
   } catch (error) {

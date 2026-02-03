@@ -117,8 +117,8 @@ export class AntiDeletedHandler {
   static async recoverDeletedMessage(messageId, sessionId) {
     try {
       const { MessageQueries } = await import("../../database/query.js")
-      //console.log("messageId", messageId)
-      //console.log("sessionId", sessionId)
+      ////console.log("messageId", messageId)
+      ////console.log("sessionId", sessionId)
       // Find message by ID and session
       const originalMessage = await MessageQueries.findMessageById(messageId, sessionId)
 
@@ -639,7 +639,7 @@ export class AntiDeletedHandler {
     const color = colors[type] || ""
     const timestamp = new Date().toISOString().split("T")[1].split(".")[0]
 
-    //console.log(`${color}[AntiDeleted][${timestamp}] ${message}${reset}`)
+    ////console.log(`${color}[AntiDeleted][${timestamp}] ${message}${reset}`)
   }
 
   /**

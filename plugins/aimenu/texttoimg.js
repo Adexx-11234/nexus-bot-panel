@@ -71,7 +71,7 @@ export default {
         caption: caption
       }, { quoted: m });
 
-      console.log('[Imagine] Image sent successfully');
+      //console.log('[Imagine] Image sent successfully');
       return { success: true };
 
     } catch (error) {

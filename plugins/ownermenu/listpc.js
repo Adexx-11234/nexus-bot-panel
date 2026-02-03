@@ -39,13 +39,13 @@ export default {
           response += `   *Chat:* https://wa.me/${phoneNumber}\n\n`
           response += `━━━━━━━━━━━━━━━━━━━━\n\n`
         } catch (error) {
-          console.log(`[v0] Error getting contact info for ${chat}:`, error)
+          //console.log(`[v0] Error getting contact info for ${chat}:`, error)
         }
       }
 
       await m.reply(response, { mentions: privateChats })
     } catch (error) {
-      console.log("[v0] Error in listpc command:", error)
+      //console.log("[v0] Error in listpc command:", error)
       m.reply(`❌ Failed to get private chat list!` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`)
     }
   },

@@ -41,7 +41,7 @@ export default {
 
       m.reply(`✅ Successfully demoted @${number} from admin!`, { mentions: [targetNumber] })
     } catch (error) {
-      console.log("[v0] Error in demote command:", error)
+      //console.log("[v0] Error in demote command:", error)
       m.reply(`❌ Failed to demote user! They might not be an admin or not in the group.` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`)
     }
   },

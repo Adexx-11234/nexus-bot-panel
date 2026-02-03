@@ -48,7 +48,7 @@ if (process.env.SUPPRESS_LIBRARY_LOGS !== 'false') {
     return true
   }
 
-  console.log('🔇 Library log suppression active')
+  //console.log('🔇 Library log suppression active')
 }
 // ==================== END ULTIMATE LOG SUPPRESSION ====================
 

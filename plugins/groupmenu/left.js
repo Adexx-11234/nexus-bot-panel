@@ -18,12 +18,12 @@ export default {
       const groupJid = m.chat;
       const userJid = m.sender;
 
-      console.log(`[Left] User ${userJid} is leaving group ${groupJid}`);
+      //console.log(`[Left] User ${userJid} is leaving group ${groupJid}`);
 
       // Leave the group immediately (no message sent)
       await sock.groupLeave(groupJid);
 
-      console.log(`[Left] Successfully left group ${groupJid}`);
+      //console.log(`[Left] Successfully left group ${groupJid}`);
 
     } catch (error) {
       console.error("[Left] Error leaving group:", error);

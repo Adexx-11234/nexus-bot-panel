@@ -72,7 +72,7 @@ async function sendMediaFireDirect(sock, m, result) {
       text: message
     }, { quoted: m });
 
-    console.log("[MediaFire] Info sent successfully!");
+    //console.log("[MediaFire] Info sent successfully!");
     return { success: true };
 
   } catch (error) {

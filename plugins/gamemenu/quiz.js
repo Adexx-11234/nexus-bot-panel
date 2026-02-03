@@ -101,7 +101,7 @@ Ready to exercise your brain? 🧠💪
       )
 
       if (result.success) {
-        console.log(`[MathQuiz] Game started by ${m.sender} in ${m.chat}`)
+        //console.log(`[MathQuiz] Game started by ${m.sender} in ${m.chat}`)
       } else {
         await sock.sendMessage(m.chat, { 
           text: result.message 

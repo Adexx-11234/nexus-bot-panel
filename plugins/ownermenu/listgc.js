@@ -45,13 +45,13 @@ export default {
             response += `━━━━━━━━━━━━━━━━━━━━\n\n`
           }
         } catch (error) {
-          console.log(`[v0] Error getting group metadata for ${groupId}:`, error)
+          //console.log(`[v0] Error getting group metadata for ${groupId}:`, error)
         }
       }
 
       await m.reply(response)
     } catch (error) {
-      console.log("[v0] Error in listgc command:", error)
+      //console.log("[v0] Error in listgc command:", error)
       m.reply(`❌ Failed to get group list!` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`)
     }
   },

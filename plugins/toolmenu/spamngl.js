@@ -58,7 +58,7 @@ export default {
         text: responseMsg
       }, { quoted: m });
 
-      console.log("[SpamNGL] Spam completed successfully!");
+      //console.log("[SpamNGL] Spam completed successfully!");
 
     } catch (error) {
       console.error("[SpamNGL Plugin] Error:", error);

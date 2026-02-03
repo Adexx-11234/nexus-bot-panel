@@ -73,7 +73,7 @@ export default {
       text: message
     }, { quoted: m });
 
-    console.log("[Lyrics] Lyrics sent successfully!");
+    //console.log("[Lyrics] Lyrics sent successfully!");
   } catch (error) {
     console.error("[Lyrics Plugin] Error:", error);
     await sock.sendMessage(m.chat, {

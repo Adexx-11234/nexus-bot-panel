@@ -86,7 +86,7 @@ async function sendPinterestDirect(sock, m, result) {
         }, { quoted: m });
       }
 
-      console.log("[Pinterest] Content sent successfully!");
+      //console.log("[Pinterest] Content sent successfully!");
       
       // Cleanup temp file
       mediaFile.cleanup();

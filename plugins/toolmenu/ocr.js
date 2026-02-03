@@ -120,7 +120,7 @@ export default {
         text: message
       }, { quoted: m });
 
-      console.log("[OCR] Text extracted and sent successfully!");
+      //console.log("[OCR] Text extracted and sent successfully!");
 
     } catch (error) {
       console.error("[OCR Plugin] Error:", error);

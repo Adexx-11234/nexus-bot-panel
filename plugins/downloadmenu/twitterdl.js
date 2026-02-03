@@ -138,7 +138,7 @@ async function sendTwitterButtons(sock, m, result) {
       messageId: buttonMessage.key.id
     });
 
-    console.log("[Twitter] Button message sent successfully!");
+    //console.log("[Twitter] Button message sent successfully!");
     return { success: true };
 
   } catch (error) {

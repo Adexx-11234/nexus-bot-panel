@@ -147,7 +147,7 @@ async function sendFacebookButtons(sock, m, result) {
       messageId: buttonMessage.key.id
     });
 
-    console.log("[Facebook] Button message sent successfully!");
+    //console.log("[Facebook] Button message sent successfully!");
     return { success: true };
 
   } catch (error) {

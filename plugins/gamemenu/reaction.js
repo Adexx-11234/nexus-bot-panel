@@ -103,7 +103,7 @@ Ready to test your reflexes? 🏃‍♂️💨
       )
 
       if (result.success) {
-        console.log(`[Reaction] Game started by ${m.sender} in ${m.chat}`)
+        //console.log(`[Reaction] Game started by ${m.sender} in ${m.chat}`)
       } else {
         await sock.sendMessage(m.chat, { 
           text: result.message 

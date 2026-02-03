@@ -92,7 +92,7 @@ async function downloadXVideosVideo(sock, m, url) {
         mimetype: 'video/mp4'
       }, { quoted: m });
 
-      console.log("[XVideos Download] Video sent successfully!");
+      //console.log("[XVideos Download] Video sent successfully!");
       
       data.cleanup();
       

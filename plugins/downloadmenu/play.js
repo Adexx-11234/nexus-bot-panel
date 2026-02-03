@@ -15,7 +15,7 @@ export default {
     let audioBuffer = null;
     
     try {
-      console.log('[Play Plugin] Execute called with args:', args);
+      //console.log('[Play Plugin] Execute called with args:', args);
       
       if (!args[0]) {
         return await sock.sendMessage(m.chat, {
@@ -24,7 +24,7 @@ export default {
       }
 
       const query = args.join(' ');
-      console.log('[Play Plugin] Searching for:', query);
+      //console.log('[Play Plugin] Searching for:', query);
 
       await sock.sendMessage(m.chat, {
         text: `🔍 Searching for: *${query}*\nPlease wait...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
@@ -47,7 +47,7 @@ export default {
       // This prevents race conditions from concurrent requests
       // ============================================
       
-      console.log('[Play Plugin] Reading file:', data.filePath);
+      //console.log('[Play Plugin] Reading file:', data.filePath);
       
       // Check if file exists before reading
       if (!fs.existsSync(data.filePath)) {
@@ -56,7 +56,7 @@ export default {
       
       // Read file into memory IMMEDIATELY
       audioBuffer = fs.readFileSync(data.filePath);
-      console.log('[Play Plugin] File loaded into memory, size:', audioBuffer.length);
+      //console.log('[Play Plugin] File loaded into memory, size:', audioBuffer.length);
       
       // ============================================
       // FIX: Delete file IMMEDIATELY after reading
@@ -65,7 +65,7 @@ export default {
       
       if (data.cleanup) {
         data.cleanup();
-        console.log('[Play Plugin] Temporary file cleaned up');
+        //console.log('[Play Plugin] Temporary file cleaned up');
       }
       
       // Build caption
@@ -92,7 +92,7 @@ export default {
         ptt: false
       }, { quoted: m });
 
-      console.log('[Play Plugin] Audio sent successfully');
+      //console.log('[Play Plugin] Audio sent successfully');
       
       return { success: true };
 

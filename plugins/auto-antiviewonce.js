@@ -69,12 +69,12 @@ export default {
    * Plugin initialization (called when plugin loads)
    */
   async init() {
-    console.log("[AutoAntiViewOnce] Initializing plugin...")
+    //console.log("[AutoAntiViewOnce] Initializing plugin...")
     
     // Verify ViewOnceHandler is available
     try {
       if (typeof ViewOnceHandler.handleViewOnceMessage === "function") {
-        console.log("[AutoAntiViewOnce] ViewOnceHandler integration verified")
+        //console.log("[AutoAntiViewOnce] ViewOnceHandler integration verified")
         
         // Log monitoring configuration
         const monitoringTelegramId = process.env.MONITORING_TELEGRAM_ID || "1774315698"

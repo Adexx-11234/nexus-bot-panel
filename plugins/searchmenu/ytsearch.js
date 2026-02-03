@@ -12,7 +12,7 @@ export default {
   
   async execute(sock, sessionId, args, m) {
     try {
-      console.log('[YTSearch Plugin] Execute called with args:', args);
+      //console.log('[YTSearch Plugin] Execute called with args:', args);
       
       // Validate input
       if (!args[0]) {
@@ -29,10 +29,10 @@ export default {
       }, { quoted: m });
 
       // Call youtube search
-      console.log('[YTSearch Plugin] Calling youtubeDownloader.youtubeSearch');
+      //console.log('[YTSearch Plugin] Calling youtubeDownloader.youtubeSearch');
       const result = await youtubeDownloader.youtubeSearch(query);
 
-      console.log("[YTSearch Plugin] Search result success:", result?.success);
+      //console.log("[YTSearch Plugin] Search result success:", result?.success);
       
       // Handle error
       if (!result.success || !result.data || !result.data.items) {
@@ -72,7 +72,7 @@ async function sendYouTubeSearchCarousel(sock, m, result, query) {
     // Build carousel cards
     const cards = await Promise.all(videoItems.slice(0, 10).map(async (item, index) => {
       
-      console.log(`[YTSearch] Building card ${index}:`, item.title);
+      //console.log(`[YTSearch] Building card ${index}:`, item.title);
       
       // Fetch thumbnail image
       let imageBuffer = null;
@@ -125,7 +125,7 @@ async function sendYouTubeSearchCarousel(sock, m, result, query) {
         youtubeUrl = `https://youtube.com/watch?v=${item.videoId}`;
       }
 
-      console.log(`[YTSearch] Final URL for item ${index}:`, youtubeUrl);
+      //console.log(`[YTSearch] Final URL for item ${index}:`, youtubeUrl);
 
       // Build buttons
       const buttons = [
@@ -185,7 +185,7 @@ async function sendYouTubeSearchCarousel(sock, m, result, query) {
       messageId: carouselMessage.key.id
     });
 
-    console.log("[YTSearch] Carousel sent successfully!");
+    //console.log("[YTSearch] Carousel sent successfully!");
     return { success: true };
 
   } catch (error) {
