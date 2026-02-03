@@ -1,8 +1,7 @@
-import { createComponentLogger } from '../../utils/logger.js'
+import { logger } from '../../utils/logger.js'
 import { cleanJID } from '../../config/baileys.js'
 import { resolveLidsToJids } from '../groups/lid-resolver.js'
 
-const logger = createComponentLogger('MESSAGE_LOGGER')
 
 // Color codes for enhanced logging
 const colors = {
@@ -195,7 +194,6 @@ export class MessageLogger {
 
       // Build the log message
       const logMessage = 
-        `${colors.bright}[MESSAGE]${colors.reset} ` +
         `${colors.dim}[${timestamp}]${colors.reset} ` +
         `${colors.cyan}TG:${telegramId}${colors.reset} | ` +
         `${colors.magenta}${chatContext}${colors.reset} | ` +
