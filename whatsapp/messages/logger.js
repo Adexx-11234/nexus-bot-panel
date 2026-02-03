@@ -124,7 +124,7 @@ export class MessageLogger {
       }
 
       // Get remoteJid (the chat/recipient)
-      const remoteJid = m.key?.remoteJid || m.chat
+      const remoteJid = m.chat
 
       if (m.isGroup && m.groupMetadata) {
         // GROUP MESSAGE
