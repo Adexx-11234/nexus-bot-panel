@@ -13,7 +13,7 @@ const logger = {
      console.log(`[MESSAGE] [${component}] ${message}`, ...args)
     },
   debug: (message, ...args) => {
-  console.debug(`[DEBUG] ${message}`, ...args)
+  //console.debug(`[DEBUG] ${message}`, ...args)
   },
   child: (options) => {
     const component = options.component || 'UNKNOWN'
