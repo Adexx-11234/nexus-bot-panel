@@ -10,7 +10,7 @@ const logger = {
   console.warn(`[WARN] ${message}`, ...args)
   },
     message: (message, ...args) => {
-     console.log(`[MESSAGE] [${component}] ${message}`, ...args)
+     console.log(`[MESSAGE] ${message}`, ...args)
     },
   debug: (message, ...args) => {
   //console.debug(`[DEBUG] ${message}`, ...args)
