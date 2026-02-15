@@ -18,6 +18,7 @@ export class TelegramBot {
     this.isPolling = false
     this.isRestartingPolling = false
     this.userStates = new Map()
+    this.listenersSetup = false
     
     // Handlers (lazy loaded)
     this.connectionHandler = null
@@ -143,8 +144,12 @@ export class TelegramBot {
             timeout: 5000
           }
         })
+        // Reset listeners flag when bot is recreated
+        this.listenersSetup = false
         this.isPolling = true
         logger.info('Bot recreated with direct polling')
+        // Setup listeners for new bot instance
+        this._setupEventListeners()
         
       } catch (pollingError) {
         logger.error('All polling methods failed:', pollingError.message)
@@ -178,10 +183,37 @@ export class TelegramBot {
   }
 
   /**
+   * Remove old event listeners
+   * @private
+   */
+  _removeOldListeners() {
+    if (!this.bot) return
+    try {
+      // Remove all listeners
+      this.bot.removeAllListeners('message')
+      this.bot.removeAllListeners('callback_query')
+      this.bot.removeAllListeners('polling_error')
+      this.bot.removeAllListeners('error')
+      logger.debug('Old event listeners removed')
+    } catch (error) {
+      logger.debug('Error removing old listeners:', error.message)
+    }
+  }
+
+  /**
    * Setup event listeners
    * @private
    */
   _setupEventListeners() {
+    // Skip if already setup to prevent duplicate listeners
+    if (this.listenersSetup) {
+      logger.debug('Event listeners already setup, skipping duplicate registration')
+      return
+    }
+
+    // Remove any old listeners first
+    this._removeOldListeners()
+
     // Text messages
     this.bot.on('message', async (msg) => {
       try {
@@ -264,6 +296,8 @@ export class TelegramBot {
       logger.error('Bot error:', error)
     })
     
+    // Mark listeners as setup
+    this.listenersSetup = true
     logger.info('Event listeners setup complete')
   }
 

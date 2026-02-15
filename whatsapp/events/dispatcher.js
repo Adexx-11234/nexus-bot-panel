@@ -188,7 +188,7 @@ sock.ev.on(EventTypes.MESSAGES_UPSERT, async (messageUpdate) => {
     this.lastMessageTime.set(sessionId, Date.now())
 
     // 📝 LOG: Save complete messageUpdate to JSON file
-   /* try {
+    try {
       const fs = await import('fs/promises')
       const path = await import('path')
       
@@ -208,7 +208,7 @@ sock.ev.on(EventTypes.MESSAGES_UPSERT, async (messageUpdate) => {
       //console.log(`[MESSAGE LOG] ${sessionId}/${filename}`)
     } catch (logError) {
       logger.error(`Failed to log message for ${sessionId}:`, logError)
-    }*/
+    }
 
     // Fire and forget - process without blocking
     this.messageHandler

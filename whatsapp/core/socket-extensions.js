@@ -65,7 +65,7 @@ const createFakeQuoted = (type = 'default', additional = {}) => {
   const base = {
     key: { participant: '0@s.whatsapp.net', remoteJid: '0@s.whatsapp.net' },
     message: BOT_LOGO_THUMBNAIL
-      ? { imageMessage: { caption, jpegThumbnail: BOT_LOGO_THUMBNAIL } }
+      ? { imageMessage: { caption } }
       : { conversation: caption }
   }
   return { ...base, ...additional }
@@ -104,8 +104,8 @@ const addForwardInfo = (content) => {
   const botName = '𝕹𝖊𝖝𝖚𝖘 𝕭𝖔𝖙'
   
   return {
-    forwardingScore: 1,
-    isForwarded: true,
+        forwardingScore: 1,
+        isForwarded: true,
     forwardedNewsletterMessageInfo: {
       newsletterJid, newsletterName: botName, serverMessageId: -1
     }
@@ -158,27 +158,26 @@ export function extendSocket(sock) {
     const isGroup = jid.endsWith('@g.us')
     const forwardInfo = addForwardInfo()
     
-    let fakeQuoted = createFakeQuoted('default')
+  // let fakeQuoted = createFakeQuoted('default')
+  
+  // if (options.quoted) {
+  //   fakeQuoted = getFakeQuotedForContext(options.quoted, options)
     
-    if (options.quoted) {
-      fakeQuoted = getFakeQuotedForContext(options.quoted, options)
+  //   if (isGroup && options.quoted.key?.participant) {
+  //     const senderJid = options.quoted.key.participant
+  //     const pushName = options.quoted.pushName || 'User'
+  //     fakeQuoted = JSON.parse(JSON.stringify(fakeQuoted))
       
-      if (isGroup && options.quoted.key?.participant) {
-        const senderJid = options.quoted.key.participant
-        const pushName = options.quoted.pushName || 'User'
-        fakeQuoted = JSON.parse(JSON.stringify(fakeQuoted))
-        
-        if (fakeQuoted.message.imageMessage) {
-          fakeQuoted.message.imageMessage.caption += `\n\n*Replied to ${pushName}*`
-        } else if (fakeQuoted.message.conversation) {
-          fakeQuoted.message.conversation += `\n\n*Replied to ${pushName}*`
-        }
-      }
-      options.quoted = fakeQuoted
-    } else {
-      options.quoted = createFakeQuoted('default')
-    }
-    
+  //     if (fakeQuoted.message.imageMessage) {
+  //       fakeQuoted.message.imageMessage.caption += `\n\n*Replied to ${pushName}*`
+  //     } else if (fakeQuoted.message.conversation) {
+  //       fakeQuoted.message.conversation += `\n\n*Replied to ${pushName}*`
+  //     }
+  //   }
+  //   options.quoted = fakeQuoted
+  // } else {
+  //   options.quoted = createFakeQuoted('default')
+  // }
     if (content.text || content.caption) {
       if (!content.contextInfo) content.contextInfo = {}
       content.contextInfo = { ...content.contextInfo, ...forwardInfo }
@@ -190,15 +189,15 @@ export function extendSocket(sock) {
     
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        options.ephemeralExpiration ||= 0
+       // options.ephemeralExpiration ||= 0
         
         const sendPromise = originalSendMessage(jid, content, options)
         const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('sendMessage timeout')), 200000))
         const result = await Promise.race([sendPromise, timeoutPromise])
 
-        if (result?.key?.id && !result.key.id.endsWith('NEXUSBOT')) {
-          result.key.id = `${result.key.id}NEXUSBOT`
-        }
+     //   if (result?.key?.id && !result.key.id.endsWith('NEXUSBOT')) {
+         // result.key.id = `${result.key.id}NEXUSBOT`
+       // }
 
         if (sock.sessionId) {
           try { const { updateSessionLastMessage } = await import('../core/config.js'); updateSessionLastMessage(sock.sessionId) } catch {}
