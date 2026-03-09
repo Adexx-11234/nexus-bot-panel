@@ -107,7 +107,7 @@ const addForwardInfo = (content) => {
         forwardingScore: 1,
         isForwarded: true,
     forwardedNewsletterMessageInfo: {
-      newsletterJid, newsletterName: botName, serverMessageId: -1
+      newsletterJid, newsletterName: botName, serverMessageId: 1
     }
   }
 }

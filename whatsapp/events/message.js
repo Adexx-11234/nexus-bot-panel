@@ -46,7 +46,7 @@ export class MessageEventHandler {
 
       // Request retry for CIPHERTEXT messages
       if (ciphertextMessages.length > 0) {
-        await this._requestMessageRetries(sock, sessionId, ciphertextMessages)
+        //await this._requestMessageRetries(sock, sessionId, ciphertextMessages)
       }
 
       // Log filtering summary
@@ -179,15 +179,6 @@ export class MessageEventHandler {
       // Try sendRetryRequest first, fallback to requestPlaceholderResend
       let retrySuccess = false
 
-      if (sock.sendRetryRequest) {
-        try {
-          await sock.sendRetryRequest(retryKey)
-          logger.debug(`[${sessionId}] Retry requested (sendRetryRequest): ${retryKey.id}`)
-          retrySuccess = true
-        } catch (error) {
-          logger.debug(`[${sessionId}] sendRetryRequest failed for ${retryKey.id}: ${error.message}`)
-        }
-      }
 
       if (!retrySuccess && sock.requestPlaceholderResend) {
         try {
@@ -262,7 +253,7 @@ export class MessageEventHandler {
 
         // Retry on Bad MAC error
         if (this._isBadMacError(error) && message.key) {
-          await this._requestMessageRetries(sock, sessionId, [message])
+         // await this._requestMessageRetries(sock, sessionId, [message])
         }
       }
     }
