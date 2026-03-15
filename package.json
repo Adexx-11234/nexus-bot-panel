@@ -37,7 +37,7 @@
     "jimp": "^1.6.0",
     "jsdom": "latest",
     "jsonwebtoken": "latest",
-    "libphonenumber-js": "^1.10.51",
+    "libphonenumber-js": "latest",
     "link-preview-js": "latest",
     "lru-cache": "latest",
     "moment": "^2.29.4",

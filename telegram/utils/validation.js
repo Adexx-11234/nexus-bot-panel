@@ -1,15 +1,9 @@
-import { parsePhoneNumber, isValidPhoneNumber } from 'libphonenumber-js'
-
 /**
- * Validation utilities
- */
-
-/**
- * Validate phone number
+ * Validate phone number - only ensure + and country code, let WhatsApp handle the rest
  */
 export function validatePhone(phoneNumber) {
   try {
-    const cleanNumber = phoneNumber.trim()
+    const cleanNumber = phoneNumber.trim().replace(/[\s\-().]/g, '') // strip spaces, dashes, brackets
 
     if (!cleanNumber.startsWith('+')) {
       return {
@@ -18,20 +12,17 @@ export function validatePhone(phoneNumber) {
       }
     }
 
-    if (!isValidPhoneNumber(cleanNumber)) {
+    // Must have + followed by at least 7 digits (shortest possible intl number)
+    if (!/^\+\d{7,15}$/.test(cleanNumber)) {
       return {
         isValid: false,
         error: 'Invalid phone number format'
       }
     }
 
-    const parsed = parsePhoneNumber(cleanNumber)
-
     return {
       isValid: true,
-      formatted: parsed.format('E.164'),
-      country: parsed.country,
-      nationalNumber: parsed.nationalNumber
+      formatted: cleanNumber
     }
 
   } catch (error) {
