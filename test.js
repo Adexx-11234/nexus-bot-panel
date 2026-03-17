@@ -18,7 +18,7 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 const MONGODB_URI = process.env.MONGODB_URI
-const MIN_PRE_KEYS = 4
+const MIN_PRE_KEYS = 90
 
 // ============================================================================
 // CONFIGURABLE FILE CLEANUP RULES

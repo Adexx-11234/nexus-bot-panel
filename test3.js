@@ -1,241 +1,327 @@
-import { execSync } from 'child_process'
-import fs from 'fs'
+// ============================================================================
+// Pull Session Files from MongoDB → Local Sessions Folder
+// Pulls all files from auth_baileys per sessionId and writes them locally
+// Keeps only the MOST RECENT file per type based on limits below
+// Only pulls sessions with AT LEAST 95 pre-key files
+// Save as: test3.js
+// Run: node test3.js
+// ============================================================================
 
-const logger = {
-  info: (...args) => //console.log('[INFO]', ...args),
-  warn: (...args) => console.warn('[WARN]', ...args),
-  error: (...args) => console.error('[ERROR]', ...args),
-  success: (...args) => //console.log('[SUCCESS]', ...args)
-}
+import { MongoClient } from 'mongodb'
+import fs from 'fs/promises'
+import path from 'path'
+import { fileURLToPath } from 'url'
+import dotenv from 'dotenv'
 
-// ============================================
-// PART 1: Auto-Update with Force Pull
-// ============================================
+dotenv.config()
 
-async function autoUpdate() {
-  try {
-    logger.info('='.repeat(70))
-    logger.info('AUTO-UPDATE INITIALIZATION')
-    logger.info('='.repeat(70))
-    logger.info('')
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
-    // Check if .git exists
-    if (!fs.existsSync('.git')) {
-      logger.warn('⚠️  No .git directory found, cloning repository...')
-      
-      execSync('git clone https://github.com/Adexx-11234/nexus-bot-panel /tmp/nexus-clone --depth 1', { 
-        stdio: 'inherit',
-        cwd: '/home/container'
-      })
-      
-      logger.info('📦 Moving files to main directory...')
-      execSync('shopt -s dotglob; mv /tmp/nexus-clone/* /home/container/ 2>/dev/null || true', { 
-        stdio: 'inherit',
-        shell: '/bin/bash'
-      })
-      execSync('rm -rf /tmp/nexus-clone', { stdio: 'inherit' })
-      
-      logger.success('✅ Repository cloned!')
-    } else {
-      logger.info('📥 Checking for updates from GitHub...')
-      
-      // Configure git to handle divergent branches
-      try {
-        execSync('git config pull.rebase false', { 
-          stdio: 'pipe',
-          cwd: '/home/container'
-        })
-        logger.info('✓ Git pull strategy configured')
-      } catch (error) {
-        logger.warn('⚠️  Could not configure git pull strategy')
-      }
-      
-      // Stash any local changes
-      try {
-        execSync('git stash', { 
-          stdio: 'pipe',
-          cwd: '/home/container'
-        })
-        logger.info('📦 Local changes stashed')
-      } catch (error) {
-        logger.warn('⚠️  No changes to stash or stash already clean')
-      }
-      
-      // Fetch and force pull from remote
-      try {
-        logger.info('🔄 Fetching latest changes from origin/main...')
-        execSync('git fetch origin main', { 
-          stdio: 'pipe',
-          cwd: '/home/container'
-        })
-        
-        const beforePull = execSync('git rev-parse HEAD', { 
-          encoding: 'utf8',
-          cwd: '/home/container'
-        }).trim()
-        
-        logger.info('🔨 Force updating to origin/main...')
-        execSync('git reset --hard origin/main', { 
-          stdio: 'pipe',
-          cwd: '/home/container'
-        })
-        
-        const afterPull = execSync('git rev-parse HEAD', { 
-          encoding: 'utf8',
-          cwd: '/home/container'
-        }).trim()
-        
-        if (beforePull !== afterPull) {
-          logger.success('✅ Updates found and applied from GitHub!')
-          logger.info(`   Commit: ${beforePull.substring(0, 7)} → ${afterPull.substring(0, 7)}`)
-          
-          // Check if package.json was updated
-          try {
-            const changedFiles = execSync('git diff --name-only HEAD@{1} HEAD', {
-              encoding: 'utf8',
-              cwd: '/home/container'
-            }).trim()
-            
-            if (changedFiles.includes('package.json')) {
-              logger.warn('⚠️  package.json was updated - full dependency reinstall required')
-              
-              // Remove node_modules to force clean install
-              logger.info('🗑️  Removing old node_modules...')
-              if (fs.existsSync('/home/container/node_modules')) {
-                execSync('rm -rf /home/container/node_modules', { 
-                  stdio: 'pipe',
-                  cwd: '/home/container'
-                })
-                logger.success('✅ Old node_modules removed')
-              }
-              
-              // Remove package-lock.json to ensure fresh resolution
-              if (fs.existsSync('/home/container/package-lock.json')) {
-                execSync('rm -f /home/container/package-lock.json', { 
-                  stdio: 'pipe',
-                  cwd: '/home/container'
-                })
-                logger.info('🗑️  Removed package-lock.json for fresh install')
-              }
-            }
-          } catch (error) {
-            logger.warn('⚠️  Could not check for package.json changes')
-          }
-        } else {
-          logger.info('✓ Already on latest version')
-        }
-      } catch (error) {
-        logger.warn('⚠️  Update check failed, continuing with current version')
-        logger.warn(`   Error: ${error.message}`)
-      }
-    }
+const MONGODB_URI = process.env.MONGODB_URI
 
-    // Install/update dependencies with legacy peer deps
-    logger.info('')
-    logger.info('📚 Installing/updating dependencies with legacy peer deps...')
-    
-    try {
-      // Use --legacy-peer-deps and --force to handle dependency conflicts
-      execSync('/usr/local/bin/npm install --legacy-peer-deps --force', { 
-        stdio: 'inherit',
-        cwd: '/home/container'
-      })
-      logger.success('✅ Dependencies installed successfully!')
-    } catch (npmError) {
-      logger.error('❌ npm install failed:', npmError.message)
-      
-      // Try alternative: clean install
-      logger.warn('⚠️  Attempting clean install...')
-      
-      try {
-        if (fs.existsSync('/home/container/node_modules')) {
-          execSync('rm -rf /home/container/node_modules', { 
-            stdio: 'pipe',
-            cwd: '/home/container'
-          })
-        }
-        
-        if (fs.existsSync('/home/container/package-lock.json')) {
-          execSync('rm -f /home/container/package-lock.json', { 
-            stdio: 'pipe',
-            cwd: '/home/container'
-          })
-        }
-        
-        execSync('/usr/local/bin/npm install --legacy-peer-deps', { 
-          stdio: 'inherit',
-          cwd: '/home/container'
-        })
-        logger.success('✅ Clean install successful!')
-      } catch (retryError) {
-        logger.error('❌ Clean install also failed')
-        logger.warn('⚠️  Continuing with existing dependencies...')
-      }
-    }
-
-    logger.info('')
-    logger.info('='.repeat(70))
-    logger.success('✅ INITIALIZATION COMPLETE')
-    logger.info('='.repeat(70))
-    logger.info('')
-
-  } catch (error) {
-    logger.error('❌ Initialization failed:', error.message)
-    logger.warn('⚠️  Attempting to continue with existing setup...')
-  }
-}
-
-// ============================================
-// PART 2: Start the Bot
-// ============================================
-
-async function startBot() {
-  try {
-    logger.info('🚀 Starting Nexus Bot...')
-    logger.info('')
-    
-    // Wait for files to settle
-    await new Promise(resolve => setTimeout(resolve, 2000))
-    
-    // Import and run the actual bot
-    const botModule = await import('./index.js')
-    logger.success('✅ Bot initialized and running!')
-    
-    // Keep the process alive - don't let it exit
-    logger.info('⏳ Bot is running... (Press Ctrl+C to stop)')
-    
-    // Prevent process from exiting
-    await new Promise(() => {
-      // This promise never resolves, keeping the process alive forever
-    })
-    
-  } catch (error) {
-    logger.error('❌ Failed to start bot:', error.message)
-    logger.error('Stack:', error.stack)
-    process.exit(1)
-  }
-}
-
-// ============================================
-// MAIN EXECUTION
-// ============================================
-
-async function main() {
-  try {
-    // Step 1: Initialize/Update
-    await autoUpdate()
-    
-    // Step 2: Start Bot
-    await startBot()
-    
-  } catch (error) {
-    logger.error('❌ Critical error:', error.message)
-    process.exit(1)
-  }
-}
-
-// Run main
-main().catch(error => {
-  logger.error('Uncaught error:', error)
+if (!MONGODB_URI) {
+  console.error('❌ MONGODB_URI not found in .env')
   process.exit(1)
-})
+}
+
+// ============================================================================
+// PULL LIMITS — mirrors test2.js FILE_CLEANUP_RULES but as max-to-pull
+// Only the most recent N files per type are pulled (sorted by updatedAt DESC)
+// ============================================================================
+const MIN_PRE_KEYS = 95   // Session must have at least this many pre-keys to qualify
+
+const PULL_RULES = [
+  {
+    pattern: '^pre-key',
+    maxToPull: 1000,
+    description: 'Pre-key files'
+  },
+  {
+    pattern: '^sender-key',
+    maxToPull: 100,
+    description: 'Sender keys'
+  },
+  {
+    pattern: '^session-',
+    maxToPull: 50,
+    description: 'Session files'
+  },
+  {
+    pattern: 'lid-mapping',
+    maxToPull: 20,
+    description: 'LID mapping files'
+  }
+  // Files that match none of the above (e.g. creds.json, app-state-*)
+  // are always pulled as-is (1 per unique filename, most recent)
+]
+
+// ============================================================================
+// MAIN PULL FUNCTION
+// ============================================================================
+async function pullSessionsFromMongo() {
+  let client
+
+  try {
+    console.log('📥 Pull Session Files: MongoDB → Local')
+    console.log('='.repeat(60))
+    console.log(`Minimum pre-keys required : ${MIN_PRE_KEYS}`)
+    console.log('\nPull limits per session:')
+    PULL_RULES.forEach(r => console.log(`  - ${r.description}: pull up to ${r.maxToPull} (most recent)`))
+    console.log('  - Everything else (creds, app-state, etc): pull most recent copy')
+    console.log('='.repeat(60))
+
+    // Connect to MongoDB
+    console.log('\n1️⃣  Connecting to MongoDB...')
+    client = new MongoClient(MONGODB_URI)
+    await client.connect()
+    console.log('✅ MongoDB connected')
+
+    const db = client.db()
+    const authBaileys = db.collection('auth_baileys')
+    const sessionsCol  = db.collection('sessions')
+
+    // ---- Get all sessionIds that have a creds.json ----
+    console.log('\n2️⃣  Fetching session IDs with creds.json...')
+    const allValidIds = await authBaileys.distinct('sessionId', {
+      filename: 'creds.json'
+    })
+    console.log(`   Found ${allValidIds.length} sessions with creds.json`)
+
+    if (allValidIds.length === 0) {
+      console.log('\n⚠️  No valid sessions found in MongoDB. Exiting.')
+      return
+    }
+
+    // ---- Gate: only keep sessions with >= MIN_PRE_KEYS pre-keys ----
+    console.log(`\n3️⃣  Filtering sessions with at least ${MIN_PRE_KEYS} pre-keys...`)
+    const qualifiedIds = []
+    const disqualifiedIds = []
+
+    for (let i = 0; i < allValidIds.length; i++) {
+      const sessionId = allValidIds[i]
+      process.stdout.write(`\r   Checking ${i + 1}/${allValidIds.length}: ${sessionId}          `)
+
+      const preKeyCount = await authBaileys.countDocuments({
+        sessionId,
+        filename: { $regex: /^pre-key/i }
+      })
+
+      if (preKeyCount >= MIN_PRE_KEYS) {
+        qualifiedIds.push({ sessionId, preKeyCount })
+      } else {
+        disqualifiedIds.push({ sessionId, preKeyCount })
+      }
+    }
+
+    console.log('\n')
+    console.log(`   ✅ Qualified  : ${qualifiedIds.length} sessions`)
+    console.log(`   ⛔ Disqualified (< ${MIN_PRE_KEYS} pre-keys): ${disqualifiedIds.length} sessions`)
+
+    if (disqualifiedIds.length > 0) {
+      console.log('\n   Disqualified sessions:')
+      disqualifiedIds.forEach(({ sessionId, preKeyCount }) => {
+        console.log(`     ❌ ${sessionId} — ${preKeyCount} pre-keys`)
+      })
+    }
+
+    if (qualifiedIds.length === 0) {
+      console.log('\n⚠️  No sessions meet the minimum pre-key requirement. Exiting.')
+      return
+    }
+
+    // Ensure base sessions directory exists
+    const sessionsDir = path.join(process.cwd(), 'sessions')
+    await fs.mkdir(sessionsDir, { recursive: true })
+
+    // ========== Stats ==========
+    let totalSessionsProcessed = 0
+    let totalFilesWritten = 0
+    let totalFilesSkipped = 0
+    const sessionSummaries = []
+    const errors = []
+
+    // ========== Process Each Qualified Session ==========
+    console.log(`\n4️⃣  Pulling files for ${qualifiedIds.length} qualified sessions...\n`)
+
+    for (let i = 0; i < qualifiedIds.length; i++) {
+      const { sessionId, preKeyCount } = qualifiedIds[i]
+      process.stdout.write(`\r   Progress: ${i + 1}/${qualifiedIds.length} — ${sessionId}          `)
+
+      try {
+        // Create session folder
+        const sessionPath = path.join(sessionsDir, sessionId)
+        await fs.mkdir(sessionPath, { recursive: true })
+
+        let filesWritten = 0
+        let filesSkipped = 0
+        const writtenFilenames = []
+
+        // ---- Pull rule-based file types (with limits) ----
+        for (const rule of PULL_RULES) {
+          const regex = new RegExp(rule.pattern, 'i')
+
+          // Fetch most recent N docs for this pattern
+          const docs = await authBaileys
+            .find({ sessionId, filename: { $regex: regex } })
+            .sort({ updatedAt: -1 })   // newest first
+            .limit(rule.maxToPull)
+            .toArray()
+
+          // Deduplicate by filename within the batch (first = newest wins)
+          const seenFilenames = new Set()
+          for (const doc of docs) {
+            if (!doc.filename) continue
+            if (seenFilenames.has(doc.filename)) {
+              filesSkipped++
+              continue
+            }
+            seenFilenames.add(doc.filename)
+
+            const written = await writeDocToFile(sessionPath, doc)
+            if (written) {
+              filesWritten++
+              writtenFilenames.push(doc.filename)
+            } else {
+              filesSkipped++
+              errors.push(`${sessionId}/${doc.filename}: write failed`)
+            }
+          }
+        }
+
+        // ---- Pull everything else (creds, app-state-*, etc) ----
+        // Exclude filenames already covered by the rules above
+        const combinedPattern = PULL_RULES.map(r => r.pattern).join('|')
+
+        const otherDocs = await authBaileys
+          .find({
+            sessionId,
+            filename: { $not: { $regex: new RegExp(combinedPattern, 'i') } }
+          })
+          .sort({ updatedAt: -1 })
+          .toArray()
+
+        const seenOther = new Set()
+        for (const doc of otherDocs) {
+          if (!doc.filename) continue
+          if (seenOther.has(doc.filename)) {
+            filesSkipped++
+            continue
+          }
+          seenOther.add(doc.filename)
+
+          const written = await writeDocToFile(sessionPath, doc)
+          if (written) {
+            filesWritten++
+            writtenFilenames.push(doc.filename)
+          } else {
+            filesSkipped++
+            errors.push(`${sessionId}/${doc.filename}: write failed`)
+          }
+        }
+
+        // ---- Pull metadata.json from sessions collection (as-is) ----
+        // Stored as: { sessionId, telegramId, userId, phoneNumber, isConnected,
+        //              connectionStatus, reconnectAttempts, source, detected,
+        //              createdAt, updatedAt }
+        const sessionMeta = await sessionsCol.findOne(
+          { sessionId },
+          { sort: { updatedAt: -1 } }
+        )
+
+        if (sessionMeta) {
+          const { _id, ...metaData } = sessionMeta   // strip _id, keep everything else as-is
+          const metaPath = path.join(sessionPath, 'metadata.json')
+          await fs.writeFile(metaPath, JSON.stringify(metaData, null, 2), 'utf8')
+          filesWritten++
+          writtenFilenames.push('metadata.json')
+        }
+
+        totalFilesWritten  += filesWritten
+        totalFilesSkipped  += filesSkipped
+        totalSessionsProcessed++
+
+        sessionSummaries.push({
+          sessionId,
+          preKeyCount,
+          filesWritten,
+          filesSkipped,
+          writtenFilenames
+        })
+
+      } catch (sessionErr) {
+        errors.push(`${sessionId}: ${sessionErr.message}`)
+      }
+    }
+
+    console.log('\n')
+
+    // ========== Session Breakdown ==========
+    console.log('5️⃣  Session breakdown:\n')
+    for (const s of sessionSummaries) {
+      console.log(`   📁 ${s.sessionId}`)
+      console.log(`      Pre-keys in Mongo : ${s.preKeyCount}`)
+      console.log(`      Files written     : ${s.filesWritten}`)
+      console.log(`      Duplicates skipped: ${s.filesSkipped}`)
+      console.log(`      Files: ${s.writtenFilenames.join(', ')}`)
+    }
+
+    // ========== Errors ==========
+    if (errors.length > 0) {
+      console.log(`\n⚠️  Errors (${errors.length}):`)
+      errors.forEach(e => console.log(`   ❌ ${e}`))
+    }
+
+    // ========== Final Summary ==========
+    console.log('\n' + '='.repeat(60))
+    console.log('📊 PULL SUMMARY')
+    console.log('='.repeat(60))
+    console.log(`Total sessions found      : ${allValidIds.length}`)
+    console.log(`Disqualified (< ${MIN_PRE_KEYS} keys) : ${disqualifiedIds.length}`)
+    console.log(`Sessions pulled           : ${totalSessionsProcessed}`)
+    console.log(`Files written             : ${totalFilesWritten}`)
+    console.log(`Duplicates skipped        : ${totalFilesSkipped}`)
+    console.log(`Errors                    : ${errors.length}`)
+    console.log('='.repeat(60))
+    console.log(`\n✅ Done! Files saved to: ${sessionsDir}`)
+
+  } catch (error) {
+    console.error('\n❌ ERROR:', error.message)
+    console.error('Full error:', error.stack)
+  } finally {
+    if (client) {
+      await client.close()
+      console.log('\n🔌 MongoDB disconnected')
+    }
+  }
+}
+
+// ============================================================================
+// HELPER: Write a single MongoDB doc as a file
+// ============================================================================
+async function writeDocToFile(sessionPath, doc) {
+  try {
+    const filePath = path.join(sessionPath, doc.filename)
+
+    let content
+    if (doc.data !== undefined && doc.data !== null) {
+      content = typeof doc.data === 'string'
+        ? JSON.stringify(JSON.parse(doc.datajson), null, 2)  // unwrap string → proper JSON
+        : JSON.stringify(doc.data, null, 2)
+    } else {
+      // Strip MongoDB/internal fields, write the rest
+      const { _id, sessionId, filename, updatedAt, createdAt, ...rest } = doc
+      content = JSON.stringify(rest, null, 2)
+    }
+
+    await fs.writeFile(filePath, content, 'utf8')
+    return true
+  } catch {
+    return false
+  }
+}
+
+// ============================================================================
+// RUN
+// ============================================================================
+pullSessionsFromMongo().catch(console.error)

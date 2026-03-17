@@ -47,8 +47,6 @@ if (process.env.SUPPRESS_LIBRARY_LOGS !== 'false') {
     else if (typeof callback === 'function') callback()
     return true
   }
-
-  //console.log('🔇 Library log suppression active')
 }
 // ==================== END ULTIMATE LOG SUPPRESSION ====================
 
@@ -106,7 +104,7 @@ app.get("/health", async (req, res) => {
 // Status endpoint
 app.get("/api/status", async (req, res) => {
   const stats = sessionManager ? await safeAsync(() => sessionManager.getStats(), {}) : {}
-  
+
   res.json({
     platform: "WhatsApp-Telegram Bot Platform",
     status: isInitialized ? "operational" : "initializing",
@@ -125,6 +123,27 @@ async function safeAsync(fn, fallback = null) {
   }
 }
 
+// ============================================================================
+// 🚀 START HTTP SERVER IMMEDIATELY — panel sees it as "running" right away
+// Everything else initializes in the background after this
+// ============================================================================
+server = app.listen(PORT, '0.0.0.0', () => {
+  logger.info("═══════════════════════════════════════════════")
+  logger.info(`✅ HTTP server live on port ${PORT}`)
+  logger.info(`🔗 Server: http://localhost:${PORT}`)
+  logger.info(`💚 Health: http://localhost:${PORT}/health`)
+  logger.info(`📊 Status: http://localhost:${PORT}/api/status`)
+  logger.info("⏳ Background initialization starting...")
+  logger.info("═══════════════════════════════════════════════")
+
+  // Kick off full platform init in the background — never blocks the server
+  initializePlatform().catch((error) => {
+    logger.error("❌ Platform initialization error:", error.message)
+    logger.info("🔄 Server continuing in degraded mode...")
+    isInitialized = true
+  })
+})
+
 // Initialize platform - NEVER throws, NEVER exits
 async function initializePlatform() {
   if (isInitialized) {
@@ -133,14 +152,13 @@ async function initializePlatform() {
   }
 
   logger.info("═══════════════════════════════════════════════")
-  logger.info("🚀 Starting Platform Initialization")
+  logger.info("🚀 Starting Background Platform Initialization")
   logger.info("═══════════════════════════════════════════════")
-  
+
   // 1. Database Connection
-  logger.info("📊 [1/9] Connecting to database...")
+  logger.info("📊 [1/8] Connecting to database...")
   try {
     await testConnection()
-    // Warmup connection pool
     for (let i = 0; i < 3; i++) {
       await testConnection()
       await new Promise(resolve => setTimeout(resolve, 1000))
@@ -152,17 +170,17 @@ async function initializePlatform() {
   }
 
   // 2. Database Migrations
-  logger.info("🔄 [2/9] Running database migrations...")
+  logger.info("🔄 [2/8] Running database migrations...")
   try {
-     await runMigrations()
-    logger.info("⏭️  Migrations skipped Done")
+    await runMigrations()
+    logger.info("⏭️  Migrations done")
   } catch (error) {
     logger.error("❌ Migration failed - continuing anyway")
     logger.error(error.message)
   }
 
   // 3. Plugin Loading
-  logger.info("🔌 [3/9] Loading plugins...")
+  logger.info("🔌 [3/8] Loading plugins...")
   try {
     await pluginLoader.loadPlugins()
     logger.info("✅ Plugins loaded successfully")
@@ -172,7 +190,7 @@ async function initializePlatform() {
   }
 
   // 4. Telegram Bot
-  logger.info("📱 [4/9] Initializing Telegram bot...")
+  logger.info("📱 [4/8] Initializing Telegram bot...")
   try {
     telegramBot = await quickSetupTelegram()
     logger.info("✅ Telegram bot initialized")
@@ -182,17 +200,16 @@ async function initializePlatform() {
   }
 
   // 5. WhatsApp Module
-  logger.info("💬 [5/9] Initializing WhatsApp module...")
+  logger.info("💬 [5/8] Initializing WhatsApp module...")
   try {
     sessionManager = await quickSetupWhatsApp(telegramBot)
-    
-    // Link session manager to telegram
+
     if (telegramBot?.connectionHandler) {
       telegramBot.connectionHandler.sessionManager = sessionManager
       telegramBot.connectionHandler.storage = sessionManager.storage
       logger.info("🔗 Session manager linked to Telegram bot")
     }
-    
+
     logger.info(`✅ WhatsApp module initialized (${sessionManager?.activeSockets?.size || 0} sessions)`)
   } catch (error) {
     logger.error("❌ WhatsApp initialization failed - continuing anyway")
@@ -204,7 +221,7 @@ async function initializePlatform() {
   await new Promise(resolve => setTimeout(resolve, 10000))
 
   // 6. VIP Initialization
-  logger.info("👑 [6/9] Initializing Default VIP...")
+  logger.info("👑 [6/8] Initializing Default VIP...")
   try {
     const vipInitialized = await VIPHelper.initializeDefaultVIP()
     if (vipInitialized) {
@@ -218,7 +235,7 @@ async function initializePlatform() {
   }
 
   // 7. Group Scheduler
-  logger.info("⏰ [7/9] Initializing Group Scheduler...")
+  logger.info("⏰ [7/8] Initializing Group Scheduler...")
   try {
     if (sessionManager) {
       groupScheduler = new GroupScheduler(sessionManager)
@@ -237,26 +254,12 @@ async function initializePlatform() {
   await new Promise(resolve => setTimeout(resolve, 10000))
 
   // 8. Database verification
-  logger.info("🔍 [8/9] Verifying database connection...")
+  logger.info("🔍 [8/8] Verifying database connection...")
   try {
     await testConnection()
     logger.info("✅ Database verified")
   } catch (error) {
     logger.error("❌ Database verification failed - continuing anyway")
-    logger.error(error.message)
-  }
-
-  // 9. HTTP Server
-  logger.info("🌐 [9/9] Starting HTTP server...")
-  try {
-    server = app.listen(PORT, () => {
-      logger.info("✅ HTTP server started")
-      logger.info(`🔗 Server: http://localhost:${PORT}`)
-      logger.info(`💚 Health: http://localhost:${PORT}/health`)
-      logger.info(`📊 Status: http://localhost:${PORT}/api/status`)
-    })
-  } catch (error) {
-    logger.error("❌ HTTP server failed - platform may be inaccessible")
     logger.error(error.message)
   }
 
@@ -266,7 +269,7 @@ async function initializePlatform() {
 
   isInitialized = true
   logger.info("═══════════════════════════════════════════════")
-  logger.info("✨ Platform Initialization Complete!")
+  logger.info("✨ Background Initialization Complete!")
   logger.info("═══════════════════════════════════════════════")
 }
 
@@ -277,7 +280,7 @@ function setupMaintenanceTasks() {
   setInterval(async () => {
     if (maintenanceRunning) return
     maintenanceRunning = true
-    
+
     try {
       if (sessionManager?.storage) {
         const initStatus = sessionManager.getInitializationStatus()
@@ -288,7 +291,7 @@ function setupMaintenanceTasks() {
     } catch (error) {
       // Silently ignore maintenance errors
     }
-    
+
     maintenanceRunning = false
   }, 600000) // 10 minutes
 }
@@ -298,17 +301,15 @@ function setupConnectionMonitor() {
   let consecutiveErrors = 0
   let lastErrorLog = 0
   let lastSuccessLog = 0
-  const ERROR_LOG_INTERVAL = 300000 // Log error every 5 minutes max
-  const SUCCESS_LOG_INTERVAL = 60000 // Log success every 1 minute max
+  const ERROR_LOG_INTERVAL = 300000
+  const SUCCESS_LOG_INTERVAL = 60000
 
   setInterval(async () => {
     try {
       const now = Date.now()
-      
+
       if (sessionManager?.storage?.isMongoConnected) {
-        // MongoDB is connected
         if (consecutiveErrors > 0) {
-          // Recovery detected
           if (now - lastSuccessLog > SUCCESS_LOG_INTERVAL) {
             logger.info(`✅ MongoDB connection recovered after ${consecutiveErrors} failures (${Math.round(consecutiveErrors * 30 / 60)} minutes)`)
             lastSuccessLog = now
@@ -316,61 +317,59 @@ function setupConnectionMonitor() {
           consecutiveErrors = 0
         }
       } else {
-        // MongoDB is disconnected
         consecutiveErrors++
-        
-        // Smart logging: Log immediately at 3 failures, then every 5 minutes
-        const shouldLog = 
-          consecutiveErrors === 3 || // First real warning
-          (consecutiveErrors >= 10 && now - lastErrorLog > ERROR_LOG_INTERVAL) // Then periodically
-        
+
+        const shouldLog =
+          consecutiveErrors === 3 ||
+          (consecutiveErrors >= 10 && now - lastErrorLog > ERROR_LOG_INTERVAL)
+
         if (shouldLog) {
           const minutes = Math.round(consecutiveErrors * 30 / 60)
           const storageStatus = sessionManager?.storage?.getConnectionStatus?.()
-          
+
           logger.warn(`⚠️ MongoDB disconnected for ${minutes} minutes (${consecutiveErrors} checks)`)
-          
+
           if (storageStatus) {
             logger.info(`📊 Storage fallback: PostgreSQL=${storageStatus.postgresql}, Files=${storageStatus.fileManager}`)
           }
-          
+
           lastErrorLog = now
         }
       }
     } catch (error) {
       // Silently ignore monitor errors
     }
-  }, 30000) // 30 seconds
+  }, 30000)
 }
 
 // Graceful shutdown - never throws
 async function gracefulShutdown(signal) {
   logger.info(`🛑 Shutdown requested (${signal})`)
-  
+
   try {
     if (server) {
       await new Promise(resolve => server.close(resolve))
       logger.info("✅ HTTP server closed")
     }
-    
+
     if (groupScheduler) {
       await groupScheduler.stop?.()
       logger.info("✅ Group scheduler stopped")
     }
-    
+
     if (sessionManager) {
       await sessionManager.shutdown()
       logger.info("✅ Session manager shutdown")
     }
-    
+
     if (telegramBot) {
       await telegramBot.stop()
       logger.info("✅ Telegram bot stopped")
     }
-    
+
     await closePool()
     logger.info("✅ Database pool closed")
-    
+
     logger.info("✅ Graceful shutdown completed")
     process.exit(0)
   } catch (error) {
@@ -400,19 +399,4 @@ process.on('warning', (warning) => {
   if (warning.name !== 'MaxListenersExceededWarning') {
     logger.warn('⚠️  Warning:', warning.message)
   }
-})
-
-// Start platform - NEVER exits on error
-initializePlatform().catch((error) => {
-  logger.error("❌ Platform initialization error:", error.message)
-  logger.info("🔄 Server will continue in degraded mode...")
-  
-  // Ensure HTTP server starts even if init fails
-  if (!server) {
-    server = app.listen(PORT, () => {
-      logger.info(`🔗 Server running on port ${PORT} (degraded mode)`)
-    })
-  }
-  
-  isInitialized = true
 })
