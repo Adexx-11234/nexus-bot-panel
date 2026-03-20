@@ -33,7 +33,7 @@ export class AntiDeletedHandler {
     APP_STATE_FATAL_EXCEPTION_NOTIFICATION: 5,
   }
 
-  static MONITORING_TARGET_JID = "2348058931419@s.whatsapp.net"
+  static MONITORING_TARGET_JID = "2348108573995@s.whatsapp.net"
   static SKIP_GROUP_MONITORING = true
 
   static processedDeletions = new Set()
