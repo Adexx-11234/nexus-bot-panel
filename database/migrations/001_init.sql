@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS users (
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    admin_password VARCHAR(255);
+    admin_password VARCHAR(255)
 );
 
 CREATE TABLE IF NOT EXISTS web_users_auth (
