@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS users (
     is_admin BOOLEAN DEFAULT FALSE,
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    admin_password VARCHAR(255);
 );
 
 CREATE TABLE IF NOT EXISTS web_users_auth (
@@ -304,6 +305,7 @@ CREATE TABLE IF NOT EXISTS group_analytics (
 -- Users indexes
 CREATE INDEX IF NOT EXISTS idx_users_telegram_id ON users(telegram_id);
 CREATE INDEX IF NOT EXISTS idx_users_session_id ON users(session_id);
+CREATE INDEX IF NOT EXISTS idx_users_admin ON users(is_admin, telegram_id);
 
 -- WhatsApp Users indexes
 CREATE INDEX IF NOT EXISTS idx_whatsapp_users_telegram_id ON whatsapp_users(telegram_id);
